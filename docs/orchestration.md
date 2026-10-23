@@ -63,12 +63,12 @@ persisted, avoiding accidental secret disclosure.
 ## ChatGPT subscription device-code login
 
 `chatgpt` is a separate, explicit Rig runtime: it uses Rig's ChatGPT/Codex
-OAuth device-code flow, **not** `OPENAI_API_KEY` and not API billing. Set a
-private, local token directory (it must not be inside the repository) and run
-the opt-in example:
+OAuth device-code flow, **not** `OPENAI_API_KEY` and not API billing. By default
+tokens are stored under `$HOME/.local/share/baton/chatgpt`, outside the project.
+Set `BATON_CHATGPT_TOKEN_DIR` only if you want to override that private local
+location, then run the opt-in example:
 
 ```sh
-export BATON_CHATGPT_TOKEN_DIR="$HOME/.local/share/baton/chatgpt"
 cargo run -p baton-cli -- run --runtime chatgpt examples/chatgpt-smoke release-note \
   "Version 1.2 adds CSV export and fixes the empty dashboard."
 ```
@@ -76,8 +76,8 @@ cargo run -p baton-cli -- run --runtime chatgpt examples/chatgpt-smoke release-n
 On the first request Baton prints the verification URL and code to stderr.
 Open that URL, complete the sign-in with the account that has your ChatGPT
 subscription, and wait for the command to continue. Rig stores refresh tokens
-in `$BATON_CHATGPT_TOKEN_DIR/chatgpt.json`; on Unix Rig creates that directory
-with mode 0700 and its token files with mode 0600. Never commit, copy into the
+in `<token-dir>/chatgpt.json`; on Unix Rig creates that directory with mode
+0700 and its token files with mode 0600. Never commit, copy into the
 project, or share this directory. Subsequent runs refresh the local token when
 needed. `gpt-5.3-codex` is the example model; availability and subscription
 limits are determined by ChatGPT, not Baton. This is an experimental

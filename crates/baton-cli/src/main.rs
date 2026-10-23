@@ -77,13 +77,15 @@ async fn main() -> anyhow::Result<()> {
             ),
             "chatgpt" => {
                 let token_dir = env::var_os("BATON_CHATGPT_TOKEN_DIR")
-                    .ok_or_else(|| anyhow::anyhow!("Set BATON_CHATGPT_TOKEN_DIR to a private local directory for ChatGPT OAuth tokens"))?;
+                    .map(PathBuf::from)
+                    .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/baton/chatgpt")))
+                    .ok_or_else(|| anyhow::anyhow!("Could not determine a default ChatGPT token directory; set BATON_CHATGPT_TOKEN_DIR"))?;
                 baton_core::orchestration::start_pipeline(
                     &config,
                     &args[3],
                     &args[4],
                     &id,
-                    &mut baton_core::orchestration::ChatGptRigRuntime::new(token_dir.into()),
+                    &mut baton_core::orchestration::ChatGptRigRuntime::new(token_dir),
                     &repository,
                 )
             }
