@@ -6,20 +6,20 @@ are rejected at every level. New projects start with:
 
 ```json
 {
-	"schemaVersion": 2,
+	"schemaVersion": 3,
+	"agents": [],
 	"pipelines": [],
 	"tools": [],
 	"skills": []
 }
 ```
 
-Pipelines have `id`, `name`, and a nonempty ordered `steps` array. Each step
-is the concrete use of an agent in that pipeline, with its own `id`, `name`,
-`model` (`provider`, `model`, optional positive `maxOutputTokens`), `toolIds`,
-`skillIds`, and `execution`. There is no separate project-level agents
-collection or agent reference: step order in the array is the chain order.
-Future handoff, condition, and retry configuration belongs on the step. Tools
-have `id` and `name`; skills add `instructions`. `execution.mode` is one of:
+Reusable agents have `id`, `systemPrompt`, `model` (`provider`, `model`, optional
+positive `maxOutputTokens`), `rules` (an array of nonblank strings), `toolIds`, and
+`skillIds`. Pipelines have `id`, `name`, and a nonempty ordered `steps` array.
+Each step has `id`, `name`, `agentId`, and `execution`; it cannot duplicate agent
+model, tools, or skills. References must resolve in the same project.
+Tools have `id` and `name`; skills add `instructions`. `execution.mode` is one of:
 - `local`: a nonempty `command` array and optional nonblank `workingDirectory`.
 - `docker`: nonblank `image`, nonempty `command`, optional `workingDirectory`.
 - `remote`: nonblank `host`, nonempty `command`, optional `workingDirectory`.
@@ -38,8 +38,10 @@ instructions must not be blank.
 ## Versions
 
 Only the exact v1 bootstrap shape `{"schemaVersion":1}` migrates to an empty
-v2 configuration in memory. Reading never writes a migration. The original
-bytes remain the revision token, so an explicit update can safely persist v2.
+v3 configuration in memory. Reading never writes a migration. The original
+bytes remain the revision token, so an explicit update can safely persist v3.
+Version 2 is rejected: explicitly move each step's model/tool/skill settings into
+an agent, add its system prompt and rules, and replace them with `agentId`.
 Unknown legacy fields, missing versions, and unsupported versions fail closed;
 no data is silently discarded. Future migrations must be explicit and tested.
 All new writes require a validated current-version DTO.

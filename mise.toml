@@ -2,6 +2,9 @@
 bun = "latest"
 rust = "stable"
 
+[hooks]
+postinstall = "bun install --frozen-lockfile"
+
 [tasks.dev]
 description = "Run the SvelteKit UI and Rust API in the demo project"
 run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; bun run dev -- --host 127.0.0.1 --port 5174'"

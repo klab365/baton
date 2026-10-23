@@ -18,8 +18,29 @@ impl FilesystemProjectConfigRepository {
     pub fn new(project_dir: PathBuf) -> Self {
         Self { project_dir }
     }
+    fn baton_dir(&self) -> PathBuf {
+        self.project_dir.join(".baton")
+    }
     fn config_path(&self) -> PathBuf {
-        self.project_dir.join(".baton").join("config.json")
+        self.baton_dir().join("config.json")
+    }
+    async fn ensure_runs_gitignore(&self) -> Result<(), String> {
+        let path = self.baton_dir().join(".gitignore");
+        tokio::task::spawn_blocking(move || {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => file
+                    .write_all(b"runs/\n")
+                    .map_err(|e| format!("Could not write {}: {e}", path.display())),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(format!("Could not create {}: {error}", path.display())),
+            }
+        })
+        .await
+        .map_err(|e| format!("Gitignore write task failed: {e}"))?
     }
 
     async fn persist(&self, expected: Option<&str>, config: &ProjectConfig) -> Result<(), String> {
@@ -49,7 +70,8 @@ impl ProjectConfigRepository for FilesystemProjectConfigRepository {
         }
     }
     async fn create(&self, config: &ProjectConfig) -> Result<(), String> {
-        self.persist(None, config).await
+        self.persist(None, config).await?;
+        self.ensure_runs_gitignore().await
     }
     async fn update(&self, expected_revision: &str, config: &ProjectConfig) -> Result<(), String> {
         self.persist(Some(expected_revision), config).await
@@ -110,13 +132,15 @@ fn persist(path: &Path, expected: Option<&str>, contents: &[u8]) -> Result<(), S
 }
 
 fn unique_suffix() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     )
 }
 
@@ -155,9 +179,14 @@ mod tests {
         let repo = fixture.repo();
         assert_eq!(repo.load().await.unwrap(), ConfigState::Missing);
         initialize_project(&repo).await.unwrap();
+        assert_eq!(
+            fs::read_to_string(fixture.0.join(".baton/.gitignore")).unwrap(),
+            "runs/\n"
+        );
         assert!(initialize_project(&repo).await.is_err());
         let initial = snapshot(&repo).await;
         let mut changed = initial.config.clone();
+        changed.agents.push(sample_agent());
         changed.pipelines.push(sample_pipeline());
         update_project_config(&repo, &initial.revision, &changed)
             .await
@@ -185,7 +214,7 @@ mod tests {
         let old = snapshot(&repo).await;
         assert_eq!(fs::read_to_string(repo.config_path()).unwrap(), legacy);
         repo.update(&old.revision, &old.config).await.unwrap();
-        assert_eq!(snapshot(&repo).await.config.schema_version, 2);
+        assert_eq!(snapshot(&repo).await.config.schema_version, 3);
     }
 
     #[tokio::test]
@@ -232,21 +261,30 @@ mod tests {
         fs::remove_file(&blocked.0).unwrap();
     }
 
+    fn sample_agent() -> baton_core::project::Agent {
+        baton_core::project::Agent {
+            id: "writer".into(),
+            system_prompt: "Write clearly".into(),
+            rules: vec![],
+            model: baton_core::project::ModelSettings {
+                provider: "example".into(),
+                model: "large".into(),
+                max_output_tokens: None,
+            },
+            tool_ids: vec![],
+            skill_ids: vec![],
+        }
+    }
+
     fn sample_pipeline() -> baton_core::project::Pipeline {
-        use baton_core::project::{ExecutionConfig, ModelSettings, Pipeline, PipelineStep};
+        use baton_core::project::{ExecutionConfig, Pipeline, PipelineStep};
         Pipeline {
             id: "main".into(),
             name: "Main".into(),
             steps: vec![PipelineStep {
                 id: "plan".into(),
                 name: "Plan".into(),
-                model: ModelSettings {
-                    provider: "example".into(),
-                    model: "large".into(),
-                    max_output_tokens: None,
-                },
-                tool_ids: vec![],
-                skill_ids: vec![],
+                agent_id: "writer".into(),
                 execution: ExecutionConfig::Local {
                     command: vec!["plan".into()],
                     working_directory: None,
@@ -256,12 +294,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn initialization_preserves_existing_baton_gitignore() {
+        let fixture = Fixture::new();
+        let baton = fixture.0.join(".baton");
+        fs::create_dir_all(&baton).unwrap();
+        fs::write(baton.join(".gitignore"), "custom/\n").unwrap();
+        initialize_project(&fixture.repo()).await.unwrap();
+        assert_eq!(
+            fs::read_to_string(baton.join(".gitignore")).unwrap(),
+            "custom/\n"
+        );
+    }
+
+    #[tokio::test]
     async fn independent_writers_cannot_both_commit() {
         let fixture = Fixture::new();
         let repo = fixture.repo();
         initialize_project(&repo).await.unwrap();
         let initial = snapshot(&repo).await;
         let mut changed = initial.config;
+        changed.agents.push(sample_agent());
         changed.pipelines.push(sample_pipeline());
         let other = fixture.repo();
         let (a, b) = tokio::join!(
@@ -274,6 +326,8 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name())
             .collect();
-        assert_eq!(names, vec![std::ffi::OsString::from("config.json")]);
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&std::ffi::OsString::from("config.json")));
+        assert!(names.contains(&std::ffi::OsString::from(".gitignore")));
     }
 }

@@ -82,7 +82,9 @@ name = "baton-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "baton-core",
  "baton-server",
+ "serde_json",
  "tokio",
 ]
 
