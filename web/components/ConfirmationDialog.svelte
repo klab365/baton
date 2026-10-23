@@ -1,0 +1,33 @@
+<script lang="ts">
+import type { Snippet } from "svelte";
+import Button from "./Button.svelte";
+
+let {
+	open = $bindable(false),
+	title,
+	confirmLabel = "Delete",
+	loading = false,
+	onconfirm,
+	children,
+}: {
+	open?: boolean;
+	title: string;
+	confirmLabel?: string;
+	loading?: boolean;
+	onconfirm: () => void;
+	children: Snippet;
+} = $props();
+</script>
+
+{#if open}
+	<div class="dialog-backdrop" role="presentation">
+		<div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1">
+			<h2 id="dialog-title">{title}</h2>
+			<div class="dialog-content">{@render children()}</div>
+			<div class="dialog-actions">
+				<Button variant="quiet" onclick={() => (open = false)}>Cancel</Button>
+				<Button variant="danger" {loading} onclick={onconfirm}>{confirmLabel}</Button>
+			</div>
+		</div>
+	</div>
+{/if}
