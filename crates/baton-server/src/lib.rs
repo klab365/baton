@@ -68,7 +68,7 @@ async fn project_status(State(state): State<AppState>) -> Result<Json<ProjectRes
         ConfigState::Ready(config) => ProjectResponse::Ready {
             name,
             directory,
-            config,
+            config: config.config,
         },
         ConfigState::Invalid(message) => ProjectResponse::Invalid {
             name,

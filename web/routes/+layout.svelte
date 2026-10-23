@@ -7,8 +7,6 @@ const navigation = [
 	["/", "Overview"],
 	["/tasks", "Tasks"],
 	["/pipelines", "Pipelines"],
-	["/agents", "Agents"],
-	["/execution-targets", "Execution targets"],
 	["/settings", "Settings"],
 ];
 </script>
