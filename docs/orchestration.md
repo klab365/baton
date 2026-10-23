@@ -7,8 +7,8 @@ on the step. There are no execution-target or data-plane resources.
 
 ## Explicit runtime selection
 
-The CLI always requires a runtime; there is no fallback between real and fake
-execution:
+The CLI always requires a runtime; there is no fallback between fake, OpenAI
+API, or ChatGPT-subscription execution:
 
 ```sh
 cargo run -p baton-cli -- run --runtime fake examples/demo draft "Write a release summary"
@@ -16,9 +16,9 @@ cargo run -p baton-cli -- run --runtime fake examples/demo draft "Write a releas
 
 `fake` requires every referenced agent to have `model.provider: "fake"`. It is
 deterministic (`agentId: input`), does not execute a command or contact a
-model, and is the default for offline tests. `openai` likewise requires every
-referenced agent to declare `model.provider: "openai"`. A mismatch fails before
-a run record is created, so choosing fake cannot silently replace a real model.
+model, and is the default for offline tests. `openai` and `chatgpt` likewise
+require the matching `model.provider`. A mismatch fails before a run record is
+created, so choosing fake cannot silently replace a real model.
 
 Only `execution.mode: "local"` is accepted. The local `command` remains part
 of the step configuration required by the existing schema, but the Rig adapter
@@ -60,6 +60,29 @@ unavailable models, rate limits, network failures, and timeouts fail the active
 step and run; subsequent steps remain pending. Provider error text is not
 persisted, avoiding accidental secret disclosure.
 
+## ChatGPT subscription device-code login
+
+`chatgpt` is a separate, explicit Rig runtime: it uses Rig's ChatGPT/Codex
+OAuth device-code flow, **not** `OPENAI_API_KEY` and not API billing. Set a
+private, local token directory (it must not be inside the repository) and run
+the opt-in example:
+
+```sh
+export BATON_CHATGPT_TOKEN_DIR="$HOME/.local/share/baton/chatgpt"
+cargo run -p baton-cli -- run --runtime chatgpt examples/chatgpt-smoke release-note \
+  "Version 1.2 adds CSV export and fixes the empty dashboard."
+```
+
+On the first request Baton prints the verification URL and code to stderr.
+Open that URL, complete the sign-in with the account that has your ChatGPT
+subscription, and wait for the command to continue. Rig stores refresh tokens
+in `$BATON_CHATGPT_TOKEN_DIR/chatgpt.json`; on Unix Rig creates that directory
+with mode 0700 and its token files with mode 0600. Never commit, copy into the
+project, or share this directory. Subsequent runs refresh the local token when
+needed. `gpt-5.3-codex` is the example model; availability and subscription
+limits are determined by ChatGPT, not Baton. This is an experimental
+subscription-backend integration and has no API-key fallback.
+
 ## Request mapping and current capabilities
 
 For each OpenAI request, Baton sends the reusable agent's `systemPrompt` as the
@@ -71,7 +94,6 @@ bounded handoff to the next step.
 The evaluated Rig version natively offers structured-output schemas, tool
 request/response types, streaming, and async cancellation primitives. This
 adapter deliberately uses none of those advanced features:
-
 - **Structured output:** Rig supports schemas, but Baton has no output schema
   configuration or validation contract yet.
 - **Tools/MCP/approvals:** Rig can describe and drive tools, but Baton has no

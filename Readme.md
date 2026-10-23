@@ -17,7 +17,7 @@ Application use cases and domain (crates/baton-core)
 Filesystem configuration (.baton/config.json)
 ```
 
-The Rust workspace is organized as a modular monolith. The web UI is a separate client; it does not own project persistence or domain rules. Pipeline orchestration is implemented through a replaceable `AgentRuntime` port. The deterministic fake runtime is used for offline development; the opt-in Rig/OpenAI runtime is documented in [docs/orchestration.md](docs/orchestration.md).
+The Rust workspace is organized as a modular monolith. The web UI is a separate client; it does not own project persistence or domain rules. Pipeline orchestration is implemented through a replaceable `AgentRuntime` port. The deterministic fake runtime is used for offline development; opt-in Rig/OpenAI API and ChatGPT subscription runtimes are documented in [docs/orchestration.md](docs/orchestration.md).
 
 ## Development
 

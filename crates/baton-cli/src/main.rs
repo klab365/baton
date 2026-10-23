@@ -29,17 +29,20 @@ fn ensure_runtime_provider(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // baton run --runtime <fake|openai> <project-directory> <pipeline-id> <task-prompt>
+    // baton run --runtime <fake|openai|chatgpt> <project-directory> <pipeline-id> <task-prompt>
     if env::args().nth(1).as_deref() == Some("run") {
         let args: Vec<String> = env::args().skip(2).collect();
         if args.len() != 5 || args.first().map(String::as_str) != Some("--runtime") {
             anyhow::bail!(
-                "Usage: baton run --runtime <fake|openai> <project-directory> <pipeline-id> <task-prompt>"
+                "Usage: baton run --runtime <fake|openai|chatgpt> <project-directory> <pipeline-id> <task-prompt>"
             );
         }
         let runtime = match args[1].as_str() {
-            "fake" | "openai" => args[1].as_str(),
-            _ => anyhow::bail!("Unknown runtime {:?}; use fake or openai", args[1]),
+            "fake" | "openai" | "chatgpt" => args[1].as_str(),
+            _ => anyhow::bail!(
+                "Unknown runtime {:?}; use fake, openai, or chatgpt",
+                args[1]
+            ),
         };
         let project = PathBuf::from(&args[2]).canonicalize()?;
         let config = baton_core::project::parse_config(&std::fs::read_to_string(
@@ -72,6 +75,18 @@ async fn main() -> anyhow::Result<()> {
                 &mut baton_core::orchestration::OpenAiRigRuntime,
                 &repository,
             ),
+            "chatgpt" => {
+                let token_dir = env::var_os("BATON_CHATGPT_TOKEN_DIR")
+                    .ok_or_else(|| anyhow::anyhow!("Set BATON_CHATGPT_TOKEN_DIR to a private local directory for ChatGPT OAuth tokens"))?;
+                baton_core::orchestration::start_pipeline(
+                    &config,
+                    &args[3],
+                    &args[4],
+                    &id,
+                    &mut baton_core::orchestration::ChatGptRigRuntime::new(token_dir.into()),
+                    &repository,
+                )
+            }
             _ => unreachable!(),
         }
         .map_err(anyhow::Error::msg)?;
