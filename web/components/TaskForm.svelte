@@ -5,12 +5,13 @@ import Button from "./Button.svelte";
 import Field from "./Field.svelte";
 import MultilineInput from "./MultilineInput.svelte";
 import StatusMessage from "./StatusMessage.svelte";
-import * as Select from "$components/ui/select/index.js";
+import ResourceSelect from "./ResourceSelect.svelte";
+import type { Pipeline } from "$lib/generated/Pipeline";
 let {
 	pipelines,
 	task,
 }: {
-	pipelines: { id: string; name: string }[];
+	pipelines: Pick<Pipeline, "id" | "name">[];
 	task?: {
 		id: string;
 		title: string;
@@ -74,7 +75,7 @@ async function save(event: SubmitEvent) {
 			{#snippet children({ describedBy, invalid })}<MultilineInput id="acceptanceCriteria" name="acceptanceCriteria" bind:value={acceptanceCriteria} rows={4} placeholder="List the outcomes or conditions that define completion…" {describedBy} {invalid} />{/snippet}
 		</Field>
 		<Field label="Pipeline" for="pipeline" hint="The selected pipeline is captured with this task." required>
-			{#snippet children({ describedBy, invalid })}<Select.Root bind:value={pipelineId} type="single" name="pipeline" required><Select.Trigger id="pipeline" aria-describedby={describedBy} aria-invalid={invalid}><Select.Value placeholder="Select a pipeline">{#snippet children()} {pipelines.find((pipeline) => pipeline.id === pipelineId)?.name ?? "Select a pipeline"} {/snippet}</Select.Value></Select.Trigger><Select.Content>{#each pipelines as pipeline}<Select.Item value={pipeline.id} label={pipeline.name}>{pipeline.name}</Select.Item>{/each}</Select.Content></Select.Root>{/snippet}
+			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}
 		</Field>
 		{#if !pipelines.length}<StatusMessage tone="warning" title="No pipelines available">Add a pipeline to <code>.baton/config.json</code> before creating a task.</StatusMessage>{/if}
 	</div>

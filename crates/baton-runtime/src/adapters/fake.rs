@@ -1,7 +1,4 @@
-use baton_core::{
-    orchestration::AgentRuntime,
-    project::{Agent, ExecutionConfig},
-};
+use baton_core::{orchestration::AgentRuntime, project::Agent};
 /// Deterministic spike adapter: records calls and prefixes each input with the agent ID.
 #[derive(Default)]
 pub struct FakeRuntime {
@@ -9,12 +6,7 @@ pub struct FakeRuntime {
     pub fail_agent: Option<String>,
 }
 impl AgentRuntime for FakeRuntime {
-    fn execute(
-        &mut self,
-        agent: &Agent,
-        _: &ExecutionConfig,
-        input: &str,
-    ) -> Result<String, String> {
+    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
         self.calls.push((agent.id.clone(), input.into()));
         if self.fail_agent.as_deref() == Some(&agent.id) {
             return Err("Simulated agent failure".into());

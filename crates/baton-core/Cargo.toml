@@ -8,3 +8,7 @@ license.workspace = true
 async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

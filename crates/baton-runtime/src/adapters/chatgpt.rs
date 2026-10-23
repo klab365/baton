@@ -1,8 +1,5 @@
 use super::rig_support::{agent_instructions, run_async};
-use baton_core::{
-    orchestration::AgentRuntime,
-    project::{Agent, ExecutionConfig},
-};
+use baton_core::{orchestration::AgentRuntime, project::Agent};
 use rig_core::{
     completion::CompletionRequest,
     providers::{
@@ -27,12 +24,7 @@ impl ChatGptRigRuntime {
 }
 
 impl AgentRuntime for ChatGptRigRuntime {
-    fn execute(
-        &mut self,
-        agent: &Agent,
-        _: &ExecutionConfig,
-        input: &str,
-    ) -> Result<String, String> {
+    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
         if agent.model.provider != "chatgpt" {
             return Err(format!(
                 "ChatGPT runtime requires agent {} to use model.provider \\\"chatgpt\\\"",

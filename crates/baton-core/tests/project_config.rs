@@ -5,9 +5,9 @@ fn example() -> serde_json::Value {
         "schemaVersion": 3,
         "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "model":{"provider":"example", "model":"large", "maxOutputTokens":1024}, "toolIds":["read"], "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
-            {"id":"plan", "name":"Plan", "agentId":"writer", "execution":{"mode":"local", "command":["writer"]}},
-            {"id":"build", "name":"Build", "agentId":"writer", "execution":{"mode":"docker", "image":"writer:latest", "command":["writer"], "workingDirectory":"/workspace"}},
-            {"id":"review", "name":"Review", "agentId":"writer", "execution":{"mode":"remote", "host":"build.example", "command":["writer"]}}
+            {"id":"plan", "name":"Plan", "agentId":"writer"},
+            {"id":"build", "name":"Build", "agentId":"writer"},
+            {"id":"review", "name":"Review", "agentId":"writer"}
         ]}],
         "tools":[{"id":"read", "name":"Read"}],
         "skills":[{"id":"style", "name":"Style", "instructions":"Be concise"}]
@@ -88,21 +88,6 @@ fn actionable_validation_failures() {
             "/pipelines/0/steps",
             serde_json::json!([]),
             "at least one step",
-        ),
-        (
-            "/pipelines/0/steps/0/execution/command",
-            serde_json::json!([]),
-            "command must contain",
-        ),
-        (
-            "/pipelines/0/steps/1/execution/image",
-            serde_json::json!(""),
-            "image must not be empty",
-        ),
-        (
-            "/pipelines/0/steps/2/execution/host",
-            serde_json::json!(""),
-            "host must not be empty",
         ),
         (
             "/schemaVersion",

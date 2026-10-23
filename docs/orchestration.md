@@ -26,10 +26,8 @@ model, and is the default for offline tests. `openai` and `chatgpt` likewise
 require the matching `model.provider`. A mismatch fails before a run record is
 created, so choosing fake cannot silently replace a real model.
 
-Only `execution.mode: "local"` is accepted. The local `command` remains part
-of the step configuration required by the existing schema, but the Rig adapter
-does not execute it: Rig makes the provider request. Docker and remote steps
-are rejected before execution.
+A step invokes its referenced agent through the selected runtime adapter; no
+per-step command, working directory, or execution-target configuration exists.
 
 ## Opt-in OpenAI smoke test
 

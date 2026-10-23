@@ -30,7 +30,7 @@ mod tests {
     use super::super::OpenAiRigRuntime;
     use super::*;
     use baton_core::orchestration::AgentRuntime;
-    use baton_core::project::{Agent, ExecutionConfig, ModelSettings};
+    use baton_core::project::{Agent, ModelSettings};
 
     fn agent(rules: Vec<&str>) -> Agent {
         Agent {
@@ -60,14 +60,7 @@ mod tests {
         let mut agent = agent(Vec::new());
         agent.tool_ids.push("shell".into());
         assert_eq!(
-            OpenAiRigRuntime.execute(
-                &agent,
-                &ExecutionConfig::Local {
-                    command: vec!["rig-openai".into()],
-                    working_directory: None,
-                },
-                "input"
-            ),
+            OpenAiRigRuntime.execute(&agent, "input"),
             Err("OpenAI runtime does not support configured tools for agent writer".into())
         );
     }

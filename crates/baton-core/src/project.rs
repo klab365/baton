@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectConfig {
     pub schema_version: u32,
@@ -14,7 +15,7 @@ pub struct ProjectConfig {
 
 macro_rules! dto {
     ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         pub struct $name { $(pub $field: $ty),* }
     };
@@ -33,33 +34,8 @@ dto!(Agent {
 dto!(PipelineStep {
     id: String,
     name: String,
-    agent_id: String,
-    execution: ExecutionConfig
+    agent_id: String
 });
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(
-    tag = "mode",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ExecutionConfig {
-    Local {
-        command: Vec<String>,
-        working_directory: Option<String>,
-    },
-    Docker {
-        image: String,
-        command: Vec<String>,
-        working_directory: Option<String>,
-    },
-    Remote {
-        host: String,
-        command: Vec<String>,
-        working_directory: Option<String>,
-    },
-}
 dto!(Tool {
     id: String,
     name: String
@@ -117,7 +93,6 @@ impl ProjectConfig {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 nonempty(&format!("{step_path}.name"), &step.name)?;
                 reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
-                validate_execution(&format!("{step_path}.execution"), &step.execution)?;
             }
         }
         for tool in &self.tools {
@@ -132,53 +107,6 @@ impl ProjectConfig {
         }
         Ok(())
     }
-}
-
-fn validate_execution(path: &str, execution: &ExecutionConfig) -> Result<(), String> {
-    match execution {
-        ExecutionConfig::Local {
-            command,
-            working_directory,
-        } => {
-            command_values(&format!("{path}.command"), command)?;
-            optional_nonempty(&format!("{path}.workingDirectory"), working_directory)
-        }
-        ExecutionConfig::Docker {
-            image,
-            command,
-            working_directory,
-        } => {
-            nonempty(&format!("{path}.image"), image)?;
-            command_values(&format!("{path}.command"), command)?;
-            optional_nonempty(&format!("{path}.workingDirectory"), working_directory)
-        }
-        ExecutionConfig::Remote {
-            host,
-            command,
-            working_directory,
-        } => {
-            nonempty(&format!("{path}.host"), host)?;
-            command_values(&format!("{path}.command"), command)?;
-            optional_nonempty(&format!("{path}.workingDirectory"), working_directory)
-        }
-    }
-}
-
-fn command_values(path: &str, command: &[String]) -> Result<(), String> {
-    if command.is_empty() {
-        return Err(format!("{path} must contain at least one command argument"));
-    }
-    for (index, value) in command.iter().enumerate() {
-        nonempty(&format!("{path}[{index}]"), value)?;
-    }
-    Ok(())
-}
-
-fn optional_nonempty(path: &str, value: &Option<String>) -> Result<(), String> {
-    if let Some(value) = value {
-        nonempty(path, value)?;
-    }
-    Ok(())
 }
 
 fn nonempty(path: &str, value: &str) -> Result<(), String> {

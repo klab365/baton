@@ -120,7 +120,7 @@ fn failure_stops_remaining_steps_and_survives_reopen() {
 }
 
 #[test]
-fn bounds_and_unsupported_modes() {
+fn bounds_are_enforced() {
     let fixture = Fixture::new();
     let mut runtime = FakeRuntime::default();
     assert!(
@@ -146,36 +146,13 @@ fn bounds_and_unsupported_modes() {
     assert_eq!(run.status, Status::Failed);
     assert!(run.steps[0].output.is_none());
     assert_eq!(runtime.calls.len(), 1);
-    let mut config = config();
-    config.pipelines[0].steps[1].execution = baton_core::project::ExecutionConfig::Remote {
-        host: "host".into(),
-        command: vec!["fake".into()],
-        working_directory: None,
-    };
-    assert!(
-        start_pipeline(
-            &config,
-            "draft",
-            "task",
-            "remote",
-            &mut runtime,
-            &fixture.repo()
-        )
-        .is_err()
-    );
-    assert_eq!(runtime.calls.len(), 1);
 }
 
 #[test]
 fn interrupted_execution_leaves_durable_running_state_without_retry() {
     struct Crash;
     impl AgentRuntime for Crash {
-        fn execute(
-            &mut self,
-            _: &baton_core::project::Agent,
-            _: &baton_core::project::ExecutionConfig,
-            _: &str,
-        ) -> Result<String, String> {
+        fn execute(&mut self, _: &baton_core::project::Agent, _: &str) -> Result<String, String> {
             panic!("process interrupted")
         }
     }

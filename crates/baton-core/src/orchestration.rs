@@ -1,17 +1,12 @@
 //! Sequential orchestration. Inputs and outputs are UTF-8 byte bounded; no implicit retries.
-use crate::project::{Agent, ExecutionConfig, ProjectConfig};
+use crate::project::{Agent, ProjectConfig};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 
 pub trait AgentRuntime {
-    fn execute(
-        &mut self,
-        agent: &Agent,
-        execution: &ExecutionConfig,
-        input: &str,
-    ) -> Result<String, String>;
+    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,14 +103,6 @@ pub fn start_pipeline(
         .iter()
         .find(|p| p.id == pipeline_id)
         .ok_or("Unknown pipeline ID")?;
-    // Reject unsupported modes before creating a run or invoking any agents.
-    if pipeline
-        .steps
-        .iter()
-        .any(|s| !matches!(s.execution, ExecutionConfig::Local { .. }))
-    {
-        return Err("Only local execution is supported in this spike".into());
-    }
     let started_at = utc_now();
     let started_clock = Instant::now();
     let mut run = PipelineRun {
@@ -150,15 +137,13 @@ pub fn start_pipeline(
             .iter()
             .find(|a| a.id == step.agent_id)
             .ok_or("Unknown agent")?;
-        let result = runtime
-            .execute(agent, &step.execution, &input)
-            .and_then(|output| {
-                if output.len() > MAX_HANDOFF_BYTES {
-                    Err("Agent output exceeds 16384 bytes".into())
-                } else {
-                    Ok(output)
-                }
-            });
+        let result = runtime.execute(agent, &input).and_then(|output| {
+            if output.len() > MAX_HANDOFF_BYTES {
+                Err("Agent output exceeds 16384 bytes".into())
+            } else {
+                Ok(output)
+            }
+        });
         match result {
             Ok(output) => {
                 run.steps[index].status = Status::Succeeded;
