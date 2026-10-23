@@ -1,25 +1,19 @@
 mod filesystem_repository;
+mod project_routes;
 pub mod run_repository;
+mod tasks;
 
 use std::{path::PathBuf, sync::Arc};
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::{get, post},
-};
-use baton_core::{
-    project::{ConfigState, ProjectConfig},
-    project_config::{ProjectConfigRepository, get_project_config, initialize_project},
-};
+use axum::{Json, Router, http::StatusCode, response::IntoResponse};
+use baton_core::project_config::ProjectConfigRepository;
 use filesystem_repository::FilesystemProjectConfigRepository;
 
 #[derive(Clone)]
 pub struct AppState {
     project_dir: Arc<PathBuf>,
     repository: Arc<dyn ProjectConfigRepository>,
+    task_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -28,75 +22,15 @@ impl AppState {
         Self {
             project_dir: Arc::new(project_dir),
             repository: Arc::new(repository),
+            task_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
 
-#[derive(serde::Serialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
-enum ProjectResponse {
-    Missing {
-        name: String,
-        directory: PathBuf,
-    },
-    Ready {
-        name: String,
-        directory: PathBuf,
-        config: ProjectConfig,
-    },
-    Invalid {
-        name: String,
-        directory: PathBuf,
-        message: String,
-    },
-}
-
-fn project_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("project")
-        .to_owned()
-}
-
-async fn project_status(State(state): State<AppState>) -> Result<Json<ProjectResponse>, ApiError> {
-    let directory = state.project_dir.as_ref().clone();
-    let name = project_name(&directory);
-    let response = match get_project_config(state.repository.as_ref())
-        .await
-        .map_err(ApiError::internal)?
-    {
-        ConfigState::Missing => ProjectResponse::Missing { name, directory },
-        ConfigState::Ready(config) => ProjectResponse::Ready {
-            name,
-            directory,
-            config: config.config,
-        },
-        ConfigState::Invalid(message) => ProjectResponse::Invalid {
-            name,
-            directory,
-            message,
-        },
-    };
-    Ok(Json(response))
-}
-
-async fn initialize(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
-    initialize_project(state.repository.as_ref())
-        .await
-        .map_err(|message| {
-            if message.contains("already exists") {
-                ApiError::conflict(message)
-            } else {
-                ApiError::internal(message)
-            }
-        })?;
-    Ok(StatusCode::CREATED)
-}
-
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/api/project", get(project_status))
-        .route("/api/project/initialize", post(initialize))
+        .merge(project_routes::router())
+        .merge(tasks::router())
         .with_state(state)
 }
 
@@ -137,3 +71,6 @@ impl IntoResponse for ApiError {
             .into_response()
     }
 }
+
+#[cfg(test)]
+mod tasks_tests;

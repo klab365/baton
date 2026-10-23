@@ -58,7 +58,7 @@ fn finish_run(run: &mut PipelineRun, started: Instant) {
     run.duration_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
 }
 
-fn utc_now() -> String {
+pub fn utc_now() -> String {
     // SystemTime is UTC-based; format as RFC 3339 with millisecond precision.
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
