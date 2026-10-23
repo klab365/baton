@@ -10,5 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+baton-core = { path = "../baton-core" }
+serde_json.workspace = true
 baton-server = { path = "../baton-server" }
 tokio.workspace = true

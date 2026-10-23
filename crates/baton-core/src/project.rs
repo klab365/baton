@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectConfig {
     pub schema_version: u32,
+    pub agents: Vec<Agent>,
     pub pipelines: Vec<Pipeline>,
     pub tools: Vec<Tool>,
     pub skills: Vec<Skill>,
@@ -21,12 +22,18 @@ macro_rules! dto {
 
 dto!(ModelSettings { provider: String, model: String, max_output_tokens: Option<u32> });
 dto!(Pipeline { id: String, name: String, steps: Vec<PipelineStep> });
+dto!(Agent {
+    id: String,
+    system_prompt: String,
+    model: ModelSettings,
+    rules: Vec<String>,
+    tool_ids: Vec<String>,
+    skill_ids: Vec<String>
+});
 dto!(PipelineStep {
     id: String,
     name: String,
-    model: ModelSettings,
-    tool_ids: Vec<String>,
-    skill_ids: Vec<String>,
+    agent_id: String,
     execution: ExecutionConfig
 });
 
@@ -65,7 +72,8 @@ dto!(Skill {
 
 impl ProjectConfig {
     pub const CURRENT: Self = Self {
-        schema_version: 2,
+        schema_version: 3,
+        agents: Vec::new(),
         pipelines: Vec::new(),
         tools: Vec::new(),
         skills: Vec::new(),
@@ -74,13 +82,27 @@ impl ProjectConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != Self::CURRENT.schema_version {
             return Err(format!(
-                "Unsupported schemaVersion {}; expected 2",
+                "Unsupported schemaVersion {}; expected 3",
                 self.schema_version
             ));
         }
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
         let tools = ids("tools", self.tools.iter().map(|x| x.id.as_str()))?;
         let skills = ids("skills", self.skills.iter().map(|x| x.id.as_str()))?;
+        let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
+        for agent in &self.agents {
+            nonempty("agent.systemPrompt", &agent.system_prompt)?;
+            nonempty("agent.model.provider", &agent.model.provider)?;
+            nonempty("agent.model.model", &agent.model.model)?;
+            if agent.model.max_output_tokens == Some(0) {
+                return Err("agent.model.maxOutputTokens must be positive".into());
+            }
+            for rule in &agent.rules {
+                nonempty("agent.rules", rule)?;
+            }
+            references("agent.toolIds", &agent.tool_ids, &tools)?;
+            references("agent.skillIds", &agent.skill_ids, &skills)?;
+        }
         for pipeline in &self.pipelines {
             let path = format!("pipelines[{}]", pipeline.id);
             nonempty(&format!("{path}.name"), &pipeline.name)?;
@@ -94,15 +116,7 @@ impl ProjectConfig {
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 nonempty(&format!("{step_path}.name"), &step.name)?;
-                nonempty(&format!("{step_path}.model.provider"), &step.model.provider)?;
-                nonempty(&format!("{step_path}.model.model"), &step.model.model)?;
-                if step.model.max_output_tokens == Some(0) {
-                    return Err(format!(
-                        "{step_path}.model.maxOutputTokens must be positive"
-                    ));
-                }
-                references(&format!("{step_path}.toolIds"), &step.tool_ids, &tools)?;
-                references(&format!("{step_path}.skillIds"), &step.skill_ids, &skills)?;
+                reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
                 validate_execution(&format!("{step_path}.execution"), &step.execution)?;
             }
         }
