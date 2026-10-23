@@ -17,23 +17,19 @@ are rejected at every level. New projects start with:
 Reusable agents have `id`, `systemPrompt`, `model` (`provider`, `model`, optional
 positive `maxOutputTokens`), `rules` (an array of nonblank strings), `toolIds`, and
 `skillIds`. Pipelines have `id`, `name`, and a nonempty ordered `steps` array.
-Each step has `id`, `name`, `agentId`, and `execution`; it cannot duplicate agent
-model, tools, or skills. References must resolve in the same project.
-Tools have `id` and `name`; skills add `instructions`. `execution.mode` is one of:
-- `local`: a nonempty `command` array and optional nonblank `workingDirectory`.
-- `docker`: nonblank `image`, nonempty `command`, optional `workingDirectory`.
-- `remote`: nonblank `host`, nonempty `command`, optional `workingDirectory`.
+Each step has `id`, `name`, and `agentId`; it cannot duplicate agent model,
+tools, or skills. References must resolve in the same project. Tools have `id`
+and `name`; skills add `instructions`.
 
-This makes the same agent usable in differently configured pipeline steps. No
-project-level execution targets or data planes exist. Remote credentials and
-connection-specific local configuration are deliberately not represented.
+This makes the same agent reusable at different positions in a pipeline. No
+execution settings, project-level execution targets, or data planes exist.
 
 IDs are nonempty ASCII letters/digits/`-`/`_`/`.` and unique within each entity
 collection (step IDs within a pipeline). IDs are supplied by callers, never
 generated from names or array positions. Preserve them on rename/reorder;
 changing an ID requires updating all references in the same configuration.
-Duplicate IDs are errors. Names, model identifiers, command values, and
-instructions must not be blank.
+Duplicate IDs are errors. Names, model identifiers, and instructions must not
+be blank.
 
 ## Versions
 
@@ -73,5 +69,5 @@ power-loss durability of the parent directory.
 Never store API keys, tokens, secrets, local settings, or run state in project
 DTOs. Environment variables or ignored `.baton/secrets.json`, `.baton/local.json`,
 and `.baton/runs/` can hold such data; these are not read by this repository.
-Free-form instructions and commands must also not contain secrets. No runtime
-history or machine-specific execution credentials are serialized into config.
+Free-form instructions must not contain secrets. No runtime history or
+machine-specific execution credentials are serialized into config.

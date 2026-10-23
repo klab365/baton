@@ -145,16 +145,3 @@ pub async fn delete(
     fs::remove_file(path(&state, &id)?).map_err(io)?;
     Ok(StatusCode::NO_CONTENT)
 }
-
-#[cfg(test)]
-pub(super) fn test_timestamp() -> String {
-    now()
-}
-#[cfg(test)]
-pub(super) fn test_save(state: &AppState, task: &Task) {
-    save(state, task).unwrap_or_else(|_| panic!("save failed"));
-}
-#[cfg(test)]
-pub(super) fn test_load(state: &AppState, id: &str) -> Task {
-    load(state, id).unwrap_or_else(|_| panic!("load failed"))
-}

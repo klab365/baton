@@ -16,3 +16,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 baton-runtime = { path = "../baton-runtime" }
+tower.workspace = true

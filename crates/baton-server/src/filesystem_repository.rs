@@ -277,7 +277,7 @@ mod tests {
     }
 
     fn sample_pipeline() -> baton_core::project::Pipeline {
-        use baton_core::project::{ExecutionConfig, Pipeline, PipelineStep};
+        use baton_core::project::{Pipeline, PipelineStep};
         Pipeline {
             id: "main".into(),
             name: "Main".into(),
@@ -285,10 +285,6 @@ mod tests {
                 id: "plan".into(),
                 name: "Plan".into(),
                 agent_id: "writer".into(),
-                execution: ExecutionConfig::Local {
-                    command: vec!["plan".into()],
-                    working_directory: None,
-                },
             }],
         }
     }

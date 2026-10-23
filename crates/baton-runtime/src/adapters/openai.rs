@@ -1,8 +1,5 @@
 use super::rig_support::{agent_instructions, run_async};
-use baton_core::{
-    orchestration::AgentRuntime,
-    project::{Agent, ExecutionConfig},
-};
+use baton_core::{orchestration::AgentRuntime, project::Agent};
 use rig_core::{completion::CompletionRequest, providers::openai::OpenAI};
 use std::time::Duration;
 /// OpenAI implementation of the `AgentRuntime` port using Rig.
@@ -13,12 +10,7 @@ use std::time::Duration;
 pub struct OpenAiRigRuntime;
 
 impl AgentRuntime for OpenAiRigRuntime {
-    fn execute(
-        &mut self,
-        agent: &Agent,
-        _: &ExecutionConfig,
-        input: &str,
-    ) -> Result<String, String> {
+    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
         if agent.model.provider != "openai" {
             return Err(format!(
                 "OpenAI runtime requires agent {} to use model.provider \\\"openai\\\"",

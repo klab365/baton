@@ -25,6 +25,11 @@
 	},
 	"overrides": [
 		{
+			"includes": ["web/lib/generated/**"],
+			"formatter": { "enabled": false },
+			"linter": { "enabled": false }
+		},
+		{
 			"includes": ["**/*.svelte"],
 			"linter": { "enabled": false }
 		}

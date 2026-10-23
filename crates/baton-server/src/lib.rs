@@ -1,4 +1,5 @@
 mod filesystem_repository;
+mod pipelines;
 mod project_routes;
 pub mod run_repository;
 mod tasks;
@@ -31,6 +32,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(project_routes::router())
         .merge(tasks::router())
+        .merge(pipelines::router())
         .with_state(state)
 }
 
@@ -71,6 +73,3 @@ impl IntoResponse for ApiError {
             .into_response()
     }
 }
-
-#[cfg(test)]
-mod tasks_tests;

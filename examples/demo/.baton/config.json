@@ -26,14 +26,12 @@
 				{
 					"id": "write",
 					"name": "Write",
-					"agentId": "writer",
-					"execution": { "mode": "local", "command": ["fake"] }
+					"agentId": "writer"
 				},
 				{
 					"id": "review",
 					"name": "Review",
-					"agentId": "reviewer",
-					"execution": { "mode": "local", "command": ["fake"] }
+					"agentId": "reviewer"
 				}
 			]
 		}
