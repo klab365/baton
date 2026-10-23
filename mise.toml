@@ -39,11 +39,11 @@ run = "bun run lint"
 
 [tasks.generate-types]
 description = "Generate TypeScript DTO types from Rust"
-run = "cargo run -p baton-core --bin generate_types"
+run = "cargo run -p baton-core --bin generate-types"
 
 [tasks.check-generated-types]
 description = "Check committed TypeScript DTO types match Rust"
-run = "cargo run -p baton-core --bin generate_types && git diff --exit-code -- web/lib/generated"
+run = "cargo run -p baton-core --bin generate-types && git diff --exit-code -- web/lib/generated"
 
 [tasks.check]
 description = "Run generated-type, Svelte, and TypeScript checks"
