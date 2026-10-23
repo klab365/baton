@@ -1,13 +1,43 @@
 {
-  "schemaVersion": 3,
-  "agents": [
-    {"id": "writer", "systemPrompt": "Write a concise response.", "model": {"provider": "fake", "model": "deterministic"}, "rules": [], "toolIds": [], "skillIds": []},
-    {"id": "reviewer", "systemPrompt": "Review the supplied response.", "model": {"provider": "fake", "model": "deterministic"}, "rules": [], "toolIds": [], "skillIds": []}
-  ],
-  "pipelines": [{"id": "draft", "name": "Draft and review", "steps": [
-    {"id": "write", "name": "Write", "agentId": "writer", "execution": {"mode": "local", "command": ["fake"]}},
-    {"id": "review", "name": "Review", "agentId": "reviewer", "execution": {"mode": "local", "command": ["fake"]}}
-  ]}],
-  "tools": [],
-  "skills": []
+	"schemaVersion": 3,
+	"agents": [
+		{
+			"id": "writer",
+			"systemPrompt": "Write a concise response.",
+			"model": { "provider": "fake", "model": "deterministic" },
+			"rules": [],
+			"toolIds": [],
+			"skillIds": []
+		},
+		{
+			"id": "reviewer",
+			"systemPrompt": "Review the supplied response.",
+			"model": { "provider": "fake", "model": "deterministic" },
+			"rules": [],
+			"toolIds": [],
+			"skillIds": []
+		}
+	],
+	"pipelines": [
+		{
+			"id": "draft",
+			"name": "Draft and review",
+			"steps": [
+				{
+					"id": "write",
+					"name": "Write",
+					"agentId": "writer",
+					"execution": { "mode": "local", "command": ["fake"] }
+				},
+				{
+					"id": "review",
+					"name": "Review",
+					"agentId": "reviewer",
+					"execution": { "mode": "local", "command": ["fake"] }
+				}
+			]
+		}
+	],
+	"tools": [],
+	"skills": []
 }
