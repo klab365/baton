@@ -11,6 +11,6 @@ let { data } = $props();
 	<section class="cards" aria-label="Next steps">
 		<article><h2>Tasks</h2><p>Create tasks from prompts or import them from connected systems.</p><a href="/tasks">View tasks</a></article>
 		<article><h2>Pipelines</h2><p>Define workflow steps, handoffs, and reviews.</p><a href="/pipelines">View pipelines</a></article>
-		<article><h2>Agents</h2><p>Configure agent roles, models, skills, and tools.</p><a href="/agents">View agents</a></article>
+		<article><h2>Pipelines</h2><p>Configure ordered steps, agent roles, models, execution, skills, and tools.</p><a href="/pipelines">View pipelines</a></article>
 	</section>
 {/if}

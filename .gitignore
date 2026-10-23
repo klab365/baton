@@ -1,3 +1,10 @@
+# Baton machine-local and transient data (config.json remains versioned)
+**/.baton/config.lock
+**/.baton/config.*.tmp
+**/.baton/local.json
+**/.baton/secrets.json
+**/.baton/runs/
+
 # dependencies (bun install)
 node_modules
 
