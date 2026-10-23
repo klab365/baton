@@ -1,0 +1,67 @@
+[tools]
+bun = "latest"
+rust = "stable"
+
+[tasks.dev]
+description = "Run the SvelteKit UI and Rust API in the demo project"
+run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; bun run dev -- --host 127.0.0.1 --port 5174'"
+
+[tasks.server]
+description = "Run the Rust API server for the demo project"
+run = "BATON_PROJECT_DIR=examples/demo cargo run -p baton-server"
+
+[tasks.format-rust]
+description = "Format Rust source code"
+run = "cargo fmt --all"
+
+[tasks.check-format-rust]
+description = "Check Rust source formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.format-web]
+description = "Format web source files"
+run = "bun run format"
+
+[tasks.check-format-web]
+description = "Check web source formatting"
+run = "bun run check-format"
+
+[tasks.lint-rust]
+description = "Lint Rust workspace"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.lint-web]
+description = "Lint web source files"
+run = "bun run lint"
+
+[tasks.check]
+description = "Run Svelte and TypeScript checks"
+run = "bun run check"
+
+[tasks.test]
+description = "Run Rust workspace tests"
+run = "cargo test --workspace"
+
+[tasks.build-rust]
+description = "Build the Rust workspace"
+run = "cargo build --workspace"
+
+[tasks.build-web]
+description = "Build the SvelteKit UI"
+run = "bun run build"
+
+[tasks.format]
+description = "Format Rust and web source files"
+depends = ["format-rust", "format-web"]
+
+[tasks.check-format]
+description = "Check Rust and web source formatting"
+depends = ["check-format-rust", "check-format-web"]
+
+[tasks.lint]
+description = "Lint Rust and web source files"
+depends = ["lint-rust", "lint-web"]
+
+[tasks.build]
+description = "Build the Rust backend and SvelteKit UI"
+depends = ["build-rust", "build-web"]

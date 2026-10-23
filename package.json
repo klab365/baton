@@ -1,0 +1,24 @@
+{
+	"name": "baton-web",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun x --bun vite dev",
+		"build": "bun x --bun vite build",
+		"check": "bun x --bun svelte-kit sync && bun x --bun svelte-check --tsconfig ./tsconfig.json",
+		"format": "bun x --bun biome format --write .",
+		"check-format": "bun x --bun biome format .",
+		"lint": "bun x --bun biome lint ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.6.2",
+		"@sveltejs/adapter-node": "^5.3.0",
+		"@sveltejs/kit": "^2.48.4",
+		"@types/bun": "latest",
+		"svelte": "^5.57.2",
+		"svelte-check": "^4.7.7",
+		"typescript": "^5.7.3",
+		"vite": "^6.2.0"
+	}
+}

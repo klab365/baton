@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Mise and Rust
+        uses: jdx/mise-action@v2
+
+      - name: Check formatting
+        run: mise run check-format-rust
+
+      - name: Run Clippy
+        run: mise run lint-rust
+
+      - name: Run tests
+        run: mise run test
+
+      - name: Build workspace
+        run: mise run build-rust
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Mise and Bun
+        uses: jdx/mise-action@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check formatting
+        run: mise run check-format-web
+
+      - name: Run lint
+        run: mise run lint-web
+
+      - name: Check Svelte and TypeScript
+        run: mise run check
+
+      - name: Build UI
+        run: mise run build-web
+
+  require-rebase:
+    name: Require rebase
+    if: always()
+    needs:
+      - rust
+      - web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Rust and web checks
+        run: |
+          test "${{ needs.rust.result }}" = "success"
+          test "${{ needs.web.result }}" = "success"
+
+      - name: Check that the pull request includes its base branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require rebase onto the current base branch
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+          git merge-base --is-ancestor "origin/${{ github.event.pull_request.base.ref }}" HEAD

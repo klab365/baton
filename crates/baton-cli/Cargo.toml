@@ -1,0 +1,14 @@
+[package]
+name = "baton-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "baton"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+baton-server = { path = "../baton-server" }
+tokio.workspace = true
