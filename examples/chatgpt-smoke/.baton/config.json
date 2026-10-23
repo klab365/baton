@@ -6,7 +6,7 @@
 			"systemPrompt": "Write a concise release note from the supplied task.",
 			"model": {
 				"provider": "chatgpt",
-				"model": "gpt-5.3-codex",
+				"model": "gpt-6-luna",
 				"maxOutputTokens": 250
 			},
 			"rules": ["Return plain text only."],
@@ -18,7 +18,7 @@
 			"systemPrompt": "Review the supplied draft and return a corrected concise release note.",
 			"model": {
 				"provider": "chatgpt",
-				"model": "gpt-5.3-codex",
+				"model": "gpt-6-luna",
 				"maxOutputTokens": 250
 			},
 			"rules": ["Return plain text only."],
