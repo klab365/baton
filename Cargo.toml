@@ -4,6 +4,7 @@ members = [
   "crates/baton-core",
   "crates/baton-server",
   "crates/baton-cli",
+  "crates/baton-runtime",
 ]
 
 [workspace.package]

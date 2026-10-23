@@ -5,6 +5,12 @@ Baton runs a configured pipeline through the `AgentRuntime` port in
 an `agentId`; its model, prompt, rules, tools, and skills are never duplicated
 on the step. There are no execution-target or data-plane resources.
 
+The port, run types, and durable orchestration live in `baton-core` without
+Rig dependencies. Outbound implementations live in `baton-runtime`:
+`adapters/mod.rs` exports the separate `fake.rs`, `openai.rs`, and `chatgpt.rs`
+adapters. Private `rig_support.rs` shares request helpers. The CLI selects and
+wires the concrete adapter; domain code never selects a provider.
+
 ## Explicit runtime selection
 
 The CLI always requires a runtime; there is no fallback between fake, OpenAI
