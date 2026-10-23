@@ -1,8 +1,15 @@
 <script lang="ts">
-let { title, description }: { title: string; description: string } = $props();
+import type { Snippet } from "svelte";
+import PageHeader from "./PageHeader.svelte";
+
+let {
+	title,
+	description,
+	children,
+}: { title: string; description: string; children?: Snippet } = $props();
 </script>
 
-<p class="eyebrow">Not available yet</p>
-<h1>{title}</h1>
-<p class="lead">{description}</p>
-<p class="muted">This page is ready, but configurable entries are not available in this version.</p>
+<section class="empty-state">
+	<PageHeader eyebrow="Nothing here yet" {title} description={description} />
+	{#if children}<div class="empty-state-action">{@render children()}</div>{/if}
+</section>
