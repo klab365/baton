@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
 	font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 	color: #172033;
@@ -205,6 +207,73 @@ dd {
 .resource-list span {
 	color: #5c667a;
 }
+.task-table-wrap {
+	overflow-x: auto;
+	border: 1px solid #dbe0e9;
+	border-radius: 0.6rem;
+	background: white;
+}
+.task-table {
+	width: 100%;
+	min-width: 620px;
+	border-collapse: collapse;
+	text-align: left;
+}
+.task-table th,
+.task-table td {
+	padding: 0.9rem 1.1rem;
+	border-bottom: 1px solid #e7eaf0;
+	vertical-align: middle;
+}
+.task-table thead th {
+	color: #5c667a;
+	background: #fafbfc;
+	font-size: 0.76rem;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+.task-table tbody tr:last-child th,
+.task-table tbody tr:last-child td {
+	border-bottom: 0;
+}
+.task-table tbody tr:hover {
+	background: #f7f9ff;
+}
+.task-table-title {
+	color: #172033;
+	font-weight: 700;
+	text-decoration: none;
+}
+.task-table-title:hover {
+	color: #244aab;
+	text-decoration: underline;
+}
+.task-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	border: 1px solid #cbd7f5;
+	border-radius: 999px;
+	background: #f4f7ff;
+	color: #244aab;
+	font-size: 0.75rem;
+	font-weight: 750;
+	letter-spacing: 0.02em;
+	line-height: 1;
+	padding: 0.38rem 0.6rem;
+	text-transform: capitalize;
+}
+.task-status::before {
+	width: 0.42rem;
+	height: 0.42rem;
+	border-radius: 50%;
+	background: #5577cf;
+	content: "";
+}
+.task-pipeline-name {
+	display: block;
+	font-weight: 650;
+}
 .detail-panel {
 	background: white;
 	border: 1px solid #dbe0e9;
@@ -245,7 +314,8 @@ dd {
 	font-weight: 600;
 }
 input,
-textarea {
+textarea,
+select {
 	width: 100%;
 	border: 1px solid #8792a8;
 	border-radius: 0.4rem;
@@ -255,6 +325,77 @@ textarea {
 }
 textarea {
 	resize: vertical;
+}
+.select-control {
+	position: relative;
+}
+.select-control::after {
+	position: absolute;
+	top: 50%;
+	right: 1rem;
+	width: 0.5rem;
+	height: 0.5rem;
+	border-right: 2px solid #4b5870;
+	border-bottom: 2px solid #4b5870;
+	pointer-events: none;
+	content: "";
+	transform: translateY(-65%) rotate(45deg);
+}
+select {
+	width: 100%;
+	min-height: 3rem;
+	appearance: none;
+	border-color: #aab4c6;
+	color: #172033;
+	background: #fff;
+	color-scheme: light;
+	font-weight: 600;
+	padding-right: 3rem;
+	transition:
+		border-color 120ms ease,
+		box-shadow 120ms ease;
+}
+select:hover {
+	border-color: #66748b;
+}
+select:focus {
+	border-color: #3055b5;
+	box-shadow: 0 0 0 3px rgb(48 85 181 / 15%);
+	outline: 0;
+}
+select option {
+	color: #172033;
+	background: #fff;
+	font-weight: 400;
+}
+.task-form-body {
+	padding: 1.25rem;
+}
+.task-form-actions {
+	display: flex;
+	justify-content: flex-end;
+	padding: 1rem 1.25rem;
+	border-top: 1px solid #dbe0e9;
+	background: #fafbfc;
+}
+.task-detail-layout {
+	display: grid;
+	gap: 1rem;
+}
+.task-facts {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0 2rem;
+}
+.task-pipeline-id {
+	display: block;
+	margin-top: 0.25rem;
+	color: #5c667a;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.85em;
+}
+.task-table .task-pipeline-id {
+	margin-top: 0.2rem;
 }
 input[aria-invalid="true"],
 textarea[aria-invalid="true"] {

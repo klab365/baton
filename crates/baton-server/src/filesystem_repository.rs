@@ -33,7 +33,7 @@ impl FilesystemProjectConfigRepository {
                 .open(&path)
             {
                 Ok(mut file) => file
-                    .write_all(b"runs/\n")
+                    .write_all(b"runs/\ntasks/\n")
                     .map_err(|e| format!("Could not write {}: {e}", path.display())),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
                 Err(error) => Err(format!("Could not create {}: {error}", path.display())),
@@ -181,7 +181,7 @@ mod tests {
         initialize_project(&repo).await.unwrap();
         assert_eq!(
             fs::read_to_string(fixture.0.join(".baton/.gitignore")).unwrap(),
-            "runs/\n"
+            "runs/\ntasks/\n"
         );
         assert!(initialize_project(&repo).await.is_err());
         let initial = snapshot(&repo).await;
