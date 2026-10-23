@@ -1,7 +1,8 @@
 //! Sequential orchestration. Inputs and outputs are UTF-8 byte bounded; no implicit retries.
 use crate::project::{Agent, ExecutionConfig, ProjectConfig};
+use rig_core::{completion::CompletionRequest, providers::openai::OpenAI};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 
@@ -32,6 +33,85 @@ impl AgentRuntime for FakeRuntime {
             return Err("Simulated agent failure".into());
         }
         Ok(format!("{}: {input}", agent.id))
+    }
+}
+
+/// OpenAI implementation of the `AgentRuntime` port using Rig.
+///
+/// It intentionally supports text completion only. Tool and skill references are
+/// rejected rather than being silently omitted from a provider request.
+#[derive(Default)]
+pub struct OpenAiRigRuntime;
+
+impl AgentRuntime for OpenAiRigRuntime {
+    fn execute(
+        &mut self,
+        agent: &Agent,
+        _: &ExecutionConfig,
+        input: &str,
+    ) -> Result<String, String> {
+        if agent.model.provider != "openai" {
+            return Err(format!(
+                "OpenAI runtime requires agent {} to use model.provider \\\"openai\\\"",
+                agent.id
+            ));
+        }
+        if !agent.tool_ids.is_empty() {
+            return Err(format!(
+                "OpenAI runtime does not support configured tools for agent {}",
+                agent.id
+            ));
+        }
+        if !agent.skill_ids.is_empty() {
+            return Err(format!(
+                "OpenAI runtime does not support configured skills for agent {}",
+                agent.id
+            ));
+        }
+
+        let client = OpenAI::from_env().map_err(|_| {
+            "OpenAI credentials are unavailable; set OPENAI_API_KEY in your local environment"
+                .to_owned()
+        })?;
+        let request = CompletionRequest::new(input)
+            .preamble(agent_instructions(agent))
+            .max_tokens(agent.model.max_output_tokens.map(u64::from));
+        let model = client.completion(&agent.model.model);
+        let response = run_async(async {
+            tokio::time::timeout(Duration::from_secs(60), model.call(request)).await
+        })
+        .map_err(|_| "OpenAI request timed out after 60 seconds".to_owned())?
+        .map_err(|_| {
+            "OpenAI request failed; check API authentication, model availability, rate limits, and network access"
+                .to_owned()
+        })?;
+        Ok(response.text())
+    }
+}
+
+fn agent_instructions(agent: &Agent) -> String {
+    if agent.rules.is_empty() {
+        return agent.system_prompt.clone();
+    }
+    format!(
+        "{}\n\nRules:\n{}",
+        agent.system_prompt,
+        agent
+            .rules
+            .iter()
+            .map(|rule| format!("- {rule}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
+fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        tokio::runtime::Runtime::new()
+            .expect("Tokio runtime can be created for OpenAI execution")
+            .block_on(future)
     }
 }
 
@@ -209,4 +289,50 @@ pub fn start_pipeline(
     finish_run(&mut run, started_clock);
     repository.save(&run)?;
     Ok(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::ModelSettings;
+
+    fn agent(rules: Vec<&str>) -> Agent {
+        Agent {
+            id: "writer".into(),
+            system_prompt: "Be concise.".into(),
+            model: ModelSettings {
+                provider: "openai".into(),
+                model: "gpt-4.1-mini".into(),
+                max_output_tokens: Some(42),
+            },
+            rules: rules.into_iter().map(str::to_owned).collect(),
+            tool_ids: Vec::new(),
+            skill_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn openai_prompt_includes_system_prompt_and_rules() {
+        assert_eq!(
+            agent_instructions(&agent(vec!["No markdown.", "Use facts."])),
+            "Be concise.\n\nRules:\n- No markdown.\n- Use facts."
+        );
+    }
+
+    #[test]
+    fn openai_rejects_unsupported_tools_without_credentials_or_network() {
+        let mut agent = agent(Vec::new());
+        agent.tool_ids.push("shell".into());
+        assert_eq!(
+            OpenAiRigRuntime.execute(
+                &agent,
+                &ExecutionConfig::Local {
+                    command: vec!["rig-openai".into()],
+                    working_directory: None,
+                },
+                "input"
+            ),
+            Err("OpenAI runtime does not support configured tools for agent writer".into())
+        );
+    }
 }

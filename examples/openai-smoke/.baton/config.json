@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 3,
+  "agents": [
+    {
+      "id": "writer",
+      "systemPrompt": "Write a concise release note from the supplied task.",
+      "model": { "provider": "openai", "model": "gpt-4.1-mini", "maxOutputTokens": 250 },
+      "rules": ["Return plain text only.", "Mention only facts in the task."],
+      "toolIds": [],
+      "skillIds": []
+    },
+    {
+      "id": "reviewer",
+      "systemPrompt": "Review the supplied draft and return a corrected concise release note.",
+      "model": { "provider": "openai", "model": "gpt-4.1-mini", "maxOutputTokens": 250 },
+      "rules": ["Return plain text only.", "Do not add unsupported claims."],
+      "toolIds": [],
+      "skillIds": []
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "release-note",
+      "name": "Write and review a release note",
+      "steps": [
+        {
+          "id": "write",
+          "name": "Write",
+          "agentId": "writer",
+          "execution": { "mode": "local", "command": ["rig-openai"] }
+        },
+        {
+          "id": "review",
+          "name": "Review",
+          "agentId": "reviewer",
+          "execution": { "mode": "local", "command": ["rig-openai"] }
+        }
+      ]
+    }
+  ],
+  "tools": [],
+  "skills": []
+}
