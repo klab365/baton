@@ -1,0 +1,11 @@
+[package]
+name = "baton-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+baton-core = { path = "../baton-core" }
+rig-core = { version = "0.45", default-features = false, features = ["reqwest", "rustls"] }
+rig-reqwest = { version = "0.45", default-features = false, features = ["rustls"] }
+tokio.workspace = true
