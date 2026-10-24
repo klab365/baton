@@ -218,7 +218,7 @@ $effect(() => {
 <section class="provider-settings" aria-labelledby="providers-title">
  <div class="section-heading"><div><h2 id="providers-title">AI providers</h2><p class="muted">Configure the connections available on this computer.</p></div><Button disabled={busy} onclick={() => { reset(); editorOpen = true; }}><Plus size={17} /> Add provider</Button></div>
  <div class="security-note"><ShieldCheck size={20} /><p><strong>Credentials stay on this device.</strong> API keys and ChatGPT sessions are stored in private local storage, never in the project configuration. A ChatGPT subscription does not authorize OpenAI API usage.</p></div>
- {#if message}<p role="alert" class="status status-error">{message}</p>{/if}
+ {#if message}<p role={message === "ChatGPT connected successfully." ? "status" : "alert"} class:status-error={message !== "ChatGPT connected successfully."} class="status">{message}</p>{/if}
  <div class="provider-layout" class:editing={editorOpen}>
   <div class="provider-list" aria-label="Configured providers">
    {#each providers as p (p.id)}
