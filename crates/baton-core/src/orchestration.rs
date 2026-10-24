@@ -6,7 +6,15 @@ use std::time::Instant;
 pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 
 pub trait AgentRuntime {
-    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String>;
+    /// `directory` is the isolated run workspace and the only project working
+    /// directory adapters may use. Never fall back to the process directory or
+    /// change global cwd (other runs can execute concurrently).
+    fn execute(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+    ) -> Result<String, String>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,6 +44,10 @@ pub struct PipelineRun {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    #[serde(default)]
+    pub worktree: Option<crate::worktrees::RunWorktree>,
+    #[serde(default)]
+    pub setup_error: Option<String>,
     pub pipeline_id: String,
     pub task: String,
     pub started_at: String,
@@ -57,9 +69,13 @@ pub struct RunEvent {
 }
 
 pub trait RunRepository {
+    fn worktree_manager(&self) -> Result<Box<dyn crate::worktrees::WorktreeManager>, String> {
+        Err("Project Git worktree manager is not configured".into())
+    }
     fn create(&self, run: &PipelineRun) -> Result<(), String>;
     fn save(&self, run: &PipelineRun) -> Result<(), String>;
     fn load(&self, id: &str) -> Result<PipelineRun, String>;
+    fn list(&self) -> Result<Vec<PipelineRun>, String>;
     /// Durable publication point for future live-update consumers.
     fn publish(&self, _event: &RunEvent) -> Result<(), String> {
         Ok(())
@@ -81,6 +97,23 @@ fn publish(
     repository.save(run)?;
     repository.publish(&event)
 }
+fn cancelled_run(
+    repository: &impl RunRepository,
+    run: &PipelineRun,
+) -> Result<Option<PipelineRun>, String> {
+    let mut current = repository.load(&run.id)?;
+    if current.status != Status::Cancelled {
+        return Ok(None);
+    }
+    // Cancellation can arrive while Git is allocating. Never lose the newly
+    // allocated identity, and never invoke a runtime after observing cancellation.
+    if current.worktree.is_none() && run.worktree.is_some() {
+        current.worktree = run.worktree.clone();
+        repository.save(&current)?;
+    }
+    Ok(Some(current))
+}
+
 fn finish_run(run: &mut PipelineRun, started: Instant) {
     run.ended_at = Some(utc_now());
     run.duration_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
@@ -149,6 +182,8 @@ pub fn start_pipeline_for_task(
     let mut run = PipelineRun {
         id: run_id.into(),
         task_id,
+        worktree: None,
+        setup_error: None,
         pipeline_id: pipeline.id.clone(),
         task: task.into(),
         started_at: utc_now(),
@@ -171,8 +206,32 @@ pub fn start_pipeline_for_task(
     };
     repository.create(&run)?;
     publish(repository, &mut run, Some("Run started".into()))?;
+    let allocation = repository
+        .worktree_manager()
+        .and_then(|manager| manager.allocate(run_id));
+    match allocation {
+        Ok(worktree) => run.worktree = Some(worktree),
+        Err(error) => {
+            run.setup_error = Some(error.clone());
+            run.status = Status::Failed;
+            finish_run(&mut run, started_clock);
+            publish(repository, &mut run, Some(error))?;
+            return Ok(run);
+        }
+    }
+    if let Some(cancelled) = cancelled_run(repository, &run)? {
+        return Ok(cancelled);
+    }
+    publish(
+        repository,
+        &mut run,
+        Some("Isolated worktree allocated; retained until explicit cleanup".into()),
+    )?;
     let mut input = task.to_owned();
     for (index, step) in pipeline.steps.iter().enumerate() {
+        if let Some(cancelled) = cancelled_run(repository, &run)? {
+            return Ok(cancelled);
+        }
         run.steps[index].status = Status::Running;
         run.steps[index].input = Some(input.clone());
         publish(
@@ -185,19 +244,19 @@ pub fn start_pipeline_for_task(
             .iter()
             .find(|a| a.id == step.agent_id)
             .ok_or("Unknown agent")?;
-        let result = runtime.execute(agent, &input).and_then(|output| {
-            if output.len() > MAX_HANDOFF_BYTES {
-                Err("Agent output exceeds 16384 bytes".into())
-            } else {
-                Ok(output)
-            }
-        });
+        let result = runtime
+            .execute(&run.worktree.as_ref().unwrap().path, agent, &input)
+            .and_then(|output| {
+                if output.len() > MAX_HANDOFF_BYTES {
+                    Err("Agent output exceeds 16384 bytes".into())
+                } else {
+                    Ok(output)
+                }
+            });
         // Cancellation is cooperative: an in-flight adapter is allowed to return,
         // but its result is discarded and no subsequent step starts.
-        if let Ok(current) = repository.load(&run.id)
-            && current.status == Status::Cancelled
-        {
-            return Ok(current);
+        if let Some(cancelled) = cancelled_run(repository, &run)? {
+            return Ok(cancelled);
         }
         match result {
             Ok(output) => {

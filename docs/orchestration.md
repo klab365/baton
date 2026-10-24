@@ -26,8 +26,66 @@ model, and is the default for offline tests. `openai` and `chatgpt` likewise
 require the matching `model.provider`. A mismatch fails before a run record is
 created, so choosing fake cannot silently replace a real model.
 
-A step invokes its referenced agent through the selected runtime adapter; no
-per-step command, working directory, or execution-target configuration exists.
+A step invokes its referenced agent through the selected runtime adapter. The
+runtime receives only the run's allocated worktree as its project working
+directory; there is no per-step directory override. Current Rig adapters are
+text-only and do not access project files or change the process directory.
+Future filesystem/process adapters must use the supplied directory, never the
+server's current directory.
+
+## Isolated Git worktrees
+
+Both CLI and Control Plane execution allocate through the `WorktreeManager`
+port before invoking any runtime. The Git adapter uses the configured project
+directory (`BATON_PROJECT_DIR` for the server, or the CLI project argument) and
+`BATON_BASE_REVISION` (default `HEAD`), resolved to a commit before allocation.
+Only committed content is included; uncommitted primary-checkout changes are
+not copied. Projects must belong to a Git repository with a resolvable commit.
+There is no non-Git or primary-checkout fallback.
+
+For run `<id>`, the deterministic location is
+`<absolute Git common directory>/baton-worktrees/<id>` and the new branch is
+`baton/run-<id>`. This location is separate from both the primary checkout and
+Baton's source checkout, including when Baton itself is the configured project.
+All Git invocations use argument arrays, not shell commands. Worktrees are Git
+isolation, **not a security sandbox**: agents with filesystem capabilities must
+still obey their runtime policy.
+
+Exclusive reservations reject duplicate owners; existing paths or branches
+are never reused, reset, or force-removed. Concurrent runs with distinct IDs
+get distinct directories and branches. Setup failure produces a failed durable
+run with `setupError` and an event, and invokes no agent. A failed reservation
+is retained to prevent accidental reuse; inspect the reported path and retry
+with a new run ID rather than deleting unknown directories.
+
+Run snapshots persist `worktree` ownership, path, branch, resolved base commit,
+lifecycle, and cleanup outcome. Completing a run does not close its task:
+worktrees are retained after successful, failed, cancelled, and interrupted runs.
+Marking a task `done` or deleting it explicitly attempts to clean up all of its
+finished run worktrees; the status change/deletion is refused if a workspace
+cannot be safely removed. These lifecycle rules are core use cases, so the CLI
+and server behave consistently:
+
+```sh
+cargo run -p baton-cli -- task-done <project-directory> <task-id>
+cargo run -p baton-cli -- task-delete <project-directory> <task-id>
+```
+
+After stopping the server/executor (cancellation is cooperative), explicitly
+remove a retained finished run's clean worktree with:
+
+```sh
+cargo run -p baton-cli -- cleanup <project-directory> <run-id>
+```
+
+Cleanup verifies the allocation receipt, run owner, expected path and branch;
+then Git verifies that the path is a registered, clean worktree. Dirty worktrees
+are refused without `--force`; inspect and commit or move valuable files first.
+The branch and reservation remain for inspection, and the cleanup result is
+persisted on the run even when removal is refused. Never manually repurpose a
+run's worktree or ownership files for another run. Legacy runs with no worktree
+metadata cannot be cleaned through this command. No Docker or remote target is
+implemented; the domain port is independent of Git command execution.
 
 ## Opt-in OpenAI smoke test
 

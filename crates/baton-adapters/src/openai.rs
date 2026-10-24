@@ -50,7 +50,12 @@ impl OpenAiRigRuntime {
 }
 
 impl AgentRuntime for OpenAiRigRuntime {
-    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
+    fn execute(
+        &mut self,
+        _directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+    ) -> Result<String, String> {
         if agent.model.provider != "openai" {
             return Err(format!(
                 "OpenAI runtime requires agent {} to use model.provider \\\"openai\\\"",

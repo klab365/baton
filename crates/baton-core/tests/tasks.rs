@@ -13,6 +13,7 @@ fn input(pipeline_id: &str) -> TaskInput {
         description: "Feature details".into(),
         acceptance_criteria: "Tests pass".into(),
         pipeline_id: pipeline_id.into(),
+        status: TaskStatus::Draft,
     }
 }
 

@@ -24,7 +24,12 @@ impl ChatGptRigRuntime {
 }
 
 impl AgentRuntime for ChatGptRigRuntime {
-    fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
+    fn execute(
+        &mut self,
+        _directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+    ) -> Result<String, String> {
         self.execute_configured(agent, input, true)
     }
 }

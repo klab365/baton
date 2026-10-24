@@ -60,7 +60,7 @@ mod tests {
         let mut agent = agent(Vec::new());
         agent.tool_ids.push("shell".into());
         assert_eq!(
-            OpenAiRigRuntime.execute(&agent, "input"),
+            OpenAiRigRuntime.execute(std::path::Path::new("/unused"), &agent, "input"),
             Err("OpenAI runtime does not support configured tools for agent writer".into())
         );
     }

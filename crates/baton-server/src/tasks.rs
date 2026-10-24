@@ -48,26 +48,31 @@ fn path(state: &AppState, id: &str) -> Result<PathBuf, ApiError> {
         .join(".baton/tasks")
         .join(format!("{id}.json")))
 }
+fn task_repository(
+    state: &AppState,
+) -> baton_adapters::filesystem_task_repository::FilesystemTaskRepository {
+    baton_adapters::filesystem_task_repository::FilesystemTaskRepository(
+        (*state.project_dir).clone(),
+    )
+}
 fn load(state: &AppState, id: &str) -> Result<Task, ApiError> {
-    serde_json::from_slice(&fs::read(path(state, id)?).map_err(io)?)
-        .map_err(|e| ApiError::internal(e.to_string()))
+    use baton_core::tasks::TaskRepository;
+    task_repository(state).load(id).map_err(|e| {
+        if e.contains("No such file") {
+            ApiError {
+                status: StatusCode::NOT_FOUND,
+                message: e,
+            }
+        } else {
+            ApiError::internal(e)
+        }
+    })
 }
 fn save(state: &AppState, task: &Task) -> Result<(), ApiError> {
-    use std::io::Write;
-    let path = path(state, &task.id)?;
-    let parent = path.parent().unwrap();
-    fs::create_dir_all(parent).map_err(io)?;
-    let temporary = path.with_extension("tmp");
-    let mut file = fs::File::create(&temporary).map_err(io)?;
-    file.write_all(
-        &serde_json::to_vec_pretty(task).map_err(|e| ApiError::internal(e.to_string()))?,
-    )
-    .map_err(io)?;
-    file.sync_all().map_err(io)?;
-    fs::rename(temporary, &path).map_err(io)?;
-    fs::File::open(parent)
-        .and_then(|f| f.sync_all())
-        .map_err(io)
+    use baton_core::tasks::TaskRepository;
+    task_repository(state)
+        .save(task)
+        .map_err(ApiError::internal)
 }
 async fn config(state: &AppState) -> Result<ProjectConfig, ApiError> {
     match get_project_config(state.repository.as_ref())
@@ -135,11 +140,25 @@ pub async fn update(
     Json(input): Json<TaskInput>,
 ) -> Result<Json<Task>, ApiError> {
     let _guard = state.task_lock.lock().await;
-    let mut task = load(&state, &id)?;
+    load(&state, &id)?;
     let config = config(&state).await?;
-    task.update(input, config.clone(), now()).map_err(bad)?;
-    crate::providers::ensure_pipeline_available(&config, &task.pipeline_id).await?;
-    save(&state, &task)?;
+    crate::providers::ensure_pipeline_available(&config, &input.pipeline_id).await?;
+    let _run_guard = state.run_lock.lock().await;
+    let task = baton_core::tasks::update_task(
+        &task_repository(&state),
+        &FilesystemRunRepository((*state.project_dir).clone()),
+        &id,
+        input,
+        config,
+        now(),
+    )
+    .map_err(|message| {
+        if message.contains("active run") {
+            ApiError::conflict(message)
+        } else {
+            bad(message)
+        }
+    })?;
     Ok(Json(task))
 }
 async fn list_runs(
@@ -223,6 +242,7 @@ async fn start_run(
         impl baton_core::orchestration::AgentRuntime for ConfiguredRuntime {
             fn execute(
                 &mut self,
+                directory: &std::path::Path,
                 agent: &baton_core::project::Agent,
                 input: &str,
             ) -> Result<String, String> {
@@ -231,7 +251,7 @@ async fn start_run(
                     .get(&agent.model.provider)
                     .ok_or_else(|| "Configured provider not found".to_owned())?;
                 let Some(provider) = provider else {
-                    return baton_adapters::FakeRuntime::default().execute(agent, input);
+                    return baton_adapters::FakeRuntime::default().execute(directory, agent, input);
                 };
                 match provider.kind.as_str() {
                     "openai" => baton_adapters::OpenAiRigRuntime.execute_with_provider(
@@ -274,7 +294,13 @@ pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let _guard = state.task_lock.lock().await;
-    fs::remove_file(path(&state, &id)?).map_err(io)?;
+    let _task_guard = state.task_lock.lock().await;
+    let _run_guard = state.run_lock.lock().await;
+    baton_core::tasks::delete_task(
+        &task_repository(&state),
+        &FilesystemRunRepository((*state.project_dir).clone()),
+        &id,
+    )
+    .map_err(ApiError::conflict)?;
     Ok(StatusCode::NO_CONTENT)
 }
