@@ -2,6 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use baton_core::orchestration::RunRepository;
 use baton_server::{AppState, router};
 use std::sync::OnceLock;
 use tower::ServiceExt;
@@ -18,6 +19,30 @@ fn fixture() -> std::path::PathBuf {
             .as_nanos()
     ));
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
+    for args in [
+        vec!["init"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&directory)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
     std::fs::write(
         directory.join(".baton/config.json"),
         include_str!("../../../examples/demo/.baton/config.json"),
@@ -163,13 +188,24 @@ async fn task_routes_return_http_contracts() {
         .oneshot(
             Request::put(format!("/api/tasks/{id}"))
                 .header("content-type", "application/json")
-                .body(input("Updated feature"))
+                .body(Body::from(serde_json::json!({ "title": "Updated feature", "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft", "status": "done" }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(json(response).await["title"], "Updated feature");
+    let updated = json(response).await;
+    assert_eq!(updated["title"], "Updated feature");
+    assert_eq!(updated["status"], "done");
+    let completed_run =
+        baton_adapters::filesystem_run_repository::FilesystemRunRepository(directory.clone())
+            .load(run_id)
+            .unwrap();
+    assert_eq!(
+        completed_run.worktree.as_ref().unwrap().lifecycle,
+        "removed"
+    );
+    assert!(!completed_run.worktree.as_ref().unwrap().path.exists());
 
     let response = app
         .clone()

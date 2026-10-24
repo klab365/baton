@@ -93,11 +93,20 @@ impl FilesystemRunRepository {
     }
 }
 impl RunRepository for FilesystemRunRepository {
+    fn worktree_manager(&self) -> Result<Box<dyn baton_core::worktrees::WorktreeManager>, String> {
+        Ok(Box::new(crate::GitWorktreeManager {
+            repository: self.0.clone(),
+            base_revision: std::env::var("BATON_BASE_REVISION").unwrap_or_else(|_| "HEAD".into()),
+        }))
+    }
     fn create(&self, run: &PipelineRun) -> Result<(), String> {
         self.persist(run, true)
     }
     fn save(&self, run: &PipelineRun) -> Result<(), String> {
         self.persist(run, false)
+    }
+    fn list(&self) -> Result<Vec<PipelineRun>, String> {
+        FilesystemRunRepository::list(self)
     }
     fn load(&self, id: &str) -> Result<PipelineRun, String> {
         serde_json::from_slice(&fs::read(self.path(id)?).map_err(|e| e.to_string())?)

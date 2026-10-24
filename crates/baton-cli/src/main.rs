@@ -29,6 +29,76 @@ fn ensure_runtime_provider(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if matches!(
+        env::args().nth(1).as_deref(),
+        Some("task-done" | "task-delete")
+    ) {
+        use baton_core::tasks::TaskRepository;
+        let args: Vec<String> = env::args().collect();
+        if args.len() != 4 {
+            anyhow::bail!("Usage: baton <task-done|task-delete> <project-directory> <task-id>");
+        }
+        let project = PathBuf::from(&args[2]).canonicalize()?;
+        let tasks =
+            baton_adapters::filesystem_task_repository::FilesystemTaskRepository(project.clone());
+        let runs = baton_adapters::filesystem_run_repository::FilesystemRunRepository(project);
+        match args[1].as_str() {
+            "task-done" => {
+                let mut task = tasks.load(&args[3]).map_err(anyhow::Error::msg)?;
+                let config = task.config_snapshot.clone();
+                let input = baton_core::tasks::TaskInput {
+                    title: task.title.clone(),
+                    description: task.description.clone(),
+                    acceptance_criteria: task.acceptance_criteria.clone(),
+                    pipeline_id: task.pipeline_id.clone(),
+                    status: baton_core::tasks::TaskStatus::Done,
+                };
+                task = baton_core::tasks::update_task(
+                    &tasks,
+                    &runs,
+                    &args[3],
+                    input,
+                    config,
+                    baton_core::orchestration::utc_now(),
+                )
+                .map_err(anyhow::Error::msg)?;
+                println!("Task {} marked done", task.id);
+            }
+            "task-delete" => {
+                baton_core::tasks::delete_task(&tasks, &runs, &args[3])
+                    .map_err(anyhow::Error::msg)?;
+                println!("Task {} deleted", args[3]);
+            }
+            _ => unreachable!(),
+        }
+        return Ok(());
+    }
+    if env::args().nth(1).as_deref() == Some("cleanup") {
+        use baton_core::orchestration::{RunRepository, Status};
+        let args: Vec<String> = env::args().skip(2).collect();
+        if args.len() != 2 {
+            anyhow::bail!("Usage: baton cleanup <project-directory> <run-id>");
+        }
+        let repository = baton_adapters::filesystem_run_repository::FilesystemRunRepository(
+            PathBuf::from(&args[0]).canonicalize()?,
+        );
+        let mut run = repository.load(&args[1]).map_err(anyhow::Error::msg)?;
+        if matches!(run.status, Status::Running | Status::Pending) {
+            anyhow::bail!("Cannot clean up an active run");
+        }
+        let workspace = run
+            .worktree
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Run has no allocated worktree"))?;
+        let result = repository
+            .worktree_manager()
+            .map_err(anyhow::Error::msg)?
+            .cleanup(&run.id, workspace);
+        repository.save(&run).map_err(anyhow::Error::msg)?;
+        result.map_err(anyhow::Error::msg)?;
+        println!("Worktree removed; branch retained");
+        return Ok(());
+    }
     // baton run --runtime <fake|openai|chatgpt> <project-directory> <pipeline-id> <task-prompt>
     if env::args().nth(1).as_deref() == Some("run") {
         let args: Vec<String> = env::args().skip(2).collect();

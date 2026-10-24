@@ -8,11 +8,37 @@ struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        Self(std::env::temp_dir().join(format!(
+        let fixture = Self(std::env::temp_dir().join(format!(
             "baton-run-{}-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        )))
+        )));
+        fs::create_dir_all(&fixture.0).unwrap();
+        for args in [
+            vec!["init"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&fixture.0)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        fixture
     }
     fn repo(&self) -> FilesystemRunRepository {
         FilesystemRunRepository(self.0.clone())
@@ -48,6 +74,10 @@ fn ordered_handoff_and_restart_safe_records() {
         ]
     );
     assert_eq!(run.status, Status::Succeeded);
+    let workspace = run.worktree.as_ref().unwrap();
+    assert_ne!(workspace.path, fixture.0);
+    assert_eq!(runtime.directories, vec![workspace.path.clone(); 2]);
+    assert!(workspace.path.join(".git").exists());
     assert!(run.ended_at.as_ref().unwrap() >= &run.started_at);
     assert!(run.duration_ms.is_some());
     assert_eq!(
@@ -114,6 +144,9 @@ fn failure_stops_remaining_steps_and_survives_reopen() {
     assert_eq!(run.status, Status::Failed);
     assert!(run.ended_at.is_some());
     assert!(run.duration_ms.is_some());
+    let workspace = run.worktree.as_ref().unwrap();
+    assert_eq!(workspace.lifecycle, "retained");
+    assert!(workspace.path.exists());
     assert_eq!(run.steps[0].status, Status::Failed);
     assert_eq!(run.steps[1].status, Status::Pending);
     assert!(run.steps[0].error.is_some());
@@ -153,7 +186,12 @@ fn bounds_are_enforced() {
 fn restart_marks_interrupted_runs_failed_without_resuming() {
     struct Crash;
     impl AgentRuntime for Crash {
-        fn execute(&mut self, _: &baton_core::project::Agent, _: &str) -> Result<String, String> {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            _: &baton_core::project::Agent,
+            _: &str,
+        ) -> Result<String, String> {
             panic!("process interrupted")
         }
     }
@@ -191,7 +229,12 @@ fn restart_marks_interrupted_runs_failed_without_resuming() {
 fn interrupted_execution_leaves_durable_running_state_without_retry() {
     struct Crash;
     impl AgentRuntime for Crash {
-        fn execute(&mut self, _: &baton_core::project::Agent, _: &str) -> Result<String, String> {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            _: &baton_core::project::Agent,
+            _: &str,
+        ) -> Result<String, String> {
             panic!("process interrupted")
         }
     }
@@ -213,4 +256,136 @@ fn interrupted_execution_leaves_durable_running_state_without_retry() {
     assert_eq!(run.steps[0].status, Status::Running);
     assert_eq!(run.steps[0].input.as_deref(), Some("task"));
     assert_eq!(run.steps[1].status, Status::Pending);
+}
+
+#[test]
+fn non_git_setup_failure_is_durable_and_never_invokes_runtime() {
+    let fixture = Fixture::new();
+    fs::remove_dir_all(fixture.0.join(".git")).unwrap();
+    let mut runtime = FakeRuntime::default();
+    let run = start_pipeline(
+        &config(),
+        "draft",
+        "task",
+        "non-git",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Failed);
+    assert!(run.setup_error.as_ref().unwrap().contains("Git project"));
+    assert!(runtime.calls.is_empty());
+    assert_eq!(fixture.repo().load("non-git").unwrap(), run);
+}
+
+#[test]
+fn allocation_collision_prevents_runtime_execution() {
+    let fixture = Fixture::new();
+    fixture
+        .repo()
+        .worktree_manager()
+        .unwrap()
+        .allocate("collision")
+        .unwrap();
+    let mut runtime = FakeRuntime::default();
+    let run = start_pipeline(
+        &config(),
+        "draft",
+        "task",
+        "collision",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Failed);
+    assert!(run.setup_error.as_ref().unwrap().contains("collision"));
+    assert!(runtime.calls.is_empty());
+    assert_eq!(fixture.repo().load("collision").unwrap(), run);
+}
+
+#[test]
+fn cancelled_run_retains_its_workspace() {
+    struct Cancel(FilesystemRunRepository);
+    impl AgentRuntime for Cancel {
+        fn execute(
+            &mut self,
+            directory: &std::path::Path,
+            _: &baton_core::project::Agent,
+            _: &str,
+        ) -> Result<String, String> {
+            let mut run = self.0.load("cancelled").unwrap();
+            assert_eq!(directory, run.worktree.as_ref().unwrap().path);
+            fs::write(directory.join("inspection.txt"), "partial work").unwrap();
+            run.status = Status::Cancelled;
+            self.0.save(&run).unwrap();
+            Ok("discarded".into())
+        }
+    }
+    let fixture = Fixture::new();
+    let run = start_pipeline(
+        &config(),
+        "draft",
+        "task",
+        "cancelled",
+        &mut Cancel(fixture.repo()),
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Cancelled);
+    assert_eq!(run.steps[1].status, Status::Pending);
+    let workspace = run.worktree.unwrap();
+    assert_eq!(workspace.lifecycle, "retained");
+    assert!(workspace.path.join("inspection.txt").exists());
+}
+
+#[test]
+fn cancellation_during_allocation_retains_identity_without_invocation() {
+    use baton_core::worktrees::{RunWorktree, WorktreeManager};
+    struct CancelDuringAllocation(PathBuf);
+    impl WorktreeManager for CancelDuringAllocation {
+        fn allocate(&self, id: &str) -> Result<RunWorktree, String> {
+            let repository = FilesystemRunRepository(self.0.clone());
+            let workspace = repository.worktree_manager()?.allocate(id)?;
+            let mut run = repository.load(id)?;
+            run.status = Status::Cancelled;
+            repository.save(&run)?;
+            Ok(workspace)
+        }
+        fn cleanup(&self, _: &str, _: &mut RunWorktree) -> Result<(), String> {
+            unreachable!()
+        }
+    }
+    struct Repository(PathBuf);
+    impl RunRepository for Repository {
+        fn worktree_manager(&self) -> Result<Box<dyn WorktreeManager>, String> {
+            Ok(Box::new(CancelDuringAllocation(self.0.clone())))
+        }
+        fn create(&self, run: &PipelineRun) -> Result<(), String> {
+            FilesystemRunRepository(self.0.clone()).create(run)
+        }
+        fn save(&self, run: &PipelineRun) -> Result<(), String> {
+            FilesystemRunRepository(self.0.clone()).save(run)
+        }
+        fn load(&self, id: &str) -> Result<PipelineRun, String> {
+            FilesystemRunRepository(self.0.clone()).load(id)
+        }
+        fn list(&self) -> Result<Vec<PipelineRun>, String> {
+            FilesystemRunRepository(self.0.clone()).list()
+        }
+    }
+    let fixture = Fixture::new();
+    let mut runtime = FakeRuntime::default();
+    let run = start_pipeline(
+        &config(),
+        "draft",
+        "task",
+        "cancel-setup",
+        &mut runtime,
+        &Repository(fixture.0.clone()),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Cancelled);
+    assert!(runtime.calls.is_empty());
+    assert!(run.worktree.as_ref().unwrap().path.exists());
+    assert_eq!(fixture.repo().load("cancel-setup").unwrap(), run);
 }

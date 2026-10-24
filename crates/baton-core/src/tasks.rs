@@ -1,4 +1,7 @@
-use crate::project::ProjectConfig;
+use crate::{
+    orchestration::{RunRepository, Status},
+    project::ProjectConfig,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,10 +23,12 @@ pub struct Task {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
+    #[default]
     Draft,
+    Done,
 }
 
 #[derive(Deserialize)]
@@ -34,6 +39,61 @@ pub struct TaskInput {
     #[serde(default)]
     pub acceptance_criteria: String,
     pub pipeline_id: String,
+    #[serde(default)]
+    pub status: TaskStatus,
+}
+
+pub trait TaskRepository {
+    fn load(&self, id: &str) -> Result<Task, String>;
+    fn save(&self, task: &Task) -> Result<(), String>;
+    fn delete(&self, id: &str) -> Result<(), String>;
+}
+
+/// Apply task lifecycle rules without coupling callers to HTTP or filesystem APIs.
+pub fn update_task(
+    repository: &impl TaskRepository,
+    runs: &impl RunRepository,
+    id: &str,
+    input: TaskInput,
+    config: ProjectConfig,
+    now: String,
+) -> Result<Task, String> {
+    let mut task = repository.load(id)?;
+    let was_done = task.status == TaskStatus::Done;
+    task.update(input, config, now)?;
+    if task.status == TaskStatus::Done && !was_done {
+        cleanup_task_worktrees(runs, id)?;
+    }
+    repository.save(&task)?;
+    Ok(task)
+}
+
+pub fn delete_task(
+    repository: &impl TaskRepository,
+    runs: &impl RunRepository,
+    id: &str,
+) -> Result<(), String> {
+    cleanup_task_worktrees(runs, id)?;
+    repository.delete(id)
+}
+
+fn cleanup_task_worktrees(runs: &impl RunRepository, task_id: &str) -> Result<(), String> {
+    for mut run in runs
+        .list()?
+        .into_iter()
+        .filter(|run| run.task_id.as_deref() == Some(task_id))
+    {
+        if run.status == Status::Running {
+            return Err("Cannot change or delete this task while it has an active run".into());
+        }
+        if let Some(worktree) = run.worktree.as_mut()
+            && worktree.lifecycle != "removed"
+        {
+            runs.worktree_manager()?.cleanup(&run.id, worktree)?;
+            runs.save(&run)?;
+        }
+    }
+    Ok(())
 }
 
 impl Task {
@@ -72,6 +132,7 @@ impl Task {
         self.description = input.description;
         self.acceptance_criteria = input.acceptance_criteria;
         self.pipeline_id = input.pipeline_id;
+        self.status = input.status;
         self.updated_at = now.max(self.updated_at.clone());
         Ok(())
     }
