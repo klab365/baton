@@ -1,6 +1,7 @@
 use baton_adapters::FakeRuntime;
+use baton_adapters::filesystem_run_repository::FilesystemRunRepository;
 use baton_core::{orchestration::*, project::parse_config};
-use baton_server::run_repository::FilesystemRunRepository;
+use baton_server::AppState;
 use std::{fs, path::PathBuf};
 
 struct Fixture(PathBuf);
@@ -146,6 +147,44 @@ fn bounds_are_enforced() {
     assert_eq!(run.status, Status::Failed);
     assert!(run.steps[0].output.is_none());
     assert_eq!(runtime.calls.len(), 1);
+}
+
+#[test]
+fn restart_marks_interrupted_runs_failed_without_resuming() {
+    struct Crash;
+    impl AgentRuntime for Crash {
+        fn execute(&mut self, _: &baton_core::project::Agent, _: &str) -> Result<String, String> {
+            panic!("process interrupted")
+        }
+    }
+    let fixture = Fixture::new();
+    let _ = std::panic::catch_unwind(|| {
+        start_pipeline(
+            &config(),
+            "draft",
+            "task",
+            "interrupted-restart",
+            &mut Crash,
+            &fixture.repo(),
+        )
+    });
+    AppState::new(fixture.0.clone());
+    let recovered = fixture.repo().load("interrupted-restart").unwrap();
+    assert_eq!(recovered.status, Status::Failed);
+    assert!(recovered.ended_at.is_some());
+    assert!(recovered.duration_ms.is_none());
+    assert_eq!(
+        fixture
+            .repo()
+            .load("interrupted-restart")
+            .unwrap()
+            .events
+            .last()
+            .unwrap()
+            .message
+            .as_deref(),
+        Some("Run interrupted by server restart")
+    );
 }
 
 #[test]

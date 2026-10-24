@@ -15,6 +15,22 @@ let selectedPipeline = $derived(
 		(pipeline: { id: string }) => pipeline.id === data.task.pipelineId,
 	),
 );
+async function start() {
+	loading = true;
+	error = "";
+	try {
+		const response = await fetch(`/api/tasks/${data.task.id}/runs`, {
+			method: "POST",
+		});
+		if (!response.ok)
+			throw new Error((await response.json()).error ?? "Could not start task.");
+		await goto(`/tasks/${data.task.id}`, { invalidateAll: true });
+	} catch (e) {
+		error = e instanceof Error ? e.message : "Could not start task.";
+	} finally {
+		loading = false;
+	}
+}
 async function remove() {
 	loading = true;
 	try {
@@ -33,7 +49,7 @@ async function remove() {
 
 <svelte:head><title>Task · Baton</title></svelte:head>
 <PageHeader eyebrow="Task" title={data.task.title} description="Review or update this task.">
-	{#snippet actions()}<Button variant="danger" onclick={() => (confirm = true)}>Delete task</Button>{/snippet}
+	{#snippet actions()}<Button {loading} onclick={start}>Start task</Button><Button variant="danger" onclick={() => (confirm = true)}>Delete task</Button>{/snippet}
 </PageHeader>
 {#if error}<StatusMessage tone="error">{error}</StatusMessage>{/if}
 <div class="task-detail-layout">
@@ -44,6 +60,15 @@ async function remove() {
 			<div><dt>Created</dt><dd>{new Date(data.task.createdAt).toLocaleString()}</dd></div>
 			<div><dt>Last updated</dt><dd>{new Date(data.task.updatedAt).toLocaleString()}</dd></div>
 		</dl>
+	</DetailPanel>
+	<DetailPanel title="Run history">
+		{#if data.runs.length}
+			<ul class="run-list">
+				{#each data.runs as run}
+					<li><a href={`/runs/${run.id}`}>{run.id}</a><span class="task-status">{run.status}</span><time datetime={run.startedAt}>{new Date(run.startedAt).toLocaleString()}</time></li>
+				{/each}
+			</ul>
+		{:else}<p class="muted">This task has not been started yet.</p>{/if}
 	</DetailPanel>
 	<div id="edit"><DetailPanel title="Edit task">
 		{#key data.task.id}<TaskForm task={data.task} pipelines={data.project.config?.pipelines ?? []} />{/key}

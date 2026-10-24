@@ -4,6 +4,8 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
+use baton_adapters::filesystem_run_repository::FilesystemRunRepository;
+use baton_core::orchestration::{Status, start_pipeline_for_task};
 use baton_core::{
     project::{ConfigState, ProjectConfig},
     project_config::get_project_config,
@@ -15,6 +17,7 @@ pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tasks", get(list).post(create))
         .route("/api/tasks/{id}", get(get_one).put(update).delete(delete))
+        .route("/api/tasks/{id}/runs", get(list_runs).post(start_run))
 }
 
 fn now() -> String {
@@ -139,6 +142,134 @@ pub async fn update(
     save(&state, &task)?;
     Ok(Json(task))
 }
+async fn list_runs(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<baton_core::orchestration::PipelineRun>>, ApiError> {
+    let _guard = state.run_lock.lock().await;
+    load(&state, &id)?;
+    let runs = FilesystemRunRepository((*state.project_dir).clone())
+        .list()
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        runs.into_iter()
+            .filter(|run| run.task_id.as_deref() == Some(&id))
+            .collect(),
+    ))
+}
+
+async fn start_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<baton_core::orchestration::PipelineRun>), ApiError> {
+    let _guard = state.run_lock.lock().await;
+    let task = load(&state, &id)?;
+    let repository = FilesystemRunRepository((*state.project_dir).clone());
+    if repository
+        .list()
+        .map_err(ApiError::internal)?
+        .iter()
+        .any(|run| run.task_id.as_deref() == Some(&id) && run.status == Status::Running)
+    {
+        return Err(ApiError::conflict(
+            "This task already has an active run".into(),
+        ));
+    }
+    if !state.active_tasks.lock().await.insert(id.clone()) {
+        return Err(ApiError::conflict(
+            "This task already has an active run".into(),
+        ));
+    }
+    let run_id = uuid::Uuid::now_v7().to_string();
+    let prompt = format!(
+        "{}\n\nAcceptance criteria:\n{}",
+        task.description, task.acceptance_criteria,
+    );
+    let config = task.config_snapshot;
+    let mut credentials = std::collections::HashMap::new();
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == task.pipeline_id)
+        .ok_or_else(|| bad("Selected pipeline does not exist"))?;
+    for step in &pipeline.steps {
+        let agent = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == step.agent_id)
+            .ok_or_else(|| bad("Pipeline references unknown agent"))?;
+        if credentials.contains_key(&agent.model.provider) {
+            continue;
+        }
+        if agent.model.provider == "fake" {
+            credentials.insert("fake".to_owned(), (None, None));
+            continue;
+        }
+        let (provider, key) = crate::providers::execution_provider(&agent.model.provider).await?;
+        credentials.insert(provider.id.clone(), (Some(provider), key));
+    }
+    let pipeline_id = task.pipeline_id;
+    let task_id = task.id;
+    // Do not hold the control-plane lock while an adapter runs: cancellation
+    // reads the durable record and is intentionally allowed to proceed.
+    drop(_guard);
+    let result = tokio::task::spawn_blocking(move || {
+        struct ConfiguredRuntime(
+            std::collections::HashMap<
+                String,
+                (Option<baton_core::providers::Provider>, Option<String>),
+            >,
+        );
+        impl baton_core::orchestration::AgentRuntime for ConfiguredRuntime {
+            fn execute(
+                &mut self,
+                agent: &baton_core::project::Agent,
+                input: &str,
+            ) -> Result<String, String> {
+                let (provider, key) = self
+                    .0
+                    .get(&agent.model.provider)
+                    .ok_or_else(|| "Configured provider not found".to_owned())?;
+                let Some(provider) = provider else {
+                    return baton_adapters::FakeRuntime::default().execute(agent, input);
+                };
+                match provider.kind.as_str() {
+                    "openai" => baton_adapters::OpenAiRigRuntime.execute_with_provider(
+                        agent,
+                        input,
+                        provider.base_url.as_deref(),
+                        key.as_deref().ok_or_else(|| {
+                            "OpenAI API key is unavailable; reconnect provider in Settings"
+                                .to_owned()
+                        })?,
+                    ),
+                    "chatgpt" => baton_adapters::ChatGptRigRuntime::new(
+                        crate::providers::token_dir(&provider.id)
+                            .map_err(|_| "Provider token storage is unavailable".to_owned())?,
+                    )
+                    .execute_configured(agent, input, false),
+                    _ => Err("Unsupported configured provider".into()),
+                }
+            }
+        }
+        start_pipeline_for_task(
+            &config,
+            &pipeline_id,
+            &prompt,
+            &run_id,
+            Some(task_id),
+            &mut ConfiguredRuntime(credentials),
+            &repository,
+        )
+    })
+    .await;
+    state.active_tasks.lock().await.remove(&id);
+    let run = result
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .map_err(bad)?;
+    Ok((StatusCode::CREATED, Json(run)))
+}
+
 pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,

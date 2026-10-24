@@ -135,6 +135,32 @@ async fn task_routes_return_http_contracts() {
     let response = app
         .clone()
         .oneshot(
+            Request::post(format!("/api/tasks/{id}/runs"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let run = json(response).await;
+    assert_eq!(run["taskId"], id);
+    assert_eq!(run["status"], "succeeded");
+    let run_id = run["id"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/runs/{run_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(json(response).await["events"].as_array().unwrap().len() >= 2);
+
+    let response = app
+        .clone()
+        .oneshot(
             Request::put(format!("/api/tasks/{id}"))
                 .header("content-type", "application/json")
                 .body(input("Updated feature"))
