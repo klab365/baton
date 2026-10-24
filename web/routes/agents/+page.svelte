@@ -1,6 +1,5 @@
 <script lang="ts">
 import { invalidateAll } from "$app/navigation";
-import Cpu from "@lucide/svelte/icons/cpu";
 import Plus from "@lucide/svelte/icons/plus";
 import Trash2 from "@lucide/svelte/icons/trash-2";
 import Button from "../../components/Button.svelte";
@@ -110,7 +109,7 @@ async function save(remove = false) {
 			<div class="list-heading"><strong>Your agents</strong><span>{config.agents.length}</span></div>
 			{#if !config.providers.length}<p class="availability-warning">No verified local models are available. Configure and test a provider in Settings before creating or editing agents.</p>{/if}
 			{#each config.agents as agent (agent.id)}
-				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><Cpu size={18} /><span><strong>{agent.id}</strong><small>{agent.model.model}</small></span></button>
+				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><span><strong>{agent.id}</strong><small>{agent.model.model}</small></span></button>
 			{:else}<p class="muted">No agents yet. Create a reusable role for your pipelines.</p>{/each}
 		</aside>
 		<section class="agent-editor">
@@ -118,7 +117,7 @@ async function save(remove = false) {
 				<EmptyState title="Select or create an agent" description="Agents hold a system prompt, verified model choice, rules, and optional tools and skills." />
 			{:else}
 				<form onsubmit={(event) => { event.preventDefault(); save(); }}>
-					<div class="editor-header"><div><span class="eyebrow">{editing ? "Editing agent" : "New agent"}</span><h2>{draft.id || "Untitled agent"}</h2></div><div><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button> <Button type="submit" loading={busy} disabled={!config.providers.length}>Save agent</Button></div></div>
+					<div class="editor-header"><div><span class="eyebrow">{editing ? "Editing agent" : "New agent"}</span>{#if !editing}<h2>{draft.id || "Untitled agent"}</h2>{/if}</div><div><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button> <Button type="submit" loading={busy} disabled={!config.providers.length}>Save agent</Button></div></div>
 					<div class="form-grid">
 						<Field label="Agent ID" for="agent-id" required hint="IDs cannot be changed after creation.">{#snippet children({ describedBy })}<input id="agent-id" bind:value={draft!.id} required disabled={busy || editing} aria-describedby={describedBy} />{/snippet}</Field>
 						<Field label="Provider" for="agent-provider" required hint="Only verified local providers are shown.">{#snippet children({ describedBy })}<ResourceSelect id="agent-provider" value={draft!.model.provider} onValueChange={selectProvider} items={config.providers.map((provider) => ({ id: provider.id, name: provider.name }))} kind="provider" placeholder="Select a provider" disabled={busy || !config.providers.length} {describedBy} />{/snippet}</Field>

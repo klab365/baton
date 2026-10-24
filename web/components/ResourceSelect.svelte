@@ -1,6 +1,5 @@
 <script lang="ts">
 import Box from "@lucide/svelte/icons/box";
-import Cpu from "@lucide/svelte/icons/cpu";
 import * as Select from "./ui/select";
 
 let {
@@ -28,7 +27,7 @@ let {
 	disabled?: boolean;
 	onValueChange?: (value: string) => void;
 } = $props();
-const Icon = $derived(kind === "agent" ? Cpu : Box);
+const Icon = $derived(Box);
 const groupLabel = $derived(
 	kind === "agent"
 		? "Configured agents"
@@ -42,7 +41,7 @@ const groupLabel = $derived(
 
 <Select.Root bind:value {name} {required} {disabled} {onValueChange} type="single">
 	<Select.Trigger {id} class="resource-select" aria-describedby={describedBy} aria-invalid={invalid}>
-		{#if kind !== "provider" && kind !== "model"}<Icon size={16} />{/if}
+		{#if kind !== "provider" && kind !== "model" && kind !== "agent"}<Icon size={16} />{/if}
 		<Select.Value {placeholder}>
 			{#snippet children()}
 				{(items.find((item) => item.id === value)?.name ?? value) || placeholder}
@@ -54,7 +53,7 @@ const groupLabel = $derived(
 			<Select.Label>{groupLabel}</Select.Label>
 			{#each items as item}
 				<Select.Item value={item.id} label={item.name ?? item.id}>
-					{#if kind !== "provider" && kind !== "model"}<Icon size={15} />{/if}
+					{#if kind !== "provider" && kind !== "model" && kind !== "agent"}<Icon size={15} />{/if}
 					<span>{item.name ?? item.id}</span>
 					{#if item.name && kind !== "provider"}<small>{item.id}</small>{/if}
 				</Select.Item>
