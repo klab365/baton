@@ -107,7 +107,7 @@ async function save(remove = false) {
    <div class="sidebar-heading"><div><span class="eyebrow">Library</span><h2>Your pipelines</h2></div><span class="count">{config.pipelines.length}</span></div>
    <p class="muted">Pipelines use agents already defined in project configuration.</p>
    {#if !config.agents.length}
-    <div class="agent-warning"><Cpu size={18} /><div><strong>No agents available</strong><span>Add agents to <code>.baton/config.json</code> before creating a pipeline.</span></div></div>
+    <div class="agent-warning"><Cpu size={18} /><div><strong>No agents available</strong><span>Create and save an agent in Agents before creating a pipeline.</span></div></div>
    {/if}
    <div class="pipeline-list">
    {#each config.pipelines as pipeline (pipeline.id)}

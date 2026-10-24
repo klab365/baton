@@ -286,6 +286,14 @@ async fn prompt(
             .unwrap_or(serde_json::Value::Null),
     ))
 }
+pub(crate) async fn available() -> Result<Vec<Provider>, ApiError> {
+    Ok(read()
+        .await?
+        .into_iter()
+        .filter(|provider| provider.status == "available" && !provider.models.is_empty())
+        .collect())
+}
+
 pub(crate) async fn ensure_pipeline_available(
     config: &baton_core::project::ProjectConfig,
     pipeline_id: &str,
