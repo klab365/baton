@@ -167,10 +167,14 @@ dependencies = [
 name = "baton-runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "baton-core",
+ "reqwest",
  "rig-core",
  "rig-reqwest",
+ "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -184,7 +188,6 @@ dependencies = [
  "baton-runtime",
  "reqwest",
  "rig-core",
- "rig-reqwest",
  "serde",
  "serde_json",
  "tokio",

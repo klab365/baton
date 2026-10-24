@@ -1,4 +1,5 @@
 //! Local provider metadata. Credentials are deliberately not part of this domain DTO.
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -12,6 +13,32 @@ pub struct Provider {
     pub models: Vec<String>,
     pub status: String,
 }
+#[async_trait]
+pub trait ProviderModelCatalog: Send + Sync {
+    async fn available_models(&self) -> Result<Vec<String>, ()>;
+}
+
+/// Refreshes provider availability from an infrastructure catalog without exposing credentials to
+/// project configuration or API consumers.
+pub async fn refresh_available_models(provider: &mut Provider, catalog: &dyn ProviderModelCatalog) {
+    match catalog.available_models().await {
+        Ok(models) if !models.is_empty() => {
+            provider.status = "available".into();
+            provider.models = models;
+        }
+        Ok(_) => mark_models_unavailable(provider, "No models are available for this session"),
+        Err(()) => mark_models_unavailable(
+            provider,
+            "Could not load provider models; authenticate again",
+        ),
+    }
+}
+
+pub fn mark_models_unavailable(provider: &mut Provider, message: &str) {
+    provider.status = message.into();
+    provider.models.clear();
+}
+
 impl Provider {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.name.trim().is_empty() || self.name.len() > 100 {
@@ -36,6 +63,40 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Catalog(Result<Vec<String>, ()>);
+
+    #[async_trait]
+    impl ProviderModelCatalog for Catalog {
+        async fn available_models(&self) -> Result<Vec<String>, ()> {
+            self.0.clone()
+        }
+    }
+
+    fn provider() -> Provider {
+        Provider {
+            id: "local".into(),
+            name: "Local".into(),
+            kind: "openai".into(),
+            default_model: "m".into(),
+            base_url: None,
+            models: vec![],
+            status: "disconnected".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn refreshes_only_catalog_models_and_marks_failures_unavailable() {
+        let mut p = provider();
+        refresh_available_models(&mut p, &Catalog(Ok(vec!["one".into(), "two".into()]))).await;
+        assert_eq!(p.status, "available");
+        assert_eq!(p.models, ["one", "two"]);
+
+        refresh_available_models(&mut p, &Catalog(Err(()))).await;
+        assert_ne!(p.status, "available");
+        assert!(p.models.is_empty());
+    }
+
     #[test]
     fn availability_requires_verification_and_model() {
         let mut p = Provider {

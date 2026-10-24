@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 baton-core = { path = "../baton-core" }
+async-trait.workspace = true
 rig-core = { version = "0.45", default-features = false, features = ["reqwest", "rustls"] }
 rig-reqwest = { version = "0.45", default-features = false, features = ["rustls"] }
 tokio.workspace = true
+uuid.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde_json.workspace = true

@@ -4,10 +4,9 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use baton_core::providers::Provider;
-use rig_core::providers::chatgpt::auth::{
-    AuthContext, AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore,
-};
+use baton_core::providers::{self, Provider};
+use baton_runtime::adapters::ChatGptSession;
+use rig_core::providers::chatgpt::auth::{FileTokenStore, TokenStore};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -23,7 +22,7 @@ pub struct Providers {
 }
 struct Flow {
     prompt: Arc<Mutex<Option<serde_json::Value>>>,
-    task: tokio::task::JoinHandle<Result<Vec<String>, ()>>,
+    task: tokio::task::JoinHandle<Provider>,
 }
 fn error(message: &str) -> ApiError {
     ApiError {
@@ -35,65 +34,6 @@ fn storage_error() -> ApiError {
     error("Local provider storage is unavailable; check home directory permissions")
 }
 
-const CHATGPT_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
-// The Codex catalog requires a current Codex client version to return the models visible to a
-// subscription. Keep this in step with the supported ChatGPT/Codex backend.
-const CHATGPT_CLIENT_VERSION: &str = "0.163.0";
-
-async fn chatgpt_models(context: &AuthContext) -> Result<Vec<String>, ()> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| ())?;
-    let mut url = reqwest::Url::parse(CHATGPT_MODELS_URL).map_err(|_| ())?;
-    url.query_pairs_mut()
-        .append_pair("client_version", CHATGPT_CLIENT_VERSION);
-    let mut request = client
-        .get(url)
-        .bearer_auth(context.api_key.expose())
-        .header("originator", "rig")
-        .header("session-id", uuid::Uuid::new_v4().to_string());
-    if let Some(account_id) = &context.account_id {
-        request = request.header("ChatGPT-Account-Id", account_id);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|_| ())?
-        .error_for_status()
-        .map_err(|_| ())?;
-    let payload = response.json::<serde_json::Value>().await.map_err(|_| ())?;
-    let mut models = payload["models"]
-        .as_array()
-        .ok_or(())?
-        .iter()
-        .filter(|model| {
-            model["supported_in_api"] == true && model["visibility"].as_str() == Some("list")
-        })
-        .filter_map(|model| model["slug"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    Ok(models)
-}
-
-fn set_authenticated_models(provider: &mut Provider, result: Result<Vec<String>, ()>) {
-    match result {
-        Ok(models) if !models.is_empty() => {
-            provider.status = "available".into();
-            provider.models = models;
-        }
-        Ok(_) => {
-            provider.status = "No ChatGPT models are available for this session".into();
-            provider.models.clear();
-        }
-        Err(()) => {
-            provider.status = "Could not load ChatGPT models; authenticate again".into();
-            provider.models.clear();
-        }
-    }
-}
 fn root() -> Result<PathBuf, ApiError> {
     if !cfg!(unix) {
         return Err(error(
@@ -153,7 +93,16 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<Provider>>, ApiE
             .is_some_and(|f| f.task.is_finished());
         if finished {
             let flow = state.providers.flows.lock().unwrap().remove(&p.id).unwrap();
-            set_authenticated_models(p, flow.task.await.unwrap_or(Err(())));
+            let verified = flow.task.await.unwrap_or_else(|_| {
+                let mut provider = p.clone();
+                providers::mark_models_unavailable(
+                    &mut provider,
+                    "Could not load provider models; authenticate again",
+                );
+                provider
+            });
+            p.status = verified.status;
+            p.models = verified.models;
         }
     }
     write(&items).await?;
@@ -290,27 +239,31 @@ async fn authenticate(
     }
     p.status = "authenticating".into();
     p.models.clear();
+    let mut verified = p.clone();
     write(&items).await?;
     let prompt = Arc::new(Mutex::new(None));
     let output = prompt.clone();
-    let store = FileTokenStore::new(token_dir(&id)?);
+    let token_dir = token_dir(&id)?;
     let task = tokio::spawn(async move {
-        let auth = Authenticator::new(
-            AuthSource::OAuth,
-            store,
-            DeviceCodeHandler::new(move |p| {
-                *output.lock().unwrap() = Some(
-                    serde_json::json!({"verificationUri": p.verification_uri, "userCode": p.user_code}),
-                );
-            }),
-            true,
-        );
-        let http = rig_reqwest::shared();
-        let context = tokio::time::timeout(Duration::from_secs(900), auth.auth_context(&http))
+        let session = ChatGptSession::new(token_dir);
+        if session
+            .authenticate(move |code| {
+                *output.lock().unwrap() = Some(serde_json::json!({
+                    "verificationUri": code.verification_uri,
+                    "userCode": code.user_code,
+                }));
+            })
             .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-        chatgpt_models(&context).await
+            .is_ok()
+        {
+            providers::refresh_available_models(&mut verified, &session).await;
+        } else {
+            providers::mark_models_unavailable(
+                &mut verified,
+                "Could not load provider models; authenticate again",
+            );
+        }
+        verified
     });
     state
         .providers
@@ -462,50 +415,4 @@ pub fn router() -> Router<AppState> {
                 response
             },
         ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn successful_chatgpt_auth_persists_every_returned_model() {
-        let mut provider = Provider {
-            id: "local".into(),
-            name: "ChatGPT".into(),
-            kind: "chatgpt".into(),
-            default_model: "model-one".into(),
-            base_url: None,
-            models: vec![],
-            status: "authenticating".into(),
-        };
-
-        set_authenticated_models(
-            &mut provider,
-            Ok(vec!["model-one".into(), "model-two".into()]),
-        );
-
-        assert_eq!(provider.status, "available");
-        assert_eq!(provider.models, ["model-one", "model-two"]);
-        assert!(provider.available("model-two"));
-    }
-
-    #[test]
-    fn empty_or_failed_chatgpt_model_listing_is_not_available() {
-        let mut provider = Provider {
-            id: "local".into(),
-            name: "ChatGPT".into(),
-            kind: "chatgpt".into(),
-            default_model: "model-one".into(),
-            base_url: None,
-            models: vec![],
-            status: "authenticating".into(),
-        };
-
-        set_authenticated_models(&mut provider, Ok(vec![]));
-        assert_ne!(provider.status, "available");
-        set_authenticated_models(&mut provider, Err(()));
-        assert_ne!(provider.status, "available");
-        assert!(provider.models.is_empty());
-    }
 }
