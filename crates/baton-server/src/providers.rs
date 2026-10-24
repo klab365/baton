@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use baton_adapters::adapters::ChatGptSession;
+use baton_adapters::ChatGptSession;
 use baton_core::providers::{self, Provider};
 use rig_core::providers::chatgpt::auth::{FileTokenStore, TokenStore};
 use serde::Deserialize;
