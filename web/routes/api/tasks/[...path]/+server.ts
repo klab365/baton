@@ -1,7 +1,9 @@
 import type { RequestHandler } from "./$types";
 
 const proxy: RequestHandler = async ({ request, params, fetch }) => {
-	const suffix = params.path ? `/${encodeURIComponent(params.path)}` : "";
+	const suffix = params.path
+		? `/${params.path.split("/").map(encodeURIComponent).join("/")}`
+		: "";
 	const response = await fetch(
 		`${process.env.BATON_API_URL ?? "http://127.0.0.1:5173"}/api/tasks${suffix}`,
 		{

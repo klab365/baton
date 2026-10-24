@@ -57,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_nanos()
         );
-        let repository = baton_server::run_repository::FilesystemRunRepository(project);
+        let repository =
+            baton_adapters::filesystem_run_repository::FilesystemRunRepository(project);
         let run = match runtime {
             "fake" => baton_core::orchestration::start_pipeline(
                 &config,

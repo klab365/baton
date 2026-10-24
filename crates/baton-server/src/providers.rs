@@ -63,8 +63,29 @@ async fn write(items: &[Provider]) -> Result<(), ApiError> {
         .await
         .map_err(|_| storage_error())
 }
-fn token_dir(id: &str) -> Result<PathBuf, ApiError> {
+pub(crate) fn token_dir(id: &str) -> Result<PathBuf, ApiError> {
     Ok(root()?.join(id))
+}
+pub(crate) async fn execution_provider(id: &str) -> Result<(Provider, Option<String>), ApiError> {
+    let item = read()
+        .await?
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| error("Configured provider is not available"))?;
+    if item.status != "available" {
+        return Err(error(
+            "Configured provider is not available; test or authenticate it in Settings",
+        ));
+    }
+    let key = if item.kind == "openai" {
+        FileTokenStore::new(token_dir(id)?)
+            .load("api-key")
+            .await
+            .map_err(|_| storage_error())?
+    } else {
+        None
+    };
+    Ok((item, key))
 }
 fn valid_id(id: &str) -> Result<(), ApiError> {
     uuid::Uuid::parse_str(id)

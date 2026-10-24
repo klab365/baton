@@ -25,7 +25,18 @@ impl ChatGptRigRuntime {
 
 impl AgentRuntime for ChatGptRigRuntime {
     fn execute(&mut self, agent: &Agent, input: &str) -> Result<String, String> {
-        if agent.model.provider != "chatgpt" {
+        self.execute_configured(agent, input, true)
+    }
+}
+
+impl ChatGptRigRuntime {
+    pub fn execute_configured(
+        &mut self,
+        agent: &Agent,
+        input: &str,
+        validate_provider_name: bool,
+    ) -> Result<String, String> {
+        if validate_provider_name && agent.model.provider != "chatgpt" {
             return Err(format!(
                 "ChatGPT runtime requires agent {} to use model.provider \\\"chatgpt\\\"",
                 agent.id

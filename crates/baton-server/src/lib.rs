@@ -1,16 +1,18 @@
 mod agents;
-mod filesystem_repository;
 mod pipelines;
 mod project_routes;
 mod providers;
-pub mod run_repository;
+mod runs;
 mod tasks;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use axum::{Json, Router, http::StatusCode, response::IntoResponse};
+use baton_adapters::{
+    filesystem_project_config_repository::FilesystemProjectConfigRepository,
+    filesystem_run_repository::FilesystemRunRepository,
+};
 use baton_core::project_config::ProjectConfigRepository;
-use filesystem_repository::FilesystemProjectConfigRepository;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -18,16 +20,24 @@ pub struct AppState {
     repository: Arc<dyn ProjectConfigRepository>,
     task_lock: Arc<tokio::sync::Mutex<()>>,
     providers: providers::Providers,
+    run_lock: Arc<tokio::sync::Mutex<()>>,
+    active_tasks: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
         let repository = FilesystemProjectConfigRepository::new(project_dir.clone());
+        let runs = FilesystemRunRepository(project_dir.clone());
+        // A running run cannot survive a process restart because adapters are in-process.
+        // Convert it deterministically to a durable terminal record before serving requests.
+        let _ = runs.recover_interrupted();
         Self {
             project_dir: Arc::new(project_dir),
             repository: Arc::new(repository),
             task_lock: Arc::new(tokio::sync::Mutex::new(())),
             providers: providers::Providers::default(),
+            run_lock: Arc::new(tokio::sync::Mutex::new(())),
+            active_tasks: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
         }
     }
 }
@@ -39,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .merge(tasks::router())
         .merge(pipelines::router())
         .merge(providers::router())
+        .merge(runs::router())
         .with_state(state)
 }
 

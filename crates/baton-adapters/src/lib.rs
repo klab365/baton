@@ -2,6 +2,8 @@
 mod chatgpt;
 mod chatgpt_provider;
 mod fake;
+pub mod filesystem_project_config_repository;
+pub mod filesystem_run_repository;
 mod openai;
 mod rig_support;
 
