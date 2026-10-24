@@ -5,8 +5,12 @@ use axum::{
     routing::get,
 };
 use baton_core::providers::Provider;
-use rig_core::providers::chatgpt::auth::{
-    AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore,
+use rig_core::providers::{
+    chatgpt::{
+        self,
+        auth::{AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore},
+    },
+    openai::OpenAIConfig,
 };
 use serde::Deserialize;
 use std::{
@@ -23,7 +27,7 @@ pub struct Providers {
 }
 struct Flow {
     prompt: Arc<Mutex<Option<serde_json::Value>>>,
-    task: tokio::task::JoinHandle<bool>,
+    task: tokio::task::JoinHandle<Result<Vec<String>, ()>>,
 }
 fn error(message: &str) -> ApiError {
     ApiError {
@@ -33,6 +37,23 @@ fn error(message: &str) -> ApiError {
 }
 fn storage_error() -> ApiError {
     error("Local provider storage is unavailable; check home directory permissions")
+}
+
+fn set_authenticated_models(provider: &mut Provider, result: Result<Vec<String>, ()>) {
+    match result {
+        Ok(models) if !models.is_empty() => {
+            provider.status = "available".into();
+            provider.models = models;
+        }
+        Ok(_) => {
+            provider.status = "No ChatGPT models are available for this session".into();
+            provider.models.clear();
+        }
+        Err(()) => {
+            provider.status = "Could not load ChatGPT models; authenticate again".into();
+            provider.models.clear();
+        }
+    }
 }
 fn root() -> Result<PathBuf, ApiError> {
     if !cfg!(unix) {
@@ -93,17 +114,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<Provider>>, ApiE
             .is_some_and(|f| f.task.is_finished());
         if finished {
             let flow = state.providers.flows.lock().unwrap().remove(&p.id).unwrap();
-            p.status = if flow.task.await.unwrap_or(false) {
-                "available"
-            } else {
-                "Authentication failed; re-authenticate"
-            }
-            .into();
-            p.models = if p.status == "available" {
-                vec![p.default_model.clone()]
-            } else {
-                vec![]
-            };
+            set_authenticated_models(p, flow.task.await.unwrap_or(Err(())));
         }
     }
     write(&items).await?;
@@ -255,12 +266,20 @@ async fn authenticate(
             }),
             true,
         );
-        tokio::time::timeout(
-            Duration::from_secs(900),
-            auth.auth_context(&rig_reqwest::shared()),
-        )
-        .await
-        .is_ok_and(|r| r.is_ok())
+        let http = rig_reqwest::shared();
+        let context = tokio::time::timeout(Duration::from_secs(900), auth.auth_context(&http))
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        let mut config = OpenAIConfig::with_key(&chatgpt::DIALECT, context.api_key);
+        if let Some(account_id) = context.account_id {
+            config = config.with_account_id(account_id);
+        }
+        let models = tokio::time::timeout(Duration::from_secs(30), config.client().list_models())
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        Ok(models.into_iter().map(|model| model.id).collect())
     });
     state
         .providers
@@ -412,4 +431,50 @@ pub fn router() -> Router<AppState> {
                 response
             },
         ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_chatgpt_auth_persists_every_returned_model() {
+        let mut provider = Provider {
+            id: "local".into(),
+            name: "ChatGPT".into(),
+            kind: "chatgpt".into(),
+            default_model: "model-one".into(),
+            base_url: None,
+            models: vec![],
+            status: "authenticating".into(),
+        };
+
+        set_authenticated_models(
+            &mut provider,
+            Ok(vec!["model-one".into(), "model-two".into()]),
+        );
+
+        assert_eq!(provider.status, "available");
+        assert_eq!(provider.models, ["model-one", "model-two"]);
+        assert!(provider.available("model-two"));
+    }
+
+    #[test]
+    fn empty_or_failed_chatgpt_model_listing_is_not_available() {
+        let mut provider = Provider {
+            id: "local".into(),
+            name: "ChatGPT".into(),
+            kind: "chatgpt".into(),
+            default_model: "model-one".into(),
+            base_url: None,
+            models: vec![],
+            status: "authenticating".into(),
+        };
+
+        set_authenticated_models(&mut provider, Ok(vec![]));
+        assert_ne!(provider.status, "available");
+        set_authenticated_models(&mut provider, Err(()));
+        assert_ne!(provider.status, "available");
+        assert!(provider.models.is_empty());
+    }
 }
