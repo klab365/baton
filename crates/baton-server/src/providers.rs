@@ -5,12 +5,8 @@ use axum::{
     routing::get,
 };
 use baton_core::providers::Provider;
-use rig_core::providers::{
-    chatgpt::{
-        self,
-        auth::{AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore},
-    },
-    openai::OpenAIConfig,
+use rig_core::providers::chatgpt::auth::{
+    AuthContext, AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore,
 };
 use serde::Deserialize;
 use std::{
@@ -37,6 +33,49 @@ fn error(message: &str) -> ApiError {
 }
 fn storage_error() -> ApiError {
     error("Local provider storage is unavailable; check home directory permissions")
+}
+
+const CHATGPT_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
+// The Codex catalog requires a current Codex client version to return the models visible to a
+// subscription. Keep this in step with the supported ChatGPT/Codex backend.
+const CHATGPT_CLIENT_VERSION: &str = "0.163.0";
+
+async fn chatgpt_models(context: &AuthContext) -> Result<Vec<String>, ()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| ())?;
+    let mut url = reqwest::Url::parse(CHATGPT_MODELS_URL).map_err(|_| ())?;
+    url.query_pairs_mut()
+        .append_pair("client_version", CHATGPT_CLIENT_VERSION);
+    let mut request = client
+        .get(url)
+        .bearer_auth(context.api_key.expose())
+        .header("originator", "rig")
+        .header("session-id", uuid::Uuid::new_v4().to_string());
+    if let Some(account_id) = &context.account_id {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| ())?
+        .error_for_status()
+        .map_err(|_| ())?;
+    let payload = response.json::<serde_json::Value>().await.map_err(|_| ())?;
+    let mut models = payload["models"]
+        .as_array()
+        .ok_or(())?
+        .iter()
+        .filter(|model| {
+            model["supported_in_api"] == true && model["visibility"].as_str() == Some("list")
+        })
+        .filter_map(|model| model["slug"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
 }
 
 fn set_authenticated_models(provider: &mut Provider, result: Result<Vec<String>, ()>) {
@@ -271,15 +310,7 @@ async fn authenticate(
             .await
             .map_err(|_| ())?
             .map_err(|_| ())?;
-        let mut config = OpenAIConfig::with_key(&chatgpt::DIALECT, context.api_key);
-        if let Some(account_id) = context.account_id {
-            config = config.with_account_id(account_id);
-        }
-        let models = tokio::time::timeout(Duration::from_secs(30), config.client().list_models())
-            .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-        Ok(models.into_iter().map(|model| model.id).collect())
+        chatgpt_models(&context).await
     });
     state
         .providers
