@@ -3,7 +3,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use baton_server::{AppState, router};
+use std::sync::OnceLock;
 use tower::ServiceExt;
+
+static PROVIDER_STORE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 fn fixture() -> std::path::PathBuf {
     let directory = std::env::temp_dir().join(format!(
@@ -30,8 +33,56 @@ fn input(title: &str) -> Body {
 }
 
 #[tokio::test]
-async fn task_routes_return_http_contracts() {
+async fn tasks_require_configured_available_local_models() {
+    let _guard = PROVIDER_STORE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let directory = fixture();
+    let provider_dir = directory.join("private-providers");
+    std::fs::create_dir_all(&provider_dir).unwrap();
+    std::fs::write(
+        provider_dir.join("settings.json"),
+        r#"[{"id":"other","name":"Other","kind":"openai","defaultModel":"other","baseUrl":null,"models":["other"],"status":"available"}]"#,
+    ).unwrap();
+    unsafe {
+        std::env::set_var("BATON_PROVIDER_DIR", &provider_dir);
+    }
+    let app = router(AppState::new(directory.clone()));
+    let response = app
+        .oneshot(
+            Request::post("/api/tasks")
+                .header("content-type", "application/json")
+                .body(input("Implement feature"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("configure and test")
+    );
+    unsafe {
+        std::env::remove_var("BATON_PROVIDER_DIR");
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn task_routes_return_http_contracts() {
+    let _guard = PROVIDER_STORE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let directory = fixture();
+    let provider_dir = directory.join("private-providers");
+    std::fs::create_dir_all(&provider_dir).unwrap();
+    unsafe {
+        std::env::set_var("BATON_PROVIDER_DIR", &provider_dir);
+    }
     let app = router(AppState::new(directory.clone()));
     let response = app
         .clone()
@@ -113,5 +164,8 @@ async fn task_routes_return_http_contracts() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    unsafe {
+        std::env::remove_var("BATON_PROVIDER_DIR");
+    }
     std::fs::remove_dir_all(directory).unwrap();
 }

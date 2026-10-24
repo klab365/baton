@@ -1,6 +1,7 @@
 mod filesystem_repository;
 mod pipelines;
 mod project_routes;
+mod providers;
 pub mod run_repository;
 mod tasks;
 
@@ -15,6 +16,7 @@ pub struct AppState {
     project_dir: Arc<PathBuf>,
     repository: Arc<dyn ProjectConfigRepository>,
     task_lock: Arc<tokio::sync::Mutex<()>>,
+    providers: providers::Providers,
 }
 
 impl AppState {
@@ -24,6 +26,7 @@ impl AppState {
             project_dir: Arc::new(project_dir),
             repository: Arc::new(repository),
             task_lock: Arc::new(tokio::sync::Mutex::new(())),
+            providers: providers::Providers::default(),
         }
     }
 }
@@ -33,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         .merge(project_routes::router())
         .merge(tasks::router())
         .merge(pipelines::router())
+        .merge(providers::router())
         .with_state(state)
 }
 
@@ -46,9 +50,9 @@ pub async fn serve(project_dir: PathBuf, host: &str, port: u16) -> anyhow::Resul
     Ok(())
 }
 
-struct ApiError {
-    status: StatusCode,
-    message: String,
+pub(crate) struct ApiError {
+    pub(crate) status: StatusCode,
+    pub(crate) message: String,
 }
 impl ApiError {
     fn conflict(message: String) -> Self {
