@@ -13,9 +13,24 @@ pub struct Provider {
     pub models: Vec<String>,
     pub status: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderCatalogError {
+    Authentication,
+    CatalogUnavailable,
+}
+
+impl ProviderCatalogError {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Authentication => "Provider authentication failed; authenticate again",
+            Self::CatalogUnavailable => "Could not load provider models; retry the connection",
+        }
+    }
+}
+
 #[async_trait]
 pub trait ProviderModelCatalog: Send + Sync {
-    async fn available_models(&self) -> Result<Vec<String>, ()>;
+    async fn available_models(&self) -> Result<Vec<String>, ProviderCatalogError>;
 }
 
 /// Refreshes provider availability from an infrastructure catalog without exposing credentials to
@@ -27,10 +42,7 @@ pub async fn refresh_available_models(provider: &mut Provider, catalog: &dyn Pro
             provider.models = models;
         }
         Ok(_) => mark_models_unavailable(provider, "No models are available for this session"),
-        Err(()) => mark_models_unavailable(
-            provider,
-            "Could not load provider models; authenticate again",
-        ),
+        Err(error) => mark_models_unavailable(provider, error.message()),
     }
 }
 
@@ -64,11 +76,11 @@ impl Provider {
 mod tests {
     use super::*;
 
-    struct Catalog(Result<Vec<String>, ()>);
+    struct Catalog(Result<Vec<String>, ProviderCatalogError>);
 
     #[async_trait]
     impl ProviderModelCatalog for Catalog {
-        async fn available_models(&self) -> Result<Vec<String>, ()> {
+        async fn available_models(&self) -> Result<Vec<String>, ProviderCatalogError> {
             self.0.clone()
         }
     }
@@ -92,9 +104,16 @@ mod tests {
         assert_eq!(p.status, "available");
         assert_eq!(p.models, ["one", "two"]);
 
-        refresh_available_models(&mut p, &Catalog(Err(()))).await;
+        for error in [
+            ProviderCatalogError::Authentication,
+            ProviderCatalogError::CatalogUnavailable,
+        ] {
+            refresh_available_models(&mut p, &Catalog(Err(error))).await;
+            assert_eq!(p.status, error.message());
+            assert!(p.models.is_empty());
+        }
+        refresh_available_models(&mut p, &Catalog(Ok(vec![]))).await;
         assert_ne!(p.status, "available");
-        assert!(p.models.is_empty());
     }
 
     #[test]

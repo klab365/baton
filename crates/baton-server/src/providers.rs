@@ -4,8 +4,8 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
+use baton_adapters::adapters::ChatGptSession;
 use baton_core::providers::{self, Provider};
-use baton_runtime::adapters::ChatGptSession;
 use rig_core::providers::chatgpt::auth::{FileTokenStore, TokenStore};
 use serde::Deserialize;
 use std::{
@@ -97,7 +97,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<Provider>>, ApiE
                 let mut provider = p.clone();
                 providers::mark_models_unavailable(
                     &mut provider,
-                    "Could not load provider models; authenticate again",
+                    providers::ProviderCatalogError::CatalogUnavailable.message(),
                 );
                 provider
             });
@@ -246,7 +246,7 @@ async fn authenticate(
     let token_dir = token_dir(&id)?;
     let task = tokio::spawn(async move {
         let session = ChatGptSession::new(token_dir);
-        if session
+        match session
             .authenticate(move |code| {
                 *output.lock().unwrap() = Some(serde_json::json!({
                     "verificationUri": code.verification_uri,
@@ -254,14 +254,9 @@ async fn authenticate(
                 }));
             })
             .await
-            .is_ok()
         {
-            providers::refresh_available_models(&mut verified, &session).await;
-        } else {
-            providers::mark_models_unavailable(
-                &mut verified,
-                "Could not load provider models; authenticate again",
-            );
+            Ok(catalog) => providers::refresh_available_models(&mut verified, &catalog).await,
+            Err(error) => providers::mark_models_unavailable(&mut verified, error.message()),
         }
         verified
     });

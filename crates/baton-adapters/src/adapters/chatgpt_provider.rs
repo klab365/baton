@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use baton_core::providers::ProviderModelCatalog;
+use baton_core::providers::{ProviderCatalogError, ProviderModelCatalog};
 use rig_core::providers::chatgpt::auth::{
     AuthContext, AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
 };
@@ -15,8 +15,10 @@ pub struct DeviceCode {
     pub user_code: String,
 }
 
-#[derive(Debug)]
-pub struct ChatGptSessionError;
+/// A catalog bound to the context resolved by a successful sign-in.
+pub struct AuthenticatedChatGptCatalog {
+    context: AuthContext,
+}
 
 /// Local ChatGPT OAuth session and model-catalog adapter.
 pub struct ChatGptSession {
@@ -31,7 +33,7 @@ impl ChatGptSession {
     pub async fn authenticate(
         &self,
         on_device_code: impl Fn(DeviceCode) + Send + Sync + 'static,
-    ) -> Result<(), ChatGptSessionError> {
+    ) -> Result<AuthenticatedChatGptCatalog, ProviderCatalogError> {
         let auth = Authenticator::new(
             AuthSource::OAuth,
             FileTokenStore::new(&self.token_dir),
@@ -43,43 +45,28 @@ impl ChatGptSession {
             }),
             true,
         );
-        tokio::time::timeout(
+        let context = tokio::time::timeout(
             Duration::from_secs(900),
             auth.auth_context(&rig_reqwest::shared()),
         )
         .await
-        .map_err(|_| ChatGptSessionError)?
-        .map_err(|_| ChatGptSessionError)?;
-        Ok(())
-    }
-
-    async fn authenticated_context(&self) -> Result<AuthContext, ()> {
-        let auth = Authenticator::new(
-            AuthSource::OAuth,
-            FileTokenStore::new(&self.token_dir),
-            DeviceCodeHandler::new(|_| {}),
-            false,
-        );
-        tokio::time::timeout(
-            Duration::from_secs(30),
-            auth.auth_context(&rig_reqwest::shared()),
-        )
-        .await
-        .map_err(|_| ())?
-        .map_err(|_| ())
+        .map_err(|_| ProviderCatalogError::Authentication)?
+        .map_err(|_| ProviderCatalogError::Authentication)?;
+        Ok(AuthenticatedChatGptCatalog { context })
     }
 }
 
 #[async_trait]
-impl ProviderModelCatalog for ChatGptSession {
-    async fn available_models(&self) -> Result<Vec<String>, ()> {
-        let context = self.authenticated_context().await?;
+impl ProviderModelCatalog for AuthenticatedChatGptCatalog {
+    async fn available_models(&self) -> Result<Vec<String>, ProviderCatalogError> {
+        let context = &self.context;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| ())?;
-        let mut url = reqwest::Url::parse(MODELS_URL).map_err(|_| ())?;
+            .map_err(|_| ProviderCatalogError::CatalogUnavailable)?;
+        let mut url = reqwest::Url::parse(MODELS_URL)
+            .map_err(|_| ProviderCatalogError::CatalogUnavailable)?;
         url.query_pairs_mut()
             .append_pair("client_version", CLIENT_VERSION);
         let mut request = client
@@ -93,13 +80,13 @@ impl ProviderModelCatalog for ChatGptSession {
         let payload = request
             .send()
             .await
-            .map_err(|_| ())?
+            .map_err(|_| ProviderCatalogError::CatalogUnavailable)?
             .error_for_status()
-            .map_err(|_| ())?
+            .map_err(|_| ProviderCatalogError::CatalogUnavailable)?
             .json::<serde_json::Value>()
             .await
-            .map_err(|_| ())?;
-        models_from_catalog(&payload)
+            .map_err(|_| ProviderCatalogError::CatalogUnavailable)?;
+        models_from_catalog(&payload).map_err(|_| ProviderCatalogError::CatalogUnavailable)
     }
 }
 

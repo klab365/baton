@@ -141,12 +141,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "baton-adapters"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "baton-core",
+ "reqwest",
+ "rig-core",
+ "rig-reqwest",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "baton-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "baton-adapters",
  "baton-core",
- "baton-runtime",
  "baton-server",
  "serde_json",
  "tokio",
@@ -164,28 +178,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "baton-runtime"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "baton-core",
- "reqwest",
- "rig-core",
- "rig-reqwest",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "baton-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "baton-adapters",
  "baton-core",
- "baton-runtime",
  "reqwest",
  "rig-core",
  "serde",
