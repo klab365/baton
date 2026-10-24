@@ -53,6 +53,27 @@ fn fixture() -> std::path::PathBuf {
 async fn json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
 }
+fn configure_fake(directory: &std::path::Path) {
+    let mut config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.join(".baton/config.json")).unwrap(),
+    )
+    .unwrap();
+    for agent in config["agents"].as_array_mut().unwrap() {
+        agent["model"]["provider"] = "fake".into();
+        agent["model"]["model"] = "deterministic".into();
+    }
+    let steps = config["pipelines"][0]["steps"].as_array_mut().unwrap();
+    steps.retain(|step| step["id"] == "write" || step["id"] == "review");
+    for step in steps {
+        step["human"] = false.into();
+        step["transitions"] = serde_json::json!([]);
+    }
+    std::fs::write(
+        directory.join(".baton/config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+}
 fn input(title: &str) -> Body {
     Body::from(serde_json::json!({ "title": title, "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft" }).to_string())
 }
@@ -103,6 +124,7 @@ async fn task_routes_return_http_contracts() {
         .lock()
         .await;
     let directory = fixture();
+    configure_fake(&directory);
     let provider_dir = directory.join("private-providers");
     std::fs::create_dir_all(&provider_dir).unwrap();
     unsafe {

@@ -327,7 +327,7 @@ pub(crate) async fn ensure_pipeline_available(
         .iter()
         .find(|pipeline| pipeline.id == pipeline_id)
         .ok_or_else(|| error("Selected pipeline does not exist"))?;
-    for step in &pipeline.steps {
+    for step in pipeline.steps.iter().filter(|step| !step.human) {
         let agent = config
             .agents
             .iter()

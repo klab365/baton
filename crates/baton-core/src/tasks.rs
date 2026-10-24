@@ -83,7 +83,7 @@ fn cleanup_task_worktrees(runs: &impl RunRepository, task_id: &str) -> Result<()
         .into_iter()
         .filter(|run| run.task_id.as_deref() == Some(task_id))
     {
-        if run.status == Status::Running {
+        if matches!(run.status, Status::Running | Status::WaitingHuman) {
             return Err("Cannot change or delete this task while it has an active run".into());
         }
         if let Some(worktree) = run.worktree.as_mut()

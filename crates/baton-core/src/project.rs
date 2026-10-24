@@ -31,11 +31,41 @@ dto!(Agent {
     tool_ids: Vec<String>,
     skill_ids: Vec<String>
 });
-dto!(PipelineStep {
-    id: String,
-    name: String,
-    agent_id: String
-});
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PipelineStep {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub human: bool,
+    #[serde(default)]
+    pub transitions: Vec<Transition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Completed,
+    Approved,
+    ReviseBuild,
+    RevisePlan,
+    Blocked,
+    Failed,
+    Rejected,
+    Responded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Transition {
+    pub outcome: Outcome,
+    // Null is an explicit terminal transition.
+    pub to: Option<String>,
+    // Every edge is bounded, so every possible cycle is bounded.
+    pub max_traversals: u32,
+}
 dto!(Tool {
     id: String,
     name: String
@@ -92,7 +122,38 @@ impl ProjectConfig {
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 nonempty(&format!("{step_path}.name"), &step.name)?;
-                reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
+                if step.human {
+                    if !step.agent_id.is_empty() {
+                        return Err(format!("{step_path}: human steps cannot have an agent"));
+                    }
+                } else {
+                    reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
+                }
+                let mut outcomes = Vec::new();
+                for transition in &step.transitions {
+                    if step.human
+                        && !matches!(
+                            transition.outcome,
+                            Outcome::Approved | Outcome::Rejected | Outcome::Responded
+                        )
+                    {
+                        return Err(format!(
+                            "{step_path}: human transitions require approved, rejected, or responded"
+                        ));
+                    }
+                    if outcomes.contains(&transition.outcome) {
+                        return Err(format!("{step_path}: ambiguous outcome transition"));
+                    }
+                    outcomes.push(transition.outcome.clone());
+                    if transition.max_traversals == 0 || transition.max_traversals > 1000 {
+                        return Err(format!("{step_path}: maxTraversals must be 1..1000"));
+                    }
+                    if let Some(target) = &transition.to
+                        && !pipeline.steps.iter().any(|s| &s.id == target)
+                    {
+                        return Err(format!("{step_path}: unknown transition target {target}"));
+                    }
+                }
             }
         }
         for tool in &self.tools {

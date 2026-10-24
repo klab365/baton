@@ -282,6 +282,8 @@ mod tests {
             id: "main".into(),
             name: "Main".into(),
             steps: vec![PipelineStep {
+                human: false,
+                transitions: vec![],
                 id: "plan".into(),
                 name: "Plan".into(),
                 agent_id: "writer".into(),

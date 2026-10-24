@@ -3,16 +3,24 @@
 	"agents": [
 		{
 			"id": "writer",
-			"systemPrompt": "Write a concise response.",
-			"model": { "provider": "fake", "model": "deterministic" },
+			"systemPrompt": "You are the implementation agent. Follow the task and acceptance criteria. Make the requested changes in the provided project workspace and report what you changed and how you verified it.",
+			"model": {
+				"provider": "332e1c86-969f-4639-aab7-398fc088effd",
+				"model": "gpt-6-luna",
+				"maxOutputTokens": null
+			},
 			"rules": [],
 			"toolIds": [],
 			"skillIds": []
 		},
 		{
 			"id": "reviewer",
-			"systemPrompt": "Review the supplied response.",
-			"model": { "provider": "fake", "model": "deterministic" },
+			"systemPrompt": "You are an independent implementation reviewer. Evaluate the supplied task, acceptance criteria, and implementation report. Check correctness, regressions, missing tests, and whether the acceptance criteria are met. Return ONLY valid JSON with exactly these fields: outcome and output. outcome must be one of approved, revise_build, revise_plan, or blocked. Use approved only when the work meets the acceptance criteria. Use revise_build for actionable implementation or test changes. Use revise_plan if the proposed approach itself is wrong. Use blocked only when a human decision or external dependency is required. The output must briefly explain the decision and give concrete next steps. Do not include Markdown fences, extra JSON fields, or a destination step. The control plane chooses the configured route.",
+			"model": {
+				"provider": "332e1c86-969f-4639-aab7-398fc088effd",
+				"model": "gpt-6-luna",
+				"maxOutputTokens": null
+			},
 			"rules": [],
 			"toolIds": [],
 			"skillIds": []
@@ -26,12 +34,59 @@
 				{
 					"id": "write",
 					"name": "Write",
-					"agentId": "writer"
+					"agentId": "writer",
+					"human": false,
+					"transitions": []
 				},
 				{
 					"id": "review",
 					"name": "Review",
-					"agentId": "reviewer"
+					"agentId": "reviewer",
+					"human": false,
+					"transitions": [
+						{
+							"outcome": "approved",
+							"to": "human-decision",
+							"maxTraversals": 1
+						},
+						{
+							"outcome": "revise_build",
+							"to": "write",
+							"maxTraversals": 2
+						},
+						{
+							"outcome": "revise_plan",
+							"to": "write",
+							"maxTraversals": 2
+						},
+						{
+							"outcome": "blocked",
+							"to": "human-decision",
+							"maxTraversals": 1
+						}
+					]
+				},
+				{
+					"id": "human-decision",
+					"name": "Human approval",
+					"human": true,
+					"transitions": [
+						{
+							"outcome": "approved",
+							"to": null,
+							"maxTraversals": 1
+						},
+						{
+							"outcome": "rejected",
+							"to": "write",
+							"maxTraversals": 2
+						},
+						{
+							"outcome": "responded",
+							"to": "write",
+							"maxTraversals": 2
+						}
+					]
 				}
 			]
 		}

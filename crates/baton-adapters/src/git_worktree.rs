@@ -91,6 +91,30 @@ impl WorktreeManager for GitWorktreeManager {
             cleanup_outcome: "Not requested; all runs are retained for inspection".into(),
         })
     }
+    fn validate(&self, id: &str, workspace: &RunWorktree) -> Result<(), String> {
+        let expected = self.location(id)?;
+        let marker = expected.parent().unwrap().join(format!("{id}.owner"));
+        if workspace.owner != id
+            || workspace.path != expected
+            || workspace.branch != format!("baton/run-{id}")
+            || workspace.lifecycle != "retained"
+            || fs::read_to_string(marker).map_err(|e| e.to_string())? != id
+        {
+            return Err("Refusing execution: workspace is not owned by this run".into());
+        }
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&expected)
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success()
+            || String::from_utf8_lossy(&output.stdout).trim() != workspace.branch
+        {
+            return Err("Refusing execution: worktree branch identity changed".into());
+        }
+        Ok(())
+    }
     fn cleanup(&self, id: &str, workspace: &mut RunWorktree) -> Result<(), String> {
         let result = (|| {
             let expected = self.location(id)?;
