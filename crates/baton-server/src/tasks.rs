@@ -121,7 +121,8 @@ pub async fn create(
     while path(&state, &id)?.exists() {
         id.push('x');
     }
-    let task = Task::create(id, input, config, now()).map_err(bad)?;
+    let task = Task::create(id, input, config.clone(), now()).map_err(bad)?;
+    crate::providers::ensure_pipeline_available(&config, &task.pipeline_id).await?;
     save(&state, &task)?;
     Ok((StatusCode::CREATED, Json(task)))
 }
@@ -132,8 +133,9 @@ pub async fn update(
 ) -> Result<Json<Task>, ApiError> {
     let _guard = state.task_lock.lock().await;
     let mut task = load(&state, &id)?;
-    task.update(input, config(&state).await?, now())
-        .map_err(bad)?;
+    let config = config(&state).await?;
+    task.update(input, config.clone(), now()).map_err(bad)?;
+    crate::providers::ensure_pipeline_available(&config, &task.pipeline_id).await?;
     save(&state, &task)?;
     Ok(Json(task))
 }
