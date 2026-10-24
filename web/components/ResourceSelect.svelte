@@ -14,25 +14,33 @@ let {
 	name,
 	required = false,
 	disabled = false,
+	onValueChange,
 }: {
 	id: string;
 	value?: string;
 	items: { id: string; name?: string }[];
 	placeholder: string;
-	kind?: "agent" | "pipeline" | "resource";
+	kind?: "agent" | "pipeline" | "resource" | "provider" | "model";
 	describedBy?: string;
 	invalid?: boolean;
 	name?: string;
 	required?: boolean;
 	disabled?: boolean;
+	onValueChange?: (value: string) => void;
 } = $props();
 const Icon = $derived(kind === "agent" ? Cpu : Box);
 const groupLabel = $derived(
-	kind === "agent" ? "Configured agents" : "Pipelines",
+	kind === "agent"
+		? "Configured agents"
+		: kind === "provider"
+			? "Verified providers"
+			: kind === "model"
+				? "Available models"
+				: "Pipelines",
 );
 </script>
 
-<Select.Root bind:value {name} {required} {disabled} type="single">
+<Select.Root bind:value {name} {required} {disabled} {onValueChange} type="single">
 	<Select.Trigger {id} class="resource-select" aria-describedby={describedBy} aria-invalid={invalid}>
 		<Icon size={16} />
 		<Select.Value {placeholder}>
@@ -48,7 +56,7 @@ const groupLabel = $derived(
 				<Select.Item value={item.id} label={item.name ?? item.id}>
 					<Icon size={15} />
 					<span>{item.name ?? item.id}</span>
-					{#if item.name}<small>{item.id}</small>{/if}
+					{#if item.name && kind !== "provider"}<small>{item.id}</small>{/if}
 				</Select.Item>
 			{/each}
 		</Select.Group>
