@@ -43,3 +43,10 @@ let {
 		<SelectScrollDownButton />
 	</SelectPrimitive.Content>
 </SelectPortal>
+
+<style>
+	:global([data-slot="select-content"]) {
+		background: #fff;
+		color: #172033;
+	}
+</style>

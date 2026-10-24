@@ -42,7 +42,7 @@ const groupLabel = $derived(
 
 <Select.Root bind:value {name} {required} {disabled} {onValueChange} type="single">
 	<Select.Trigger {id} class="resource-select" aria-describedby={describedBy} aria-invalid={invalid}>
-		<Icon size={16} />
+		{#if kind !== "provider" && kind !== "model"}<Icon size={16} />{/if}
 		<Select.Value {placeholder}>
 			{#snippet children()}
 				{(items.find((item) => item.id === value)?.name ?? value) || placeholder}
@@ -54,7 +54,7 @@ const groupLabel = $derived(
 			<Select.Label>{groupLabel}</Select.Label>
 			{#each items as item}
 				<Select.Item value={item.id} label={item.name ?? item.id}>
-					<Icon size={15} />
+					{#if kind !== "provider" && kind !== "model"}<Icon size={15} />{/if}
 					<span>{item.name ?? item.id}</span>
 					{#if item.name && kind !== "provider"}<small>{item.id}</small>{/if}
 				</Select.Item>
