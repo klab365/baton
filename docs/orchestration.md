@@ -1,4 +1,6 @@
-# Sequential orchestration and runtimes
+# Pipeline orchestration and runtimes
+
+Sequential execution remains the default. For conditional transitions, bounded review loops, durable human waits, and their API contract, see [Directed workflows and human decisions](workflow-transitions.md).
 
 Baton runs a configured pipeline through the `AgentRuntime` port in
 `baton-core::orchestration`. Agents remain reusable configuration: a step names

@@ -45,6 +45,8 @@ async fn agents_crud_require_available_models_and_unreferenced_deletion() {
     let snapshot = agents::list(&repository).await.unwrap();
     let mut agent = original.agents[0].clone();
     agent.id = "new-agent".into();
+    let provider = agent.model.provider.clone();
+    let model = agent.model.model.clone();
 
     assert!(matches!(
         agents::mutate(&repository, &snapshot.revision, Mutation::Create(agent.clone()), |_, _| false).await,
@@ -54,7 +56,7 @@ async fn agents_crud_require_available_models_and_unreferenced_deletion() {
         &repository,
         &snapshot.revision,
         Mutation::Create(agent.clone()),
-        |p, m| p == "fake" && m == "deterministic",
+        |p, m| p == provider && m == model,
     )
     .await
     .unwrap();

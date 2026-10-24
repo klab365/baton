@@ -1,6 +1,6 @@
 # Pipeline configuration
 
-Open **Pipelines** in the web UI to create, edit, reorder, or delete ordered chains. Each step selects a reusable agent. The handoff order is task input → first step → subsequent steps → output. This editor does not run pipelines.
+Open **Pipelines** in the web UI to create, edit, reorder, or delete pipelines. Steps use reusable agents or explicit human waits. Without transitions, the handoff order is task input → first step → subsequent steps → output. Add outcome transitions for bounded review/rework graphs; see [directed workflows and human decisions](workflow-transitions.md) for configuration, outcome contracts, limits, and run APIs. This editor does not run pipelines.
 
 Create agents in the **Agents** UI before building a pipeline. With no agents, pipeline creation is disabled. Agent definitions remain in `.baton/config.json`; only verified locally available provider/model pairs can be saved for agents.
 

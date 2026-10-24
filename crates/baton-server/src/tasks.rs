@@ -188,13 +188,11 @@ async fn start_run(
         .list()
         .map_err(ApiError::internal)?
         .iter()
-        .any(|run| run.task_id.as_deref() == Some(&id) && run.status == Status::Running)
+        .any(|run| {
+            run.task_id.as_deref() == Some(&id)
+                && matches!(run.status, Status::Running | Status::WaitingHuman)
+        })
     {
-        return Err(ApiError::conflict(
-            "This task already has an active run".into(),
-        ));
-    }
-    if !state.active_tasks.lock().await.insert(id.clone()) {
         return Err(ApiError::conflict(
             "This task already has an active run".into(),
         ));
@@ -205,27 +203,11 @@ async fn start_run(
         task.description, task.acceptance_criteria,
     );
     let config = task.config_snapshot;
-    let mut credentials = std::collections::HashMap::new();
-    let pipeline = config
-        .pipelines
-        .iter()
-        .find(|pipeline| pipeline.id == task.pipeline_id)
-        .ok_or_else(|| bad("Selected pipeline does not exist"))?;
-    for step in &pipeline.steps {
-        let agent = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == step.agent_id)
-            .ok_or_else(|| bad("Pipeline references unknown agent"))?;
-        if credentials.contains_key(&agent.model.provider) {
-            continue;
-        }
-        if agent.model.provider == "fake" {
-            credentials.insert("fake".to_owned(), (None, None));
-            continue;
-        }
-        let (provider, key) = crate::providers::execution_provider(&agent.model.provider).await?;
-        credentials.insert(provider.id.clone(), (Some(provider), key));
+    let mut credentials = runtime_for(&config, &task.pipeline_id).await?;
+    if !state.active_tasks.lock().await.insert(id.clone()) {
+        return Err(ApiError::conflict(
+            "This task already has an active run".into(),
+        ));
     }
     let pipeline_id = task.pipeline_id;
     let task_id = task.id;
@@ -233,52 +215,13 @@ async fn start_run(
     // reads the durable record and is intentionally allowed to proceed.
     drop(_guard);
     let result = tokio::task::spawn_blocking(move || {
-        struct ConfiguredRuntime(
-            std::collections::HashMap<
-                String,
-                (Option<baton_core::providers::Provider>, Option<String>),
-            >,
-        );
-        impl baton_core::orchestration::AgentRuntime for ConfiguredRuntime {
-            fn execute(
-                &mut self,
-                directory: &std::path::Path,
-                agent: &baton_core::project::Agent,
-                input: &str,
-            ) -> Result<String, String> {
-                let (provider, key) = self
-                    .0
-                    .get(&agent.model.provider)
-                    .ok_or_else(|| "Configured provider not found".to_owned())?;
-                let Some(provider) = provider else {
-                    return baton_adapters::FakeRuntime::default().execute(directory, agent, input);
-                };
-                match provider.kind.as_str() {
-                    "openai" => baton_adapters::OpenAiRigRuntime.execute_with_provider(
-                        agent,
-                        input,
-                        provider.base_url.as_deref(),
-                        key.as_deref().ok_or_else(|| {
-                            "OpenAI API key is unavailable; reconnect provider in Settings"
-                                .to_owned()
-                        })?,
-                    ),
-                    "chatgpt" => baton_adapters::ChatGptRigRuntime::new(
-                        crate::providers::token_dir(&provider.id)
-                            .map_err(|_| "Provider token storage is unavailable".to_owned())?,
-                    )
-                    .execute_configured(agent, input, false),
-                    _ => Err("Unsupported configured provider".into()),
-                }
-            }
-        }
         start_pipeline_for_task(
             &config,
             &pipeline_id,
             &prompt,
             &run_id,
             Some(task_id),
-            &mut ConfiguredRuntime(credentials),
+            &mut credentials,
             &repository,
         )
     })
@@ -303,4 +246,69 @@ pub async fn delete(
     )
     .map_err(ApiError::conflict)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) struct ConfiguredRuntime(
+    std::collections::HashMap<String, (Option<baton_core::providers::Provider>, Option<String>)>,
+);
+impl baton_core::orchestration::AgentRuntime for ConfiguredRuntime {
+    fn execute(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &baton_core::project::Agent,
+        input: &str,
+    ) -> Result<String, String> {
+        let (provider, key) = self
+            .0
+            .get(&agent.model.provider)
+            .ok_or_else(|| "Configured provider not found".to_owned())?;
+        let Some(provider) = provider else {
+            return baton_adapters::FakeRuntime::default().execute(directory, agent, input);
+        };
+        match provider.kind.as_str() {
+            "openai" => baton_adapters::OpenAiRigRuntime.execute_with_provider(
+                agent,
+                input,
+                provider.base_url.as_deref(),
+                key.as_deref().ok_or_else(|| {
+                    "OpenAI API key is unavailable; reconnect provider in Settings".to_owned()
+                })?,
+            ),
+            "chatgpt" => baton_adapters::ChatGptRigRuntime::new(
+                crate::providers::token_dir(&provider.id)
+                    .map_err(|_| "Provider token storage is unavailable".to_owned())?,
+            )
+            .execute_configured(agent, input, false),
+            _ => Err("Unsupported configured provider".into()),
+        }
+    }
+}
+
+pub(super) async fn runtime_for(
+    config: &ProjectConfig,
+    pipeline_id: &str,
+) -> Result<ConfiguredRuntime, ApiError> {
+    let mut credentials = std::collections::HashMap::new();
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == pipeline_id)
+        .ok_or_else(|| bad("Selected pipeline does not exist"))?;
+    for step in pipeline.steps.iter().filter(|step| !step.human) {
+        let agent = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == step.agent_id)
+            .ok_or_else(|| bad("Pipeline references unknown agent"))?;
+        if credentials.contains_key(&agent.model.provider) {
+            continue;
+        }
+        if agent.model.provider == "fake" {
+            credentials.insert("fake".to_owned(), (None, None));
+            continue;
+        }
+        let (provider, key) = crate::providers::execution_provider(&agent.model.provider).await?;
+        credentials.insert(provider.id.clone(), (Some(provider), key));
+    }
+    Ok(ConfiguredRuntime(credentials))
 }

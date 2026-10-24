@@ -50,7 +50,19 @@ impl Drop for Fixture {
     }
 }
 fn config() -> baton_core::project::ProjectConfig {
-    parse_config(include_str!("../../../examples/demo/.baton/config.json")).unwrap()
+    // Keep legacy sequential orchestration assertions independent from the
+    // interactive demo's intentionally conditional workflow.
+    let mut config =
+        parse_config(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+    let pipeline = &mut config.pipelines[0];
+    pipeline
+        .steps
+        .retain(|step| step.id == "write" || step.id == "review");
+    for step in &mut pipeline.steps {
+        step.human = false;
+        step.transitions.clear();
+    }
+    config
 }
 
 #[test]
@@ -70,7 +82,7 @@ fn ordered_handoff_and_restart_safe_records() {
         runtime.calls,
         vec![
             ("writer".into(), "task".into()),
-            ("reviewer".into(), "writer: task".into())
+            ("reviewer".into(), "Original task:\ntask\n\nPrevious step output and handoff (including any reviewer feedback):\nwriter: task".into())
         ]
     );
     assert_eq!(run.status, Status::Succeeded);
@@ -80,9 +92,12 @@ fn ordered_handoff_and_restart_safe_records() {
     assert!(workspace.path.join(".git").exists());
     assert!(run.ended_at.as_ref().unwrap() >= &run.started_at);
     assert!(run.duration_ms.is_some());
-    assert_eq!(
-        run.steps[1].output.as_deref(),
-        Some("reviewer: writer: task")
+    assert!(
+        run.steps[1]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("writer: task")
     );
     assert_eq!(fixture.repo().load("success").unwrap(), run);
     // Reopen and deserialize from a fresh OS process with no runtime memory.
@@ -117,10 +132,19 @@ fn restart_reader() {
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.task, "task");
     assert_eq!(run.steps[0].output.as_deref(), Some("writer: task"));
-    assert_eq!(run.steps[1].input, run.steps[0].output);
-    assert_eq!(
-        run.steps[1].output.as_deref(),
-        Some("reviewer: writer: task")
+    assert!(
+        run.steps[1]
+            .input
+            .as_deref()
+            .unwrap()
+            .contains(run.steps[0].output.as_deref().unwrap())
+    );
+    assert!(
+        run.steps[1]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("writer: task")
     );
 }
 

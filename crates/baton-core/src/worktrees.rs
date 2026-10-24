@@ -16,4 +16,7 @@ pub struct RunWorktree {
 pub trait WorktreeManager {
     fn allocate(&self, run_id: &str) -> Result<RunWorktree, String>;
     fn cleanup(&self, run_id: &str, workspace: &mut RunWorktree) -> Result<(), String>;
+    fn validate(&self, _run_id: &str, _workspace: &RunWorktree) -> Result<(), String> {
+        Err("Workspace ownership validation is not supported".into())
+    }
 }

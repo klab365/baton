@@ -16,6 +16,17 @@ import PageHeader from "../../components/PageHeader.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
 import type { Pipeline } from "../../lib/generated/Pipeline";
+import type { Outcome } from "../../lib/generated/Outcome";
+const outcomes: Outcome[] = [
+	"completed",
+	"approved",
+	"revise_build",
+	"revise_plan",
+	"blocked",
+	"failed",
+	"rejected",
+	"responded",
+];
 import type { PipelineStep as Step } from "../../lib/generated/PipelineStep";
 type PipelineConfiguration = {
 	revision: string;
@@ -46,7 +57,13 @@ function open(pipeline?: Pipeline) {
 function add() {
 	if (!config) return;
 	const id = crypto.randomUUID();
-	draft?.steps.push({ id, name: "", agentId: config.agents[0]?.id ?? "" });
+	draft?.steps.push({
+		id,
+		name: "",
+		agentId: config.agents[0]?.id ?? "",
+		human: false,
+		transitions: [],
+	});
 	expandedStepIds = new Set([...expandedStepIds, id]);
 }
 function toggleStep(id: string) {
@@ -94,7 +111,7 @@ async function save(remove = false) {
 </script>
 
 <svelte:head><title>Pipelines · Baton</title></svelte:head>
-<PageHeader title="Pipelines" description="Build a clear, ordered handoff between your configured agents.">
+<PageHeader title="Pipelines" description="Configure sequential handoffs, bounded review loops, and human decisions.">
  {#snippet actions()}<Button disabled={!config?.agents.length || busy} onclick={() => open()}><Plus size={17} /> Create pipeline</Button>{/snippet}
 </PageHeader>
 {#if error}<p role="alert" class="status status-error">{error}</p>{/if}
@@ -130,7 +147,16 @@ async function save(remove = false) {
          <header class="step-header"><div class="step-number">{index + 1}</div><button type="button" class="step-title" aria-expanded={expandedStepIds.has(step.id)} aria-controls={`step-details-${step.id}`} onclick={() => toggleStep(step.id)}><span>Agent step {index + 1}</span><strong>{step.name || "Untitled step"}</strong><small>{index === 0 ? "Receives task input" : "Receives output from previous step"}</small></button><div class="step-controls"><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} up`} disabled={busy || index === 0} onclick={() => move(index, -1)}><ArrowUp size={17} /></button><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} down`} disabled={busy || index === draft.steps.length - 1} onclick={() => move(index, 1)}><ArrowDown size={17} /></button><button type="button" class="icon-button remove-step" aria-label={`Remove ${step.name || `step ${index + 1}`}`} disabled={busy} onclick={() => { if (draft) draft.steps = draft.steps.filter((item) => item.id !== step.id); }}><Trash2 size={16} /></button><GripVertical class="drag-hint" size={19} aria-hidden="true" /></div></header>
          {#if expandedStepIds.has(step.id)}<div class="step-body" id={`step-details-${step.id}`}>
           <Field label="Step name" for={`name-${step.id}`} required>{#snippet children()}<input id={`name-${step.id}`} bind:value={step.name} required disabled={busy} placeholder="e.g. Research request" />{/snippet}</Field>
-          <Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>
+          <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<select id={`type-${step.id}`} value={step.human ? "human" : "agent"} disabled={busy} onchange={(event) => { step.human = event.currentTarget.value === "human"; step.agentId = step.human ? "" : config.agents[0]?.id ?? ""; step.transitions = []; }}><option value="agent">Agent</option><option value="human">Human wait</option></select>{/snippet}</Field>
+          {#if !step.human}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
+          <div><p>No transitions means sequential execution. Explicit transitions require a matching structured outcome. Every edge has a traversal limit.</p>
+          {#each step.transitions as transition, routeIndex}
+            <Field label="Outcome" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children()}<select id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} disabled={busy}>{#each outcomes.filter((o) => !step.human || ["approved", "rejected", "responded"].includes(o)) as outcome}<option value={outcome}>{outcome}</option>{/each}</select>{/snippet}</Field>
+            <Field label="Destination" for={`target-${step.id}-${routeIndex}`}>{#snippet children()}<select id={`target-${step.id}-${routeIndex}`} value={transition.to ?? ""} disabled={busy} onchange={(event) => { transition.to = event.currentTarget.value || null; }}><option value="">End run</option>{#each draft?.steps ?? [] as target}<option value={target.id}>{target.name || target.id}</option>{/each}</select>{/snippet}</Field>
+            <Field label="Maximum traversals" for={`limit-${step.id}-${routeIndex}`}>{#snippet children()}<input id={`limit-${step.id}-${routeIndex}`} type="number" min="1" max="1000" required bind:value={transition.maxTraversals} disabled={busy} />{/snippet}</Field>
+            <Button variant="danger" disabled={busy} onclick={() => { step.transitions = step.transitions.filter((_, i) => i !== routeIndex); }}>Remove transition</Button>
+          {/each}
+          <Button variant="secondary" disabled={busy} onclick={() => { step.transitions.push({ outcome: step.human ? "approved" : "completed", to: null, maxTraversals: 1 }); }}>Add transition</Button></div>
          </div>{/if}
         </article>
        </li>

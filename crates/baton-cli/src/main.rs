@@ -10,7 +10,7 @@ fn ensure_runtime_provider(
         .iter()
         .find(|pipeline| pipeline.id == pipeline_id)
         .ok_or_else(|| anyhow::anyhow!("Unknown pipeline ID"))?;
-    for step in &pipeline.steps {
+    for step in pipeline.steps.iter().filter(|step| !step.human) {
         let agent = config
             .agents
             .iter()
@@ -83,7 +83,10 @@ async fn main() -> anyhow::Result<()> {
             PathBuf::from(&args[0]).canonicalize()?,
         );
         let mut run = repository.load(&args[1]).map_err(anyhow::Error::msg)?;
-        if matches!(run.status, Status::Running | Status::Pending) {
+        if matches!(
+            run.status,
+            Status::Running | Status::Pending | Status::WaitingHuman
+        ) {
             anyhow::bail!("Cannot clean up an active run");
         }
         let workspace = run
