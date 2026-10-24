@@ -64,5 +64,26 @@ const groupLabel = $derived(
 </Select.Root>
 
 <style>
+	:global(.resource-select) {
+		width: 100%;
+		height: 3rem;
+		min-height: 3rem;
+		border-color: #aab4c6;
+		border-radius: 0.4rem;
+		background: #fff;
+		color: #172033;
+		font-family: inherit;
+		font-size: inherit;
+		font-weight: 600;
+		padding: 0.65rem 0.75rem;
+		transition: border-color 120ms ease, box-shadow 120ms ease;
+	}
+	:global(.resource-select:hover:not(:disabled)) { border-color: #66748b; }
+	:global(.resource-select:focus-visible) {
+		border-color: #3055b5;
+		box-shadow: 0 0 0 3px rgb(48 85 181 / 15%);
+		outline: 0;
+	}
+	:global(.resource-select:disabled) { background: #f7f8fb; }
 	:global([data-slot="select-item"] small) { color: #69758b; font-size: 0.72rem; }
 </style>
