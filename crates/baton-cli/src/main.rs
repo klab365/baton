@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
                 &args[3],
                 &args[4],
                 &id,
-                &mut baton_runtime::adapters::FakeRuntime::default(),
+                &mut baton_adapters::FakeRuntime::default(),
                 &repository,
             ),
             "openai" => baton_core::orchestration::start_pipeline(
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
                 &args[3],
                 &args[4],
                 &id,
-                &mut baton_runtime::adapters::OpenAiRigRuntime,
+                &mut baton_adapters::OpenAiRigRuntime,
                 &repository,
             ),
             "chatgpt" => {
@@ -85,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
                     &args[3],
                     &args[4],
                     &id,
-                    &mut baton_runtime::adapters::ChatGptRigRuntime::new(token_dir),
+                    &mut baton_adapters::ChatGptRigRuntime::new(token_dir),
                     &repository,
                 )
             }

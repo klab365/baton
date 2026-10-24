@@ -4,10 +4,9 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use baton_core::providers::Provider;
-use rig_core::providers::chatgpt::auth::{
-    AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore, TokenStore,
-};
+use baton_adapters::ChatGptSession;
+use baton_core::providers::{self, Provider};
+use rig_core::providers::chatgpt::auth::{FileTokenStore, TokenStore};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -23,7 +22,7 @@ pub struct Providers {
 }
 struct Flow {
     prompt: Arc<Mutex<Option<serde_json::Value>>>,
-    task: tokio::task::JoinHandle<bool>,
+    task: tokio::task::JoinHandle<Provider>,
 }
 fn error(message: &str) -> ApiError {
     ApiError {
@@ -34,6 +33,7 @@ fn error(message: &str) -> ApiError {
 fn storage_error() -> ApiError {
     error("Local provider storage is unavailable; check home directory permissions")
 }
+
 fn root() -> Result<PathBuf, ApiError> {
     if !cfg!(unix) {
         return Err(error(
@@ -93,17 +93,16 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<Provider>>, ApiE
             .is_some_and(|f| f.task.is_finished());
         if finished {
             let flow = state.providers.flows.lock().unwrap().remove(&p.id).unwrap();
-            p.status = if flow.task.await.unwrap_or(false) {
-                "available"
-            } else {
-                "Authentication failed; re-authenticate"
-            }
-            .into();
-            p.models = if p.status == "available" {
-                vec![p.default_model.clone()]
-            } else {
-                vec![]
-            };
+            let verified = flow.task.await.unwrap_or_else(|_| {
+                let mut provider = p.clone();
+                providers::mark_models_unavailable(
+                    &mut provider,
+                    providers::ProviderCatalogError::CatalogUnavailable.message(),
+                );
+                provider
+            });
+            p.status = verified.status;
+            p.models = verified.models;
         }
     }
     write(&items).await?;
@@ -240,27 +239,26 @@ async fn authenticate(
     }
     p.status = "authenticating".into();
     p.models.clear();
+    let mut verified = p.clone();
     write(&items).await?;
     let prompt = Arc::new(Mutex::new(None));
     let output = prompt.clone();
-    let store = FileTokenStore::new(token_dir(&id)?);
+    let token_dir = token_dir(&id)?;
     let task = tokio::spawn(async move {
-        let auth = Authenticator::new(
-            AuthSource::OAuth,
-            store,
-            DeviceCodeHandler::new(move |p| {
-                *output.lock().unwrap() = Some(
-                    serde_json::json!({"verificationUri": p.verification_uri, "userCode": p.user_code}),
-                );
-            }),
-            true,
-        );
-        tokio::time::timeout(
-            Duration::from_secs(900),
-            auth.auth_context(&rig_reqwest::shared()),
-        )
-        .await
-        .is_ok_and(|r| r.is_ok())
+        let session = ChatGptSession::new(token_dir);
+        match session
+            .authenticate(move |code| {
+                *output.lock().unwrap() = Some(serde_json::json!({
+                    "verificationUri": code.verification_uri,
+                    "userCode": code.user_code,
+                }));
+            })
+            .await
+        {
+            Ok(catalog) => providers::refresh_available_models(&mut verified, &catalog).await,
+            Err(error) => providers::mark_models_unavailable(&mut verified, error.message()),
+        }
+        verified
     });
     state
         .providers
@@ -286,6 +284,14 @@ async fn prompt(
             .unwrap_or(serde_json::Value::Null),
     ))
 }
+pub(crate) async fn available() -> Result<Vec<Provider>, ApiError> {
+    Ok(read()
+        .await?
+        .into_iter()
+        .filter(|provider| provider.status == "available" && !provider.models.is_empty())
+        .collect())
+}
+
 pub(crate) async fn ensure_pipeline_available(
     config: &baton_core::project::ProjectConfig,
     pipeline_id: &str,

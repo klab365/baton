@@ -1,3 +1,4 @@
+mod agents;
 mod filesystem_repository;
 mod pipelines;
 mod project_routes;
@@ -34,6 +35,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(project_routes::router())
+        .merge(agents::router())
         .merge(tasks::router())
         .merge(pipelines::router())
         .merge(providers::router())

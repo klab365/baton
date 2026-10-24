@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod orchestration;
 pub mod pipelines;
 pub mod project;
