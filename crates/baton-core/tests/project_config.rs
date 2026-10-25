@@ -3,13 +3,13 @@ use baton_core::project::{ProjectConfig, parse_config};
 fn example() -> serde_json::Value {
     serde_json::json!({
         "schemaVersion": 3,
-        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "model":{"provider":"example", "model":"large", "maxOutputTokens":1024}, "toolIds":["read"], "skillIds":["style"]}],
+        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "model":{"provider":"example", "model":"large", "maxOutputTokens":1024}, "toolIds":["builtin.read.v1"], "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
             {"id":"plan", "name":"Plan", "agentId":"writer"},
             {"id":"build", "name":"Build", "agentId":"writer"},
             {"id":"review", "name":"Review", "agentId":"writer"}
         ]}],
-        "tools":[{"id":"read", "name":"Read"}],
+        "tools":[{"id":"builtin.read.v1", "name":"Read"}],
         "skills":[{"id":"style", "name":"Style", "instructions":"Be concise"}]
     })
 }
@@ -61,7 +61,7 @@ fn actionable_validation_failures() {
         ),
         (
             "/agents/0/toolIds",
-            serde_json::json!(["read", "read"]),
+            serde_json::json!(["builtin.read.v1", "builtin.read.v1"]),
             "duplicate ID",
         ),
         (
@@ -110,6 +110,21 @@ fn actionable_validation_failures() {
                 .contains("duplicate ID")
         );
     }
+    let mut value = example();
+    value["tools"] = serde_json::json!([]);
+    assert!(
+        parse_config(&value.to_string())
+            .unwrap_err()
+            .contains("unknown reference")
+    );
+    let mut value = example();
+    value["tools"][0]["id"] = serde_json::json!("builtin.read.v999");
+    value["agents"][0]["toolIds"] = serde_json::json!(["builtin.read.v999"]);
+    assert!(
+        parse_config(&value.to_string())
+            .unwrap_err()
+            .contains("unsupported")
+    );
     let mut value = example();
     value["pipelines"][0]["steps"][0]["apiKey"] = serde_json::json!("not allowed");
     assert!(

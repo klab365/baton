@@ -107,6 +107,15 @@ impl ProjectConfig {
                 nonempty("agent.rules", rule)?;
             }
             references("agent.toolIds", &agent.tool_ids, &tools)?;
+            if agent
+                .tool_ids
+                .iter()
+                .any(|id| !crate::tools::IDS.contains(&id.as_str()))
+            {
+                return Err(
+                    "Agent references an unsupported or incompatible built-in tool version".into(),
+                );
+            }
             references("agent.skillIds", &agent.skill_ids, &skills)?;
         }
         for pipeline in &self.pipelines {
@@ -157,6 +166,9 @@ impl ProjectConfig {
             }
         }
         for tool in &self.tools {
+            if !crate::tools::IDS.contains(&tool.id.as_str()) {
+                return Err("Project enables an unsupported built-in tool version".into());
+            }
             nonempty(&format!("tools[{}].name", tool.id), &tool.name)?;
         }
         for skill in &self.skills {

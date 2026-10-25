@@ -3,26 +3,33 @@
 	"agents": [
 		{
 			"id": "writer",
-			"systemPrompt": "You are the implementation agent. Follow the task and acceptance criteria. Make the requested changes in the provided project workspace and report what you changed and how you verified it.",
+			"systemPrompt": "Implement the requested changes directly in the isolated project worktree. First inspect the relevant files, then make focused edits with built-in tools and verify them. Never modify .git, .baton, hidden files, build output, or dependency directories. Report changed paths and verification.",
 			"model": {
 				"provider": "332e1c86-969f-4639-aab7-398fc088effd",
 				"model": "gpt-6-luna",
-				"maxOutputTokens": null
+				"maxOutputTokens": 2048
 			},
 			"rules": [],
-			"toolIds": [],
+			"toolIds": [
+				"builtin.read.v1",
+				"builtin.write.v1",
+				"builtin.list.v1",
+				"builtin.search.v1",
+				"builtin.patch.v1",
+				"builtin.delete.v1"
+			],
 			"skillIds": []
 		},
 		{
 			"id": "reviewer",
-			"systemPrompt": "You are an independent implementation reviewer. Evaluate the supplied task, acceptance criteria, and implementation report. Check correctness, regressions, missing tests, and whether the acceptance criteria are met. Return ONLY valid JSON with exactly these fields: outcome and output. outcome must be one of approved, revise_build, revise_plan, or blocked. Use approved only when the work meets the acceptance criteria. Use revise_build for actionable implementation or test changes. Use revise_plan if the proposed approach itself is wrong. Use blocked only when a human decision or external dependency is required. The output must briefly explain the decision and give concrete next steps. Do not include Markdown fences, extra JSON fields, or a destination step. The control plane chooses the configured route.",
+			"systemPrompt": "Independently inspect the writer's changed project files using built-in tools. Review correctness and tests. After tool calls return only JSON with outcome (approved or revise_build) and output (brief decision). Never approve without inspecting the changes.",
 			"model": {
 				"provider": "332e1c86-969f-4639-aab7-398fc088effd",
 				"model": "gpt-6-luna",
-				"maxOutputTokens": null
+				"maxOutputTokens": 2048
 			},
 			"rules": [],
-			"toolIds": [],
+			"toolIds": ["builtin.read.v1", "builtin.list.v1", "builtin.search.v1"],
 			"skillIds": []
 		}
 	],
@@ -69,6 +76,7 @@
 				{
 					"id": "human-decision",
 					"name": "Human approval",
+					"agentId": "",
 					"human": true,
 					"transitions": [
 						{
@@ -91,6 +99,31 @@
 			]
 		}
 	],
-	"tools": [],
+	"tools": [
+		{
+			"id": "builtin.read.v1",
+			"name": "Read artifacts"
+		},
+		{
+			"id": "builtin.write.v1",
+			"name": "Create artifact"
+		},
+		{
+			"id": "builtin.list.v1",
+			"name": "List artifacts"
+		},
+		{
+			"id": "builtin.search.v1",
+			"name": "Search project files"
+		},
+		{
+			"id": "builtin.patch.v1",
+			"name": "Patch project files"
+		},
+		{
+			"id": "builtin.delete.v1",
+			"name": "Delete project files"
+		}
+	],
 	"skills": []
 }

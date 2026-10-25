@@ -54,6 +54,9 @@ fn config() -> baton_core::project::ProjectConfig {
     // interactive demo's intentionally conditional workflow.
     let mut config =
         parse_config(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+    for agent in &mut config.agents {
+        agent.tool_ids.clear();
+    }
     let pipeline = &mut config.pipelines[0];
     pipeline
         .steps
