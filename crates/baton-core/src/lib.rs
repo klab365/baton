@@ -7,4 +7,5 @@ pub mod providers;
 
 pub mod tasks;
 
+pub mod tools;
 pub mod worktrees;

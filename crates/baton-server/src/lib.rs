@@ -4,6 +4,7 @@ mod project_routes;
 mod providers;
 mod runs;
 mod tasks;
+mod tools;
 
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
@@ -50,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .merge(pipelines::router())
         .merge(providers::router())
         .merge(runs::router())
+        .merge(tools::router())
         .with_state(state)
 }
 

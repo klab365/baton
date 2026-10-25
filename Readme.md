@@ -29,7 +29,7 @@ bun install
 mise run dev
 ```
 
-The Axum API listens on `127.0.0.1:5173`; Vite serves the UI at `127.0.0.1:5174`. The demo project configuration is versioned at `examples/demo/.baton/config.json`.
+The Axum API listens on `127.0.0.1:5173`; Vite serves the UI at `127.0.0.1:5174`. The demo project configuration is versioned at `examples/demo/.baton/config.json`. See [built-in tools and demo setup](docs/built-in-tools.md) for provider selection, explicit tool assignment, and the isolated artifact-writing/review pipeline.
 
 ## Checks
 

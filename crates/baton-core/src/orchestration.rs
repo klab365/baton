@@ -510,16 +510,19 @@ fn execute_graph(
                 .map_err(|e| e.to_string())?
             )
         };
+        let mut tool_audit = Vec::new();
         let result = if prompt.len() > MAX_HANDOFF_BYTES {
             Err("Agent input exceeds 16384 bytes including outcome instructions".into())
         } else {
-            runtime.execute(
+            crate::tools::execute(
+                runtime,
                 &run.worktree
                     .as_ref()
                     .ok_or("Missing isolated worktree")?
                     .path,
                 agent,
                 &prompt,
+                &mut tool_audit,
             )
         }
         .and_then(|output| {
@@ -536,6 +539,14 @@ fn execute_graph(
                 Ok((result.outcome, result.output))
             }
         });
+        for message in tool_audit {
+            run.events.push(RunEvent {
+                run_id: run.id.clone(),
+                status: Status::Running,
+                occurred_at: utc_now(),
+                message: Some(message),
+            });
+        }
         if let Some(cancelled) = cancelled_run(repository, &run)? {
             return Ok(cancelled);
         }
