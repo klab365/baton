@@ -29,11 +29,7 @@
 				"maxOutputTokens": 2048
 			},
 			"rules": [],
-			"toolIds": [
-				"builtin.read.v1",
-				"builtin.list.v1",
-				"builtin.search.v1"
-			],
+			"toolIds": ["builtin.read.v1", "builtin.list.v1", "builtin.search.v1"],
 			"skillIds": []
 		}
 	],
