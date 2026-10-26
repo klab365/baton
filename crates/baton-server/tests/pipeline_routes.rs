@@ -18,7 +18,7 @@ fn fixture() -> std::path::PathBuf {
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
     std::fs::write(
         directory.join(".baton/config.json"),
-        include_str!("../../../examples/demo/.baton/config.json"),
+        include_str!("../../baton-core/tests/fixture_config.json"),
     )
     .unwrap();
     directory
@@ -45,7 +45,7 @@ async fn pipeline_routes_return_http_contracts() {
     assert_eq!(listing["agents"][0]["id"], "writer");
 
     let config: ProjectConfig =
-        serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+        serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     let mut pipeline = config.pipelines[0].clone();
     pipeline.id = "new-chain".into();
     let mut invalid = pipeline.clone();

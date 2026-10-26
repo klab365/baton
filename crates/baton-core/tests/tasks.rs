@@ -4,7 +4,7 @@ use baton_core::{
 };
 
 fn config() -> ProjectConfig {
-    serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap()
+    serde_json::from_str(include_str!("fixture_config.json")).unwrap()
 }
 
 fn input(pipeline_id: &str) -> TaskInput {

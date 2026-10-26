@@ -45,7 +45,7 @@ fn fixture() -> std::path::PathBuf {
     }
     std::fs::write(
         directory.join(".baton/config.json"),
-        include_str!("../../../examples/demo/.baton/config.json"),
+        include_str!("../../baton-core/tests/fixture_config.json"),
     )
     .unwrap();
     directory
@@ -59,9 +59,9 @@ fn configure_fake(directory: &std::path::Path) {
     )
     .unwrap();
     for agent in config["agents"].as_array_mut().unwrap() {
-        agent["model"]["provider"] = "fake".into();
-        agent["model"]["model"] = "deterministic".into();
+        agent["runtimeProfileId"] = "fake.default".into();
     }
+    config["runtimeProfiles"] = serde_json::json!([{"id":"fake.default", "name":"Offline", "runtimeKind":"fake", "model":null}]);
     let steps = config["pipelines"][0]["steps"].as_array_mut().unwrap();
     steps.retain(|step| step["id"] == "write" || step["id"] == "review");
     for step in steps {
@@ -79,7 +79,7 @@ fn input(title: &str) -> Body {
 }
 
 #[tokio::test]
-async fn tasks_require_configured_available_local_models() {
+async fn tasks_do_not_depend_on_obsolete_local_provider_settings() {
     let _guard = PROVIDER_STORE_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
@@ -104,12 +104,10 @@ async fn tasks_require_configured_available_local_models() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        json(response).await["error"]
-            .as_str()
-            .unwrap()
-            .contains("configure and test")
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        json(response).await["configSnapshot"]["agents"][0]["runtimeProfileId"],
+        "rig.openai.gpt-4.1"
     );
     unsafe {
         std::env::remove_var("BATON_PROVIDER_DIR");

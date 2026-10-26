@@ -16,6 +16,7 @@ pub struct Task {
     pub acceptance_criteria: String,
     pub pipeline_id: String,
     /// Immutable configuration, including referenced agents, tools and skills.
+    #[serde(deserialize_with = "crate::project::deserialize_snapshot")]
     pub config_snapshot: ProjectConfig,
     pub status: TaskStatus,
     /// UTC timestamps in RFC 3339 format.

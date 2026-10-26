@@ -28,8 +28,10 @@ impl ProjectConfigRepository for MemoryRepository {
 }
 
 fn fixture() -> (MemoryRepository, ProjectConfig) {
-    let config: ProjectConfig =
-        serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+    let config: ProjectConfig = serde_json::from_str(
+        r#"{"schemaVersion":6,"runtimeProfiles":[{"id":"rig.default","name":"Rig default","runtimeKind":"rig","model":null}],"agents":[{"id":"writer","systemPrompt":"Write clearly","runtimeProfileId":"rig.default","rules":[],"skillIds":[]}],"pipelines":[{"id":"draft","name":"Draft and review","steps":[{"id":"write","name":"Write","agentId":"writer","human":false,"transitions":[]}]}],"skills":[]}"#,
+    )
+    .unwrap();
     (
         MemoryRepository(Mutex::new(ConfigSnapshot {
             config: config.clone(),
@@ -40,23 +42,22 @@ fn fixture() -> (MemoryRepository, ProjectConfig) {
 }
 
 #[tokio::test]
-async fn agents_crud_require_available_models_and_unreferenced_deletion() {
+async fn agents_crud_require_runtime_profiles_and_unreferenced_deletion() {
     let (repository, original) = fixture();
     let snapshot = agents::list(&repository).await.unwrap();
     let mut agent = original.agents[0].clone();
     agent.id = "new-agent".into();
-    let provider = agent.model.provider.clone();
-    let model = agent.model.model.clone();
+    let profile = agent.runtime_profile_id.clone();
 
     assert!(matches!(
-        agents::mutate(&repository, &snapshot.revision, Mutation::Create(agent.clone()), |_, _| false).await,
+        agents::mutate(&repository, &snapshot.revision, Mutation::Create(agent.clone()), |_| false).await,
         Err(AgentError::Validation(message)) if message.contains("not configured")
     ));
     agents::mutate(
         &repository,
         &snapshot.revision,
         Mutation::Create(agent.clone()),
-        |p, m| p == provider && m == model,
+        |id| id == profile,
     )
     .await
     .unwrap();
@@ -67,21 +68,21 @@ async fn agents_crud_require_available_models_and_unreferenced_deletion() {
         &repository,
         &snapshot.revision,
         Mutation::Update(agent.id.clone(), agent.clone()),
-        |_, _| true,
+        |_| true,
     )
     .await
     .unwrap();
 
     let snapshot = agents::list(&repository).await.unwrap();
     assert!(matches!(
-        agents::mutate(&repository, &snapshot.revision, Mutation::Delete("writer".into()), |_, _| true).await,
+        agents::mutate(&repository, &snapshot.revision, Mutation::Delete("writer".into()), |_| true).await,
         Err(AgentError::Conflict(message)) if message.contains("Draft and review") && message.contains("Write")
     ));
     agents::mutate(
         &repository,
         &snapshot.revision,
         Mutation::Delete(agent.id.clone()),
-        |_, _| true,
+        |_| true,
     )
     .await
     .unwrap();

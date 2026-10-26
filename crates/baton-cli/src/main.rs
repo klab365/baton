@@ -1,32 +1,5 @@
 use std::{env, path::PathBuf};
 
-fn ensure_runtime_provider(
-    config: &baton_core::project::ProjectConfig,
-    pipeline_id: &str,
-    runtime: &str,
-) -> anyhow::Result<()> {
-    let pipeline = config
-        .pipelines
-        .iter()
-        .find(|pipeline| pipeline.id == pipeline_id)
-        .ok_or_else(|| anyhow::anyhow!("Unknown pipeline ID"))?;
-    for step in pipeline.steps.iter().filter(|step| !step.human) {
-        let agent = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == step.agent_id)
-            .ok_or_else(|| anyhow::anyhow!("Unknown agent"))?;
-        if agent.model.provider != runtime {
-            anyhow::bail!(
-                "Runtime {runtime:?} does not match agent {:?} provider {:?}",
-                agent.id,
-                agent.model.provider
-            );
-        }
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     if matches!(
@@ -102,27 +75,17 @@ async fn main() -> anyhow::Result<()> {
         println!("Worktree removed; branch retained");
         return Ok(());
     }
-    // baton run --runtime <fake|openai|chatgpt> <project-directory> <pipeline-id> <task-prompt>
+    // Runtime selection belongs exclusively to the snapshotted agent profile.
     if env::args().nth(1).as_deref() == Some("run") {
         let args: Vec<String> = env::args().skip(2).collect();
-        if args.len() != 5 || args.first().map(String::as_str) != Some("--runtime") {
-            anyhow::bail!(
-                "Usage: baton run --runtime <fake|openai|chatgpt> <project-directory> <pipeline-id> <task-prompt>"
-            );
+        if args.len() != 3 {
+            anyhow::bail!("Usage: baton run <project-directory> <pipeline-id> <task-prompt>");
         }
-        let runtime = match args[1].as_str() {
-            "fake" | "openai" | "chatgpt" => args[1].as_str(),
-            _ => anyhow::bail!(
-                "Unknown runtime {:?}; use fake, openai, or chatgpt",
-                args[1]
-            ),
-        };
-        let project = PathBuf::from(&args[2]).canonicalize()?;
+        let project = PathBuf::from(&args[0]).canonicalize()?;
         let config = baton_core::project::parse_config(&std::fs::read_to_string(
             project.join(".baton/config.json"),
         )?)
         .map_err(anyhow::Error::msg)?;
-        ensure_runtime_provider(&config, &args[3], runtime)?;
         let id = format!(
             "{}-{}",
             std::process::id(),
@@ -132,39 +95,14 @@ async fn main() -> anyhow::Result<()> {
         );
         let repository =
             baton_adapters::filesystem_run_repository::FilesystemRunRepository(project);
-        let run = match runtime {
-            "fake" => baton_core::orchestration::start_pipeline(
-                &config,
-                &args[3],
-                &args[4],
-                &id,
-                &mut baton_adapters::FakeRuntime::default(),
-                &repository,
-            ),
-            "openai" => baton_core::orchestration::start_pipeline(
-                &config,
-                &args[3],
-                &args[4],
-                &id,
-                &mut baton_adapters::OpenAiRigRuntime,
-                &repository,
-            ),
-            "chatgpt" => {
-                let token_dir = env::var_os("BATON_CHATGPT_TOKEN_DIR")
-                    .map(PathBuf::from)
-                    .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/baton/chatgpt")))
-                    .ok_or_else(|| anyhow::anyhow!("Could not determine a default ChatGPT token directory; set BATON_CHATGPT_TOKEN_DIR"))?;
-                baton_core::orchestration::start_pipeline(
-                    &config,
-                    &args[3],
-                    &args[4],
-                    &id,
-                    &mut baton_adapters::ChatGptRigRuntime::new(token_dir),
-                    &repository,
-                )
-            }
-            _ => unreachable!(),
-        }
+        let run = baton_core::orchestration::start_pipeline(
+            &config,
+            &args[1],
+            &args[2],
+            &id,
+            &mut baton_adapters::ProfileRuntime::new(config.clone()),
+            &repository,
+        )
         .map_err(anyhow::Error::msg)?;
         println!("{}", serde_json::to_string_pretty(&run)?);
         if run.status == baton_core::orchestration::Status::Failed {

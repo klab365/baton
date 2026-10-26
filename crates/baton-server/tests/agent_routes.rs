@@ -18,7 +18,7 @@ fn fixture() -> std::path::PathBuf {
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
     std::fs::write(
         directory.join(".baton/config.json"),
-        include_str!("../../../examples/demo/.baton/config.json"),
+        include_str!("../../baton-core/tests/fixture_config.json"),
     )
     .unwrap();
     directory
@@ -28,20 +28,8 @@ async fn json(response: axum::response::Response) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn agent_routes_enforce_available_models_and_pipeline_references() {
+async fn agent_routes_enforce_runtime_profiles_and_pipeline_references() {
     let directory = fixture();
-    let provider_dir = directory.join("private-providers");
-    std::fs::create_dir_all(&provider_dir).unwrap();
-    let provider = "00000000-0000-4000-8000-000000000001";
-    std::fs::write(
-        provider_dir.join("settings.json"),
-        format!(r#"[
-            {{"id":"{provider}","name":"Verified","kind":"openai","defaultModel":"model-a","baseUrl":null,"models":["model-a"],"status":"available"}},
-            {{"id":"00000000-0000-4000-8000-000000000002","name":"Offline","kind":"openai","defaultModel":"model-b","baseUrl":null,"models":["model-b"],"status":"disconnected"}}
-        ]"#),
-    )
-    .unwrap();
-    unsafe { std::env::set_var("BATON_PROVIDER_DIR", &provider_dir) };
     let app = router(AppState::new(directory.clone()));
 
     let listing = app
@@ -51,14 +39,13 @@ async fn agent_routes_enforce_available_models_and_pipeline_references() {
         .unwrap();
     assert_eq!(listing.status(), StatusCode::OK);
     let listing = json(listing).await;
-    assert_eq!(listing["providers"].as_array().unwrap().len(), 1);
+    assert_eq!(listing["runtimeProfiles"][0]["id"], "rig.openai.gpt-4.1");
     let revision = listing["revision"].as_str().unwrap();
     let config: ProjectConfig =
-        serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+        serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     let mut agent: Agent = config.agents[0].clone();
     agent.id = "new-agent".into();
-    agent.model.provider = provider.into();
-    agent.model.model = "missing".into();
+    agent.runtime_profile_id = "missing".into();
 
     let response = app
         .clone()
@@ -74,7 +61,7 @@ async fn agent_routes_enforce_available_models_and_pipeline_references() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    agent.model.model = "model-a".into();
+    agent.runtime_profile_id = "rig.openai.gpt-4.1".into();
     let response = app
         .clone()
         .oneshot(
@@ -129,6 +116,5 @@ async fn agent_routes_enforce_available_models_and_pipeline_references() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    unsafe { std::env::remove_var("BATON_PROVIDER_DIR") };
     std::fs::remove_dir_all(directory).unwrap();
 }

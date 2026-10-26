@@ -29,7 +29,7 @@ pub async fn mutate(
     repository: &dyn ProjectConfigRepository,
     revision: &str,
     mutation: Mutation,
-    model_available: impl Fn(&str, &str) -> bool,
+    profile_available: impl Fn(&str) -> bool,
 ) -> Result<(), AgentError> {
     let mut snapshot = list(repository).await?;
     if snapshot.revision != revision {
@@ -47,14 +47,14 @@ pub async fn mutate(
             {
                 return Err(AgentError::Conflict("Agent ID already exists".into()));
             }
-            ensure_available(&agent, &model_available)?;
+            ensure_available(&agent, &profile_available)?;
             snapshot.config.agents.push(agent);
         }
         Mutation::Update(id, agent) => {
             if id != agent.id {
                 return Err(AgentError::Validation("Agent ID cannot be changed".into()));
             }
-            ensure_available(&agent, &model_available)?;
+            ensure_available(&agent, &profile_available)?;
             let existing = snapshot
                 .config
                 .agents
@@ -94,14 +94,14 @@ pub async fn mutate(
 
 fn ensure_available(
     agent: &Agent,
-    model_available: &impl Fn(&str, &str) -> bool,
+    profile_available: &impl Fn(&str) -> bool,
 ) -> Result<(), AgentError> {
-    if model_available(&agent.model.provider, &agent.model.model) {
+    if profile_available(&agent.runtime_profile_id) {
         Ok(())
     } else {
         Err(AgentError::Validation(format!(
-            "Provider {:?} with model {:?} is not configured and verified locally; configure and test it in Settings",
-            agent.model.provider, agent.model.model
+            "Runtime profile {:?} is not configured; add it in Settings → Runtime profiles",
+            agent.runtime_profile_id
         )))
     }
 }

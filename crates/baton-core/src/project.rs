@@ -8,8 +8,9 @@ use ts_rs::TS;
 pub struct ProjectConfig {
     pub schema_version: u32,
     pub agents: Vec<Agent>,
+    #[serde(default)]
+    pub runtime_profiles: Vec<crate::runtime_profiles::RuntimeProfile>,
     pub pipelines: Vec<Pipeline>,
-    pub tools: Vec<Tool>,
     pub skills: Vec<Skill>,
 }
 
@@ -21,14 +22,12 @@ macro_rules! dto {
     };
 }
 
-dto!(ModelSettings { provider: String, model: String, max_output_tokens: Option<u32> });
 dto!(Pipeline { id: String, name: String, steps: Vec<PipelineStep> });
 dto!(Agent {
     id: String,
     system_prompt: String,
-    model: ModelSettings,
+    runtime_profile_id: String,
     rules: Vec<String>,
-    tool_ids: Vec<String>,
     skill_ids: Vec<String>
 });
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -66,10 +65,6 @@ pub struct Transition {
     // Every edge is bounded, so every possible cycle is bounded.
     pub max_traversals: u32,
 }
-dto!(Tool {
-    id: String,
-    name: String
-});
 dto!(Skill {
     id: String,
     name: String,
@@ -78,43 +73,34 @@ dto!(Skill {
 
 impl ProjectConfig {
     pub const CURRENT: Self = Self {
-        schema_version: 3,
+        schema_version: 6,
+        runtime_profiles: Vec::new(),
         agents: Vec::new(),
         pipelines: Vec::new(),
-        tools: Vec::new(),
         skills: Vec::new(),
     };
 
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != Self::CURRENT.schema_version {
             return Err(format!(
-                "Unsupported schemaVersion {}; expected 3",
+                "Unsupported schemaVersion {}; expected 6",
                 self.schema_version
             ));
         }
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
-        let tools = ids("tools", self.tools.iter().map(|x| x.id.as_str()))?;
         let skills = ids("skills", self.skills.iter().map(|x| x.id.as_str()))?;
         let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
+        let profiles = crate::runtime_profiles::validate(&self.runtime_profiles)?;
         for agent in &self.agents {
             nonempty("agent.systemPrompt", &agent.system_prompt)?;
-            nonempty("agent.model.provider", &agent.model.provider)?;
-            nonempty("agent.model.model", &agent.model.model)?;
-            if agent.model.max_output_tokens == Some(0) {
-                return Err("agent.model.maxOutputTokens must be positive".into());
+            if !profiles.contains(agent.runtime_profile_id.as_str()) {
+                return Err(format!(
+                    "Unknown runtime profile {:?}; create a runtime profile in Settings",
+                    agent.runtime_profile_id
+                ));
             }
             for rule in &agent.rules {
                 nonempty("agent.rules", rule)?;
-            }
-            references("agent.toolIds", &agent.tool_ids, &tools)?;
-            if agent
-                .tool_ids
-                .iter()
-                .any(|id| !crate::tools::IDS.contains(&id.as_str()))
-            {
-                return Err(
-                    "Agent references an unsupported or incompatible built-in tool version".into(),
-                );
             }
             references("agent.skillIds", &agent.skill_ids, &skills)?;
         }
@@ -164,12 +150,6 @@ impl ProjectConfig {
                     }
                 }
             }
-        }
-        for tool in &self.tools {
-            if !crate::tools::IDS.contains(&tool.id.as_str()) {
-                return Err("Project enables an unsupported built-in tool version".into());
-            }
-            nonempty(&format!("tools[{}].name", tool.id), &tool.name)?;
         }
         for skill in &self.skills {
             nonempty(&format!("skills[{}].name", skill.id), &skill.name)?;
@@ -239,6 +219,23 @@ pub enum ConfigState {
     Invalid(String),
 }
 
+/// Snapshot readers share the same explicit breaking migration as project reads.
+pub fn deserialize_snapshot<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ProjectConfig, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    parse_config(&value.to_string()).map_err(serde::de::Error::custom)
+}
+
+pub fn deserialize_optional_snapshot<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ProjectConfig>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    value
+        .map(|value| parse_config(&value.to_string()).map_err(serde::de::Error::custom))
+        .transpose()
+}
+
 pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -252,7 +249,47 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
     {
         return Ok(ProjectConfig::CURRENT);
     }
-    let config: ProjectConfig = serde_json::from_str(contents)
+    let mut value: serde_json::Value = serde_json::from_str(contents)
+        .map_err(|error| format!("Invalid project configuration: {error}"))?;
+    let legacy_version = value["schemaVersion"].as_u64();
+    if legacy_version == Some(5) {
+        return Err("Pi runtime profiles are no longer supported; replace them with explicit Rig profiles before upgrading to schemaVersion 6".into());
+    }
+    if matches!(legacy_version, Some(2..=4)) {
+        if let Some(agents) = value["agents"].as_array_mut() {
+            for agent in agents {
+                let object = agent
+                    .as_object_mut()
+                    .ok_or("Invalid legacy agent; migrate to schemaVersion 4")?;
+                if let Some(model) = object.remove("model") {
+                    let model = model.as_object().ok_or(
+                        "Invalid legacy model; remove model and create a runtime profile in Settings",
+                    )?;
+                    if model.keys().any(|key| {
+                        !["provider", "model", "maxOutputTokens"].contains(&key.as_str())
+                    }) {
+                        return Err("Unsupported legacy model settings; remove direct runtime/provider settings and configure a profile in Settings".into());
+                    }
+                }
+                object.remove("toolIds");
+                if object.contains_key("runtimeProfileId") && legacy_version != Some(4) {
+                    return Err("Legacy configuration already contains runtimeProfileId; explicitly migrate to schemaVersion 4".into());
+                }
+                if legacy_version != Some(4) {
+                    object.insert("runtimeProfileId".into(), "rig.default".into());
+                }
+            }
+        }
+        value
+            .as_object_mut()
+            .ok_or("Invalid project configuration")?
+            .remove("tools");
+        if legacy_version != Some(4) {
+            value["runtimeProfiles"] = serde_json::json!([{"id":"rig.default", "name":"Rig default", "runtimeKind":"rig", "model":null}]);
+        }
+        value["schemaVersion"] = 6.into();
+    }
+    let config: ProjectConfig = serde_json::from_value(value)
         .map_err(|error| format!("Invalid project configuration: {error}"))?;
     config.validate()?;
     Ok(config)

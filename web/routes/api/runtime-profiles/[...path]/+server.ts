@@ -1,12 +1,15 @@
 import type { RequestHandler } from "./$types";
-const proxy: RequestHandler = async ({ request, params, fetch }) => {
-	const suffix = params.path ? `/${encodeURIComponent(params.path)}` : "";
+
+const proxy: RequestHandler = async ({ params, fetch, request }) => {
+	const suffix = params.path
+		? `/${params.path.split("/").map(encodeURIComponent).join("/")}`
+		: "";
 	const response = await fetch(
-		`${process.env.BATON_API_URL ?? "http://127.0.0.1:5173"}/api/tools${suffix}`,
+		`${process.env.BATON_API_URL ?? "http://127.0.0.1:5173"}/api/runtime-profiles${suffix}`,
 		{
 			method: request.method,
 			headers: { "Content-Type": "application/json" },
-			body: ["POST", "DELETE"].includes(request.method)
+			body: ["PUT", "DELETE"].includes(request.method)
 				? await request.text()
 				: undefined,
 		},
@@ -19,5 +22,5 @@ const proxy: RequestHandler = async ({ request, params, fetch }) => {
 	});
 };
 export const GET = proxy;
-export const POST = proxy;
+export const PUT = proxy;
 export const DELETE = proxy;
