@@ -1,4 +1,4 @@
-use crate::{ApiError, AppState, StatusCode, providers};
+use crate::{ApiError, AppState, StatusCode};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -24,13 +24,12 @@ impl From<AgentError> for ApiError {
 
 async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let snapshot = agents::list(state.repository.as_ref()).await?;
-    let providers = providers::available().await?;
+    let profiles = baton_core::runtime_profiles::list(&snapshot.config);
     Ok(Json(serde_json::json!({
         "revision": snapshot.revision,
         "agents": snapshot.config.agents,
-        "tools": snapshot.config.tools,
         "skills": snapshot.config.skills,
-        "providers": providers,
+        "runtimeProfiles": profiles,
     })))
 }
 
@@ -51,17 +50,10 @@ async fn mutate(
     revision: String,
     mutation: Mutation,
 ) -> Result<StatusCode, ApiError> {
-    let providers = providers::available().await?;
-    agents::mutate(
-        state.repository.as_ref(),
-        &revision,
-        mutation,
-        |provider, model| {
-            providers
-                .iter()
-                .any(|item| item.id == provider && item.available(model))
-        },
-    )
+    let snapshot = agents::list(state.repository.as_ref()).await?;
+    agents::mutate(state.repository.as_ref(), &revision, mutation, |id| {
+        baton_core::runtime_profiles::resolve(&snapshot.config, id).is_ok()
+    })
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }

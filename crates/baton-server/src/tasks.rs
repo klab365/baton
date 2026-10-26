@@ -130,7 +130,6 @@ pub async fn create(
         id.push('x');
     }
     let task = Task::create(id, input, config.clone(), now()).map_err(bad)?;
-    crate::providers::ensure_pipeline_available(&config, &task.pipeline_id).await?;
     save(&state, &task)?;
     Ok((StatusCode::CREATED, Json(task)))
 }
@@ -142,7 +141,6 @@ pub async fn update(
     let _guard = state.task_lock.lock().await;
     load(&state, &id)?;
     let config = config(&state).await?;
-    crate::providers::ensure_pipeline_available(&config, &input.pipeline_id).await?;
     let _run_guard = state.run_lock.lock().await;
     let task = baton_core::tasks::update_task(
         &task_repository(&state),
@@ -248,67 +246,13 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) struct ConfiguredRuntime(
-    std::collections::HashMap<String, (Option<baton_core::providers::Provider>, Option<String>)>,
-);
-impl baton_core::orchestration::AgentRuntime for ConfiguredRuntime {
-    fn execute(
-        &mut self,
-        directory: &std::path::Path,
-        agent: &baton_core::project::Agent,
-        input: &str,
-    ) -> Result<String, String> {
-        let (provider, key) = self
-            .0
-            .get(&agent.model.provider)
-            .ok_or_else(|| "Configured provider not found".to_owned())?;
-        let Some(provider) = provider else {
-            return baton_adapters::FakeRuntime::default().execute(directory, agent, input);
-        };
-        match provider.kind.as_str() {
-            "openai" => baton_adapters::OpenAiRigRuntime.execute_with_provider(
-                agent,
-                input,
-                provider.base_url.as_deref(),
-                key.as_deref().ok_or_else(|| {
-                    "OpenAI API key is unavailable; reconnect provider in Settings".to_owned()
-                })?,
-            ),
-            "chatgpt" => baton_adapters::ChatGptRigRuntime::new(
-                crate::providers::token_dir(&provider.id)
-                    .map_err(|_| "Provider token storage is unavailable".to_owned())?,
-            )
-            .execute_configured(agent, input, false),
-            _ => Err("Unsupported configured provider".into()),
-        }
-    }
-}
-
 pub(super) async fn runtime_for(
     config: &ProjectConfig,
     pipeline_id: &str,
-) -> Result<ConfiguredRuntime, ApiError> {
-    let mut credentials = std::collections::HashMap::new();
-    let pipeline = config
-        .pipelines
-        .iter()
-        .find(|pipeline| pipeline.id == pipeline_id)
-        .ok_or_else(|| bad("Selected pipeline does not exist"))?;
-    for step in pipeline.steps.iter().filter(|step| !step.human) {
-        let agent = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == step.agent_id)
-            .ok_or_else(|| bad("Pipeline references unknown agent"))?;
-        if credentials.contains_key(&agent.model.provider) {
-            continue;
-        }
-        if agent.model.provider == "fake" {
-            credentials.insert("fake".to_owned(), (None, None));
-            continue;
-        }
-        let (provider, key) = crate::providers::execution_provider(&agent.model.provider).await?;
-        credentials.insert(provider.id.clone(), (Some(provider), key));
+) -> Result<baton_adapters::ProfileRuntime, ApiError> {
+    config.validate().map_err(bad)?;
+    if !config.pipelines.iter().any(|p| p.id == pipeline_id) {
+        return Err(bad("Selected pipeline does not exist"));
     }
-    Ok(ConfiguredRuntime(credentials))
+    Ok(baton_adapters::ProfileRuntime::new(config.clone()))
 }

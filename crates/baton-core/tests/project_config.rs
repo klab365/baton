@@ -2,14 +2,14 @@ use baton_core::project::{ProjectConfig, parse_config};
 
 fn example() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 3,
-        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "model":{"provider":"example", "model":"large", "maxOutputTokens":1024}, "toolIds":["builtin.read.v1"], "skillIds":["style"]}],
+        "schemaVersion": 6,
+        "runtimeProfiles":[{"id":"rig.default", "name":"Rig default", "runtimeKind":"rig", "model":null}],
+        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "runtimeProfileId":"rig.default", "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
             {"id":"plan", "name":"Plan", "agentId":"writer"},
             {"id":"build", "name":"Build", "agentId":"writer"},
             {"id":"review", "name":"Review", "agentId":"writer"}
         ]}],
-        "tools":[{"id":"builtin.read.v1", "name":"Read"}],
         "skills":[{"id":"style", "name":"Style", "instructions":"Be concise"}]
     })
 }
@@ -55,14 +55,9 @@ fn actionable_validation_failures() {
             "name must not be empty",
         ),
         (
-            "/agents/0/model/maxOutputTokens",
-            serde_json::json!(0),
-            "maxOutputTokens",
-        ),
-        (
-            "/agents/0/toolIds",
-            serde_json::json!(["builtin.read.v1", "builtin.read.v1"]),
-            "duplicate ID",
+            "/agents/0/runtimeProfileId",
+            serde_json::json!("missing"),
+            "Unknown runtime profile",
         ),
         (
             "/agents/0/skillIds",
@@ -94,13 +89,18 @@ fn actionable_validation_failures() {
             serde_json::json!(99),
             "Unsupported schemaVersion",
         ),
+        (
+            "/schemaVersion",
+            serde_json::json!(5),
+            "Pi runtime profiles are no longer supported",
+        ),
     ] {
         let mut value = example();
         *value.pointer_mut(pointer).unwrap() = replacement;
         let error = parse_config(&value.to_string()).unwrap_err();
         assert!(error.contains(message), "{error}");
     }
-    for collection in ["agents", "pipelines", "tools", "skills"] {
+    for collection in ["agents", "pipelines", "skills"] {
         let mut value = example();
         let items = value[collection].as_array_mut().unwrap();
         items.push(items[0].clone());
@@ -110,21 +110,6 @@ fn actionable_validation_failures() {
                 .contains("duplicate ID")
         );
     }
-    let mut value = example();
-    value["tools"] = serde_json::json!([]);
-    assert!(
-        parse_config(&value.to_string())
-            .unwrap_err()
-            .contains("unknown reference")
-    );
-    let mut value = example();
-    value["tools"][0]["id"] = serde_json::json!("builtin.read.v999");
-    value["agents"][0]["toolIds"] = serde_json::json!(["builtin.read.v999"]);
-    assert!(
-        parse_config(&value.to_string())
-            .unwrap_err()
-            .contains("unsupported")
-    );
     let mut value = example();
     value["pipelines"][0]["steps"][0]["apiKey"] = serde_json::json!("not allowed");
     assert!(

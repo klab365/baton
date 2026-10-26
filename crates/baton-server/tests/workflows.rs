@@ -84,7 +84,7 @@ impl AgentRuntime for Script {
 }
 fn config() -> ProjectConfig {
     let mut json: serde_json::Value =
-        serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+        serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     json["pipelines"][0]["steps"] = serde_json::json!([
         {"id":"plan", "name":"Plan", "agentId":"writer"},
         {"id":"build", "name":"Build", "agentId":"writer"},
@@ -432,57 +432,4 @@ async fn human_action_api_exposes_graph_history_and_explicit_abort() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
-}
-
-#[test]
-fn demo_tools_run_in_isolation_and_history_contains_only_safe_receipts() {
-    let fixture = Fixture::new();
-    let config = parse_config(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
-    fs::write(
-        fixture.0.join("README.md"),
-        "Primary checkout stays unchanged",
-    )
-    .unwrap();
-    let primary_readme = fs::read_to_string(fixture.0.join("README.md")).unwrap();
-    let mut runtime = Script::new(&[
-        r#"{"tool":"builtin.list.v1","arguments":{"path":"."}}"#,
-        r#"{"tool":"builtin.write.v1","arguments":{"path":"README.md","content":"A useful task answer."}}"#,
-        "Updated README.md",
-        r#"{"tool":"builtin.read.v1","arguments":{"path":"README.md"}}"#,
-        APPROVED,
-    ]);
-    let run = start_pipeline(
-        &config,
-        "draft",
-        "Write a useful task answer",
-        "tool-demo",
-        &mut runtime,
-        &fixture.repo(),
-    )
-    .unwrap();
-    assert_eq!(run.status, Status::WaitingHuman);
-    let workspace = &run.worktree.as_ref().unwrap().path;
-    assert_eq!(
-        fs::read_to_string(workspace.join("README.md")).unwrap(),
-        "A useful task answer."
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.0.join("README.md")).unwrap(),
-        primary_readme
-    );
-    let receipts: Vec<_> = run
-        .events
-        .iter()
-        .filter_map(|e| e.message.as_ref())
-        .filter(|m| m.starts_with("builtin."))
-        .collect();
-    assert_eq!(receipts.len(), 3);
-    assert!(
-        receipts
-            .iter()
-            .all(|m| m.ends_with("succeeded") && !m.contains("useful"))
-    );
-    let reopened = fixture.repo().load(&run.id).unwrap();
-    assert_eq!(reopened.events.len(), run.events.len());
-    assert!(runtime.outputs.is_empty());
 }

@@ -30,8 +30,7 @@ impl ProjectConfigRepository for MemoryRepository {
 }
 
 fn fixture() -> (MemoryRepository, ProjectConfig) {
-    let config: ProjectConfig =
-        serde_json::from_str(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
+    let config: ProjectConfig = serde_json::from_str(include_str!("fixture_config.json")).unwrap();
     let repository = MemoryRepository(Mutex::new(ConfigSnapshot {
         config: config.clone(),
         revision: "initial".into(),
@@ -95,7 +94,6 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
     let snapshot = pipelines::list(&repository).await.unwrap();
     assert_eq!(snapshot.config.pipelines.last(), Some(&pipeline));
     assert_eq!(snapshot.config.agents, original.agents);
-    assert_eq!(snapshot.config.tools, original.tools);
     assert_eq!(snapshot.config.skills, original.skills);
 
     pipelines::mutate(

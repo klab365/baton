@@ -8,7 +8,6 @@ let { data, children } = $props();
 const navigation = [
 	["/", "Overview"],
 	["/agents", "Agents"],
-	["/tools", "Tools"],
 	["/pipelines", "Pipelines"],
 	["/tasks", "Tasks"],
 	["/settings", "Settings"],

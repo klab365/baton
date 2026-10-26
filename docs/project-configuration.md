@@ -1,73 +1,19 @@
 # Project configuration
 
-`.baton/config.json` is versioned project data. Rust DTOs in
-`baton-core::project` define its strict camelCase JSON format. Unknown fields
-are rejected at every level. New projects start with:
+Baton stores project-owned configuration in `.baton/config.json`. The configuration is versioned, validated before writes and updated with a revision token to prevent stale overwrites.
 
-```json
-{
-	"schemaVersion": 3,
-	"agents": [],
-	"pipelines": [],
-	"tools": [],
-	"skills": []
-}
-```
+## Runtime profiles
 
-Reusable agents have `id`, `systemPrompt`, `model` (`provider`, `model`, optional
-positive `maxOutputTokens`), `rules` (an array of nonblank strings), `toolIds`, and
-`skillIds`. Pipelines have `id`, `name`, and a nonempty ordered `steps` array.
-Each step has `id`, `name`, and `agentId`; it cannot duplicate agent model,
-tools, or skills. References must resolve in the same project. Tools have `id`
-and `name`; skills add `instructions`.
+Reusable agents have `id`, `systemPrompt`, `runtimeProfileId`, `rules` (nonblank strings), and `skillIds`. Reusable `runtimeProfiles` have `id`, `name`, `runtimeKind` (`rig` or explicitly selected `fake`), and an optional provider/model selection. IDs identify the combination, for example `rig.openai.gpt-4.1`.
 
-This makes the same agent reusable at different positions in a pipeline. No
-execution settings, project-level execution targets, or data planes exist.
+Profiles are configured in Settings, saved in project configuration, and assigned to agents. Authentication credentials never belong in configuration. `rig` is the stable embedded-runtime configuration contract; the adapter is not installed yet, so executing a Rig profile fails explicitly. `fake` is available only for deterministic offline tests.
 
-IDs are nonempty ASCII letters/digits/`-`/`_`/`.` and unique within each entity
-collection (step IDs within a pipeline). IDs are supplied by callers, never
-generated from names or array positions. Preserve them on rename/reorder;
-changing an ID requires updating all references in the same configuration.
-Duplicate IDs are errors. Names, model identifiers, and instructions must not
-be blank.
+Pipelines have `id`, `name`, and a nonempty ordered `steps` array. Runtime/provider/model selection belongs to agents through their profile, never to individual steps.
 
-## Versions
+## Migration
 
-Only the exact v1 bootstrap shape `{"schemaVersion":1}` migrates to an empty
-v3 configuration in memory. Reading never writes a migration. The original
-bytes remain the revision token, so an explicit update can safely persist v3.
-Version 2 is rejected: explicitly move each step's model/tool/skill settings into
-an agent, add its system prompt and rules, and replace them with `agentId`.
-Unknown legacy fields, missing versions, and unsupported versions fail closed;
-no data is silently discarded. Future migrations must be explicit and tested.
-All new writes require a validated current-version DTO.
+Schema version 6 is current. The exact v1 bootstrap marker `{"schemaVersion":1}` migrates to an empty v6 configuration. Agent-based v2/v3/v4 configurations migrate old agents to a shared `rig.default` profile and discard retired direct runtime/provider/model/tool selections. The migration never copies credentials.
 
-## Repository operations
+Pi-backed schema v5 configurations are intentionally unsupported. Replace each old profile with an explicit `rig.*` profile and update its agents before upgrading. This prevents Baton from treating a Pi model identifier or authentication assumption as valid Rig configuration.
 
-`get_project_config` returns missing, invalid (with diagnostics), or ready with
-a `ConfigSnapshot`. Its opaque `revision` contains the exact source text and
-must be retained for `update_project_config`. Initialization never replaces an
-existing file. A stale update fails and callers must reload before retrying.
-
-Filesystem writers exclusively create `.baton/config.lock`, compare the
-revision under that lock, write and sync a unique same-directory temporary
-file, then publish by atomic rename (or no-replace hard link for creation).
-Readers therefore see a complete old or new file. Independent repository
-instances/processes use the same lock. Failure cleans up owned temporary and
-lock files; cancelling the async caller does not cancel an already-started
-blocking write, which runs to completion with cleanup. After a process crash,
-a stale lock must be removed manually **only after confirming no writer is
-active**. A busy lock fails immediately rather than waiting indefinitely.
-
-The concurrency contract requires all writers to honor `config.lock`.
-Uncoordinated editors cannot be made compare-and-swap safe by portable
-filesystem rename; a final revision check detects changes before publication
-but cannot exclude an external edit in the final rename window. Use repository
-operations for concurrent updates. Atomic visibility is guaranteed, not full
-power-loss durability of the parent directory.
-
-Never store API keys, tokens, secrets, local settings, or run state in project
-DTOs. Environment variables or ignored `.baton/secrets.json`, `.baton/local.json`,
-and `.baton/runs/` can hold such data; these are not read by this repository.
-Free-form instructions must not contain secrets. No runtime history or
-machine-specific execution credentials are serialized into config.
+Reading migrates in memory only; original bytes remain the revision token. An explicit successful mutation persists the current schema atomically. Missing/unsupported versions and unknown fields fail closed.

@@ -5,7 +5,34 @@ use std::time::Instant;
 
 pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeModel {
+    pub provider: String,
+    pub model: String,
+}
+
 pub trait AgentRuntime {
+    /// Lists models exposed by this explicitly selected runtime without reading credentials.
+    fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+        Err("This runtime does not expose model discovery".into())
+    }
+    fn execute_cancellable(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        if cancelled() {
+            return Err("Run cancelled".into());
+        }
+        self.execute(directory, agent, input)
+    }
+    /// Sanitized metadata only; never raw runtime diagnostics or authentication data.
+    fn take_events(&mut self) -> Vec<String> {
+        Vec::new()
+    }
     /// `directory` is the isolated run workspace and the only project working
     /// directory adapters may use. Never fall back to the process directory or
     /// change global cwd (other runs can execute concurrently).
@@ -15,6 +42,22 @@ pub trait AgentRuntime {
         agent: &Agent,
         input: &str,
     ) -> Result<String, String>;
+}
+
+struct CancellableRuntime<'a, R> {
+    runtime: &'a mut R,
+    cancelled: &'a dyn Fn() -> bool,
+}
+impl<R: AgentRuntime> AgentRuntime for CancellableRuntime<'_, R> {
+    fn execute(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+    ) -> Result<String, String> {
+        self.runtime
+            .execute_cancellable(directory, agent, input, self.cancelled)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,7 +110,10 @@ pub struct PipelineRun {
     pub events: Vec<RunEvent>,
     pub status: Status,
     pub steps: Vec<StepRun>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::project::deserialize_optional_snapshot"
+    )]
     pub config_snapshot: Option<ProjectConfig>,
     #[serde(default)]
     pub current_step: Option<String>,
@@ -129,8 +175,13 @@ fn cancelled_run(
     // allocated identity, and never invoke a runtime after observing cancellation.
     if current.worktree.is_none() && run.worktree.is_some() {
         current.worktree = run.worktree.clone();
-        repository.save(&current)?;
     }
+    for event in &run.events {
+        if !current.events.contains(event) {
+            current.events.push(event.clone());
+        }
+    }
+    repository.save(&current)?;
     Ok(Some(current))
 }
 
@@ -510,19 +561,40 @@ fn execute_graph(
                 .map_err(|e| e.to_string())?
             )
         };
-        let mut tool_audit = Vec::new();
+        let mut assigned = agent.clone();
+        for id in &agent.skill_ids {
+            let skill = config
+                .skills
+                .iter()
+                .find(|skill| &skill.id == id)
+                .ok_or("Unknown assigned skill")?;
+            assigned.system_prompt.push_str(&format!(
+                "\n\nAssigned skill {}:\n{}",
+                skill.name, skill.instructions
+            ));
+        }
+        assigned.skill_ids.clear();
+        let cancellation_id = run.id.clone();
+        let cancelled = || {
+            repository
+                .load(&cancellation_id)
+                .map(|r| r.status == Status::Cancelled)
+                .unwrap_or(true)
+        };
+        let mut guarded = CancellableRuntime {
+            runtime,
+            cancelled: &cancelled,
+        };
         let result = if prompt.len() > MAX_HANDOFF_BYTES {
             Err("Agent input exceeds 16384 bytes including outcome instructions".into())
         } else {
-            crate::tools::execute(
-                runtime,
+            guarded.execute(
                 &run.worktree
                     .as_ref()
                     .ok_or("Missing isolated worktree")?
                     .path,
-                agent,
+                &assigned,
                 &prompt,
-                &mut tool_audit,
             )
         }
         .and_then(|output| {
@@ -539,7 +611,7 @@ fn execute_graph(
                 Ok((result.outcome, result.output))
             }
         });
-        for message in tool_audit {
+        for message in runtime.take_events() {
             run.events.push(RunEvent {
                 run_id: run.id.clone(),
                 status: Status::Running,

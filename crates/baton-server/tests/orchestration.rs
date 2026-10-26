@@ -53,10 +53,7 @@ fn config() -> baton_core::project::ProjectConfig {
     // Keep legacy sequential orchestration assertions independent from the
     // interactive demo's intentionally conditional workflow.
     let mut config =
-        parse_config(include_str!("../../../examples/demo/.baton/config.json")).unwrap();
-    for agent in &mut config.agents {
-        agent.tool_ids.clear();
-    }
+        parse_config(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     let pipeline = &mut config.pipelines[0];
     pipeline
         .steps
@@ -66,6 +63,57 @@ fn config() -> baton_core::project::ProjectConfig {
         step.transitions.clear();
     }
     config
+}
+
+#[test]
+fn assigned_skills_are_expanded_without_discovering_unassigned_context() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    config.skills = vec![
+        baton_core::project::Skill {
+            id: "assigned".into(),
+            name: "Assigned".into(),
+            instructions: "authorized skill body".into(),
+        },
+        baton_core::project::Skill {
+            id: "unassigned".into(),
+            name: "Unassigned".into(),
+            instructions: "must never reach runtime".into(),
+        },
+    ];
+    config.agents[0].skill_ids.push("assigned".into());
+    struct Inspect;
+    impl AgentRuntime for Inspect {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            agent: &baton_core::project::Agent,
+            _: &str,
+        ) -> Result<String, String> {
+            assert!(agent.skill_ids.is_empty());
+            assert!(!agent.system_prompt.contains("must never reach runtime"));
+            if agent.id == "writer" {
+                assert!(agent.system_prompt.contains("authorized skill body"));
+            } else {
+                assert!(!agent.system_prompt.contains("authorized skill body"));
+            }
+            Ok("done".into())
+        }
+    }
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "skills",
+        &mut Inspect,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(
+        run.config_snapshot.unwrap().agents[0].skill_ids,
+        ["assigned"]
+    );
 }
 
 #[test]
