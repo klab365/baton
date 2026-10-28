@@ -166,7 +166,7 @@ async function save(remove = false) {
      <button type="button" class="add-step" disabled={busy || !config.agents.length} onclick={add}><Plus size={18} /><span>Add agent step</span></button>
      <div class="editor-footer"><span>{draft.steps.length} {draft.steps.length === 1 ? "step" : "steps"} in this pipeline</span>{#if editing}<Button variant="danger" disabled={busy} onclick={() => { deleting = true; }}><Trash2 size={16} /> Delete pipeline</Button>{/if}</div>
     </form>
-    <ConfirmationDialog bind:open={deleting} title="Delete pipeline?" loading={busy} onconfirm={() => save(true)}>Existing task snapshots are preserved. This removes the pipeline from project configuration.</ConfirmationDialog>
+    <ConfirmationDialog bind:open={deleting} title="Delete pipeline?" loading={busy} onconfirm={() => save(true)}>Existing tasks retain their pipeline ID; new runs use the current project configuration.</ConfirmationDialog>
    {/if}
   </section>
  </div>

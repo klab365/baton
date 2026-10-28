@@ -1,4 +1,4 @@
-use baton_core::{
+use baton_core::domain::{
     project::{ProjectConfig, parse_config},
     runtime_profiles::{self, RuntimeKind},
 };
@@ -25,11 +25,17 @@ fn legacy_agents_migrate_to_rig_never_to_old_provider_or_fake() {
                 .iter()
                 .all(|a| a.runtime_profile_id == "rig.default")
         );
-        let task: baton_core::tasks::Task = serde_json::from_value(serde_json::json!({
+        let task: baton_core::domain::tasks::Task = serde_json::from_value(serde_json::json!({
             "id":"task", "pipelineId":"draft", "configSnapshot":value, "status":"draft", "createdAt":"now", "updatedAt":"now"
         })).unwrap();
-        assert_eq!(task.config_snapshot, migrated);
-        let run: baton_core::orchestration::PipelineRun = serde_json::from_value(serde_json::json!({
+        assert_eq!(task.pipeline_id, "draft");
+        assert!(
+            serde_json::to_value(task)
+                .unwrap()
+                .get("configSnapshot")
+                .is_none()
+        );
+        let run: baton_core::domain::pipeline::PipelineRun = serde_json::from_value(serde_json::json!({
             "id":"run", "pipelineId":"draft", "task":"task", "startedAt":"now", "endedAt":null, "durationMs":null, "status":"failed", "steps":[], "configSnapshot":value
         })).unwrap();
         assert_eq!(run.config_snapshot.as_ref(), Some(&migrated));

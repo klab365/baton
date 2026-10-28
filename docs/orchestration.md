@@ -14,6 +14,6 @@ Provider credentials are never stored in `.baton/config.json`, agent definitions
 
 ## Execution boundaries
 
-For run `<id>`, the workspace is `<absolute Git common directory>/baton-worktrees/<id>` on branch `baton/run-<id>`. Exclusive reservations and ownership receipts prevent reuse. Runtime adapters must use that workspace as their working directory and never change the process-global current directory.
+Each task owns one worktree at `<absolute Git common directory>/baton-worktrees/<task-id>` on branch `baton/task-<task-id>`. Its sequential runs reuse that workspace; different tasks have independent worktrees and may run in parallel. Legacy run-owned worktrees are promoted when an older task is started again. Completion or deletion of the task explicitly cleans up its worktree. Exclusive reservations and ownership receipts prevent unsafe reuse. Runtime adapters must use that workspace as their working directory and never change the process-global current directory.
 
 A worktree is an orchestration boundary, not an operating-system sandbox. The embedded runtime integration must document and enforce its own tool, process, network and credential boundaries. Use a container, VM or dedicated OS user when stronger isolation is required.

@@ -9,13 +9,13 @@ use tower::ServiceExt;
 async fn profiles_list_and_inspect_are_configuration_only() {
     let directory = std::env::temp_dir().join(format!("baton-profiles-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
-    let mut config = baton_core::project::ProjectConfig::CURRENT;
+    let mut config = baton_core::domain::project::ProjectConfig::CURRENT;
     config
         .runtime_profiles
-        .push(baton_core::runtime_profiles::RuntimeProfile {
+        .push(baton_core::domain::runtime_profiles::RuntimeProfile {
             id: "fake.default".into(),
             name: "Tests".into(),
-            runtime_kind: baton_core::runtime_profiles::RuntimeKind::Fake,
+            runtime_kind: baton_core::domain::runtime_profiles::RuntimeKind::Fake,
             model: None,
         });
     std::fs::write(

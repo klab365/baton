@@ -1,6 +1,13 @@
-use baton_adapters::FakeRuntime;
-use baton_adapters::filesystem_run_repository::FilesystemRunRepository;
-use baton_core::{orchestration::*, project::parse_config};
+use baton_adapters::repositories::filesystem_run::FilesystemRunRepository;
+use baton_adapters::runtime::FakeRuntime;
+use baton_core::{
+    domain::{pipeline::*, project::parse_config},
+    features::pipeline_engine::*,
+    ports::{
+        runs::RunRepository,
+        runtime::{AgentRuntime, MAX_HANDOFF_BYTES},
+    },
+};
 use baton_server::AppState;
 use std::{fs, path::PathBuf};
 
@@ -49,7 +56,7 @@ impl Drop for Fixture {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-fn config() -> baton_core::project::ProjectConfig {
+fn config() -> baton_core::domain::project::ProjectConfig {
     // Keep legacy sequential orchestration assertions independent from the
     // interactive demo's intentionally conditional workflow.
     let mut config =
@@ -70,12 +77,12 @@ fn assigned_skills_are_expanded_without_discovering_unassigned_context() {
     let fixture = Fixture::new();
     let mut config = config();
     config.skills = vec![
-        baton_core::project::Skill {
+        baton_core::domain::project::Skill {
             id: "assigned".into(),
             name: "Assigned".into(),
             instructions: "authorized skill body".into(),
         },
-        baton_core::project::Skill {
+        baton_core::domain::project::Skill {
             id: "unassigned".into(),
             name: "Unassigned".into(),
             instructions: "must never reach runtime".into(),
@@ -87,7 +94,7 @@ fn assigned_skills_are_expanded_without_discovering_unassigned_context() {
         fn execute(
             &mut self,
             _: &std::path::Path,
-            agent: &baton_core::project::Agent,
+            agent: &baton_core::domain::project::Agent,
             _: &str,
         ) -> Result<String, String> {
             assert!(agent.skill_ids.is_empty());
@@ -133,7 +140,10 @@ fn ordered_handoff_and_restart_safe_records() {
         runtime.calls,
         vec![
             ("writer".into(), "task".into()),
-            ("reviewer".into(), "Original task:\ntask\n\nPrevious step output and handoff (including any reviewer feedback):\nwriter: task".into())
+            (
+                "reviewer".into(),
+                "Original task:\ntask\n\nPrevious step output and handoff:\nwriter: task".into()
+            )
         ]
     );
     assert_eq!(run.status, Status::Succeeded);
@@ -264,7 +274,7 @@ fn restart_marks_interrupted_runs_failed_without_resuming() {
         fn execute(
             &mut self,
             _: &std::path::Path,
-            _: &baton_core::project::Agent,
+            _: &baton_core::domain::project::Agent,
             _: &str,
         ) -> Result<String, String> {
             panic!("process interrupted")
@@ -307,7 +317,7 @@ fn interrupted_execution_leaves_durable_running_state_without_retry() {
         fn execute(
             &mut self,
             _: &std::path::Path,
-            _: &baton_core::project::Agent,
+            _: &baton_core::domain::project::Agent,
             _: &str,
         ) -> Result<String, String> {
             panic!("process interrupted")
@@ -385,7 +395,7 @@ fn cancelled_run_retains_its_workspace() {
         fn execute(
             &mut self,
             directory: &std::path::Path,
-            _: &baton_core::project::Agent,
+            _: &baton_core::domain::project::Agent,
             _: &str,
         ) -> Result<String, String> {
             let mut run = self.0.load("cancelled").unwrap();
@@ -415,7 +425,7 @@ fn cancelled_run_retains_its_workspace() {
 
 #[test]
 fn cancellation_during_allocation_retains_identity_without_invocation() {
-    use baton_core::worktrees::{RunWorktree, WorktreeManager};
+    use baton_core::{domain::worktrees::RunWorktree, ports::worktrees::WorktreeManager};
     struct CancelDuringAllocation(PathBuf);
     impl WorktreeManager for CancelDuringAllocation {
         fn allocate(&self, id: &str) -> Result<RunWorktree, String> {

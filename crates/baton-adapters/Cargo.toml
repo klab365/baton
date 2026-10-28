@@ -9,7 +9,18 @@ baton-core = { path = "../baton-core" }
 async-trait.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+schemars = "1"
+tracing.workspace = true
+rig = { version = "=0.45.0", default-features = false, features = ["agent", "reqwest", "derive", "rustls"] }
+rig-harness = "=0.45.0"
+bevy_ecs = "=0.20.0"
+bevy_app = "=0.20.0"
+bevy_log = "=0.20.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

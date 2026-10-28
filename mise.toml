@@ -2,16 +2,19 @@
 bun = "latest"
 rust = "stable"
 
+[env]
+_.file = ".env"
+
 [hooks]
 postinstall = "bun install --frozen-lockfile"
 
 [tasks.dev]
 description = "Run the SvelteKit UI and Rust API in the demo project"
-run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; bun run dev -- --host 127.0.0.1 --port 5174'"
+run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; bun run dev -- --host 127.0.0.1 --port 5174'"
 
 [tasks.server]
 description = "Run the Rust API server for the demo project"
-run = "BATON_PROJECT_DIR=examples/demo cargo run -p baton-server"
+run = "BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server"
 
 [tasks.format-rust]
 description = "Format Rust source code"
@@ -39,11 +42,11 @@ run = "bun run lint"
 
 [tasks.generate-types]
 description = "Generate TypeScript DTO types from Rust"
-run = "cargo run -p baton-core --bin generate-types"
+run = "cargo run -p baton-server --bin generate-types"
 
 [tasks.check-generated-types]
 description = "Check committed TypeScript DTO types match Rust"
-run = "cargo run -p baton-core --bin generate-types && git diff --exit-code -- web/lib/generated"
+run = "cargo run -p baton-server --bin generate-types && git diff --exit-code -- web/lib/generated"
 
 [tasks.check]
 description = "Run generated-type, Svelte, and TypeScript checks"

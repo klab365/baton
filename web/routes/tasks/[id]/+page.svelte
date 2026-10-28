@@ -11,7 +11,7 @@ let confirm = $state(false);
 let loading = $state(false);
 let error = $state("");
 let selectedPipeline = $derived(
-	data.task.configSnapshot.pipelines.find(
+	data.project.config?.pipelines.find(
 		(pipeline: { id: string }) => pipeline.id === data.task.pipelineId,
 	),
 );
@@ -37,7 +37,8 @@ async function remove() {
 		const response = await fetch(`/api/tasks/${data.task.id}`, {
 			method: "DELETE",
 		});
-		if (!response.ok) throw new Error("Could not delete task.");
+		if (!response.ok)
+			throw new Error((await response.json()).error ?? "Could not delete task.");
 		await goto("/tasks", { invalidateAll: true });
 	} catch (e) {
 		error = e instanceof Error ? e.message : "Could not delete task.";
@@ -74,4 +75,4 @@ async function remove() {
 		{#key data.task.id}<TaskForm task={data.task} pipelines={data.project.config?.pipelines ?? []} />{/key}
 	</DetailPanel></div>
 </div>
-<ConfirmationDialog bind:open={confirm} title="Delete task?" {loading} onconfirm={remove}>This permanently deletes the task.</ConfirmationDialog>
+<ConfirmationDialog bind:open={confirm} title="Delete task and worktree?" {loading} onconfirm={remove}>This permanently deletes the task, its worktree, uncommitted changes, and Rig session data.</ConfirmationDialog>
