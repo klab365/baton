@@ -1,4 +1,5 @@
 use crate::domain::{
+    pipeline::RunTraceEntry,
     project::{Agent, Outcome, ProjectConfig},
     runtime::RuntimeModel,
 };
@@ -53,6 +54,12 @@ pub trait AgentRuntime: Send {
 
     /// Sanitized metadata only; never raw runtime diagnostics or authentication data.
     fn take_events(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Complete sanitized transcript captured by the runtime, including messages
+    /// and tool activity where the runtime exposes it.
+    fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         Vec::new()
     }
 

@@ -1,7 +1,7 @@
 //! Control-plane directed execution. No implicit retries or agent-selected destinations.
 use crate::{
     domain::pipeline::{
-        PipelineRun, RunEvent, Status, StepRun, TaskRunContext, transitions::route,
+        PipelineRun, RunEvent, RunTraceEntry, Status, StepRun, TaskRunContext, transitions::route,
     },
     domain::project::{Agent, Outcome, PipelineStep, ProjectConfig},
     ports::{
@@ -46,6 +46,9 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
     }
     fn take_events(&mut self) -> Vec<String> {
         self.runtime.take_events()
+    }
+    fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+        self.runtime.take_trace()
     }
 }
 
@@ -193,6 +196,7 @@ pub fn start_pipeline_for_task_with_worktree(
         ended_at: None,
         duration_ms: None,
         events: Vec::new(),
+        trace: Vec::new(),
         config_snapshot: Some(config.clone()),
         current_step: Some(pipeline.steps[0].id.clone()),
         handoff: Some(task.into()),
@@ -400,6 +404,7 @@ pub(crate) fn execute_graph(
                 Ok((decision.outcome, decision.summary))
             }
         });
+        run.trace.extend(runtime.take_trace());
         for message in runtime.take_events() {
             run.events.push(RunEvent {
                 run_id: run.id.clone(),

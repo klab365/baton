@@ -7,6 +7,7 @@ use self::{
     tools::{ReportOutcome, outcome_name},
 };
 use baton_core::{
+    domain::pipeline::RunTraceEntry,
     domain::project::{Agent as BatonAgent, Outcome, Skill},
     ports::runtime::AgentDecision,
 };
@@ -23,7 +24,7 @@ use rig_harness::{
         HeadlessPlugins, Home, Invoked, Name, ProjectRoot, ProjectWorkspace, RigHarnessPlugins,
         RigHome, SessionPaths, SystemPrompt, ToolAccess, TurnOutcome, WorkDir,
     },
-    rig_ecs::{effects::Handler, session_log::SessionLog},
+    rig_ecs::{agent::Conversation, effects::Handler, session_log::SessionLog},
     rig_tools::{
         self,
         process::Launcher,
@@ -52,7 +53,7 @@ impl RigRuntime {
         agent_context: RigAgentContext<'_>,
         allowed_outcomes: &[Outcome],
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<(String, Option<AgentDecision>), String> {
+    ) -> Result<(String, Option<AgentDecision>, Vec<RunTraceEntry>), String> {
         let runtime_credential = agent_context.credential;
         let model_config = agent_context
             .agent
@@ -289,13 +290,24 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
+                let transcript = app
+                    .world()
+                    .get::<Conversation>(entity)
+                    .and_then(|conversation| serde_json::to_string_pretty(&conversation.0).ok())
+                    .map(|content| RunTraceEntry {
+                        occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                        kind: "runtimeTranscript".into(),
+                        content,
+                    })
+                    .into_iter()
+                    .collect();
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
                 let decision = decision
                     .lock()
                     .map_err(|_| "Pipeline outcome state is unavailable".to_owned())?
                     .take();
-                return Ok((answer, decision));
+                return Ok((answer, decision, transcript));
             }
             if cancelled() {
                 app.world_mut()
