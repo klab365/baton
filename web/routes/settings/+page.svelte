@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import Plus from "@lucide/svelte/icons/plus";
 import Button from "../../components/Button.svelte";
 import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
@@ -150,8 +151,8 @@ async function mutate(url: string, method: string, body: unknown) {
 		busy = false;
 	}
 }
-$effect(() => {
-	load();
+onMount(() => {
+	void load();
 	return () => clearTimeout(authTimer);
 });
 </script>
