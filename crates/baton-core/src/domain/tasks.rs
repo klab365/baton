@@ -9,8 +9,6 @@ pub struct Task {
     pub title: String,
     #[serde(default, alias = "prompt")]
     pub description: String,
-    #[serde(default)]
-    pub acceptance_criteria: String,
     pub pipeline_id: String,
     #[serde(default)]
     pub worktree: Option<RunWorktree>,
@@ -34,8 +32,6 @@ pub enum TaskStatus {
 pub struct TaskInput {
     pub title: String,
     pub description: String,
-    #[serde(default)]
-    pub acceptance_criteria: String,
     pub pipeline_id: String,
     #[serde(default)]
     pub status: TaskStatus,
@@ -53,7 +49,6 @@ impl Task {
             id,
             title: input.title,
             description: input.description,
-            acceptance_criteria: input.acceptance_criteria,
             pipeline_id: input.pipeline_id,
             worktree: None,
             status: TaskStatus::Draft,
@@ -71,7 +66,6 @@ impl Task {
         validate(&input, &config)?;
         self.title = input.title;
         self.description = input.description;
-        self.acceptance_criteria = input.acceptance_criteria;
         self.pipeline_id = input.pipeline_id;
         if input.status == TaskStatus::Doing && self.status != TaskStatus::Doing {
             return Err("Tasks can only move to doing when a run is started".into());

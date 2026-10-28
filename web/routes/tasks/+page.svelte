@@ -201,7 +201,6 @@ async function moveTask(item: BoardItem, lane: Lane) {
 				body: JSON.stringify({
 					title: item.task.title,
 					description: item.task.description,
-					acceptanceCriteria: item.task.acceptanceCriteria,
 					pipelineId: item.task.pipelineId,
 					status: "done",
 				}),

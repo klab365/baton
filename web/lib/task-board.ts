@@ -2,7 +2,6 @@ export type TaskBoardTask = {
 	id: string;
 	title: string;
 	description: string;
-	acceptanceCriteria: string;
 	pipelineId: string;
 	status: "draft" | "doing" | "done";
 };
