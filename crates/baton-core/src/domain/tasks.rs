@@ -25,6 +25,7 @@ pub struct Task {
 pub enum TaskStatus {
     #[default]
     Draft,
+    Doing,
     Done,
 }
 
@@ -72,6 +73,9 @@ impl Task {
         self.description = input.description;
         self.acceptance_criteria = input.acceptance_criteria;
         self.pipeline_id = input.pipeline_id;
+        if input.status == TaskStatus::Doing && self.status != TaskStatus::Doing {
+            return Err("Tasks can only move to doing when a run is started".into());
+        }
         self.status = input.status;
         self.updated_at = now.max(self.updated_at.clone());
         Ok(())

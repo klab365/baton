@@ -50,6 +50,17 @@ fn tasks_validate_inputs_without_storing_project_configuration() {
     )
     .unwrap();
     assert!(matches!(task.status, TaskStatus::Draft));
+    let mut attempted_start = input(&pipeline);
+    attempted_start.status = TaskStatus::Doing;
+    assert!(
+        task.update(
+            attempted_start,
+            config.clone(),
+            "2025-01-02T00:00:00.000Z".into()
+        )
+        .is_err()
+    );
+    assert_eq!(task.status, TaskStatus::Draft);
     let mut changed = config;
     changed.pipelines[0].name = "Changed".into();
     task.update(input(&pipeline), changed, "2025-01-02T00:00:00.000Z".into())

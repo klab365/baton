@@ -195,6 +195,16 @@ async fn task_routes_return_http_contracts() {
     let run = json(response).await;
     assert_eq!(run["taskId"], id);
     assert_eq!(run["status"], "succeeded");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/tasks/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json(response).await["status"], "doing");
     let run_id = run["id"].as_str().unwrap();
     let response = app
         .clone()

@@ -8,6 +8,7 @@ let {
 	items,
 	placeholder,
 	kind = "resource",
+	label,
 	describedBy,
 	invalid = false,
 	name,
@@ -20,6 +21,7 @@ let {
 	items: { id: string; name?: string }[];
 	placeholder: string;
 	kind?: "agent" | "pipeline" | "resource";
+	label?: string;
 	describedBy?: string;
 	invalid?: boolean;
 	name?: string;
@@ -29,7 +31,7 @@ let {
 } = $props();
 const Icon = $derived(Box);
 const groupLabel = $derived(
-	kind === "agent" ? "Configured agents" : "Pipelines",
+	label ?? (kind === "agent" ? "Configured agents" : "Pipelines"),
 );
 </script>
 
@@ -49,7 +51,7 @@ const groupLabel = $derived(
 				<Select.Item value={item.id} label={item.name ?? item.id}>
 					{#if kind !== "agent"}<Icon size={15} />{/if}
 					<span>{item.name ?? item.id}</span>
-					{#if item.name}<small>{item.id}</small>{/if}
+					{#if item.name && item.name !== item.id}<small>{item.id}</small>{/if}
 				</Select.Item>
 			{/each}
 		</Select.Group>
@@ -61,10 +63,10 @@ const groupLabel = $derived(
 		width: 100%;
 		height: 3rem;
 		min-height: 3rem;
-		border-color: #aab4c6;
-		border-radius: 0.4rem;
-		background: #fff;
-		color: #172033;
+		border-color: #393a42;
+		border-radius: 0.45rem;
+		background: #191a1e;
+		color: #e9e9ec;
 		font-family: inherit;
 		font-size: inherit;
 		font-weight: 600;
@@ -73,10 +75,10 @@ const groupLabel = $derived(
 	}
 	:global(.resource-select:hover:not(:disabled)) { border-color: #66748b; }
 	:global(.resource-select:focus-visible) {
-		border-color: #3055b5;
-		box-shadow: 0 0 0 3px rgb(48 85 181 / 15%);
+		border-color: #7897e8;
+		box-shadow: 0 0 0 3px rgb(120 151 232 / 15%);
 		outline: 0;
 	}
-	:global(.resource-select:disabled) { background: #f7f8fb; }
-	:global([data-slot="select-item"] small) { color: #69758b; font-size: 0.72rem; }
+	:global(.resource-select:disabled) { background: #202126; color:#85868f; }
+	:global([data-slot="select-item"] small) { color: #92939b; font-size: 0.72rem; }
 </style>
