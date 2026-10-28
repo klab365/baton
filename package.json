@@ -28,6 +28,7 @@
 	},
 	"dependencies": {
 		"clsx": "^2.1.1",
+		"svelte-dnd-action": "^0.9.80",
 		"tailwind-merge": "^3.7.0"
 	}
 }

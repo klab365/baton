@@ -1,16 +1,25 @@
 <script lang="ts">
 import "../app.css";
 import { page } from "$app/state";
+import {
+	Activity,
+	Boxes,
+	CheckSquare,
+	GitBranch,
+	History,
+	Settings2,
+	Workflow,
+} from "@lucide/svelte";
 import Button from "../components/Button.svelte";
 import StatusMessage from "../components/StatusMessage.svelte";
 
 let { data, children } = $props();
 const navigation = [
-	["/", "Overview"],
-	["/agents", "Agents"],
-	["/pipelines", "Pipelines"],
-	["/tasks", "Tasks"],
-	["/settings", "Settings"],
+	{ href: "/", label: "Overview", icon: Activity },
+	{ href: "/tasks", label: "Task board", icon: CheckSquare },
+	{ href: "/runs", label: "Runs", icon: History },
+	{ href: "/agents", label: "Agents", icon: Boxes },
+	{ href: "/pipelines", label: "Pipelines", icon: Workflow },
 ];
 </script>
 
@@ -36,15 +45,22 @@ const navigation = [
 		<p class="muted">The existing configuration has not been changed.</p>
 	</main>
 {:else}
-	<div class="shell">
-		<header class="app-header">
-			<a class="brand" href="/">Baton</a><span class="project-name">{data.project.name}</span>
-		</header>
-		<nav aria-label="Main navigation">
-			{#each navigation as [href, label]}
-				<a href={href} aria-current={page.url.pathname === href ? "page" : undefined}>{label}</a>
-			{/each}
-		</nav>
-		<main id="main-content">{@render children()}</main>
+	<div class="app-shell">
+		<aside class="sidebar" aria-label="Main navigation">
+			<a class="brand" href="/" aria-label="Baton overview"><span class="brand-mark"><GitBranch size={19} /></span><span>Baton</span></a>
+			<div class="project-block"><span class="project-dot"></span><span class="project-label">PROJECT</span><strong title={data.project.name}>{data.project.name}</strong></div>
+			<nav class="primary-nav">
+				{#each navigation as item}
+					<a href={item.href} aria-current={page.url.pathname === item.href || (item.href !== "/" && page.url.pathname.startsWith(`${item.href}/`)) ? "page" : undefined}>
+						<item.icon size={17} strokeWidth={1.8} /><span>{item.label}</span>
+					</a>
+				{/each}
+			</nav>
+			<div class="sidebar-bottom"><a href="/settings" aria-current={page.url.pathname.startsWith("/settings") ? "page" : undefined}><Settings2 size={17} /><span>Settings</span></a><div class="sidebar-footnote">AI workflow orchestration</div></div>
+		</aside>
+		<div class="workspace">
+			<header class="mobile-header"><a class="brand" href="/"><span class="brand-mark"><GitBranch size={18} /></span>Baton</a><span>{data.project.name}</span></header>
+			<main id="main-content" class="page-content">{@render children()}</main>
+		</div>
 	</div>
 {/if}

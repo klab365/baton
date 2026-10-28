@@ -46,7 +46,14 @@ let {
 
 <style>
 	:global([data-slot="select-content"]) {
-		background: #fff;
-		color: #172033;
+		background: #1d1e22;
+		color: #ededf0;
+		border: 1px solid #36373e;
+		box-shadow: 0 12px 30px rgb(0 0 0 / 40%);
 	}
+	:global([data-slot="select-item"][data-highlighted]) {
+		background: #2a2d35;
+		color: #f3f4f7;
+	}
+	:global([data-slot="select-label"]) { color: #85868f; }
 </style>

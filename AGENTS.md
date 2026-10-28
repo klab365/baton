@@ -20,6 +20,12 @@
 - Commands represent application use cases, not individual helper functions. Keep domain rules in `domain/`; have feature handlers coordinate ports and domain logic.
 - Compose the mediator and inject adapter resources in `baton-server`. HTTP routes should validate/translate HTTP input, dispatch with `state.mediator.send(...)`, and map results/errors to HTTP responses; they should not implement use cases or access repositories directly.
 
+## Web UI conventions
+
+- Keep the SvelteKit interface visually consistent: use shared components under `web/components/` for buttons, fields, status feedback, dialogs, panels, and resource selection. Do not introduce one-off route-local replacements for them.
+- Use `ResourceSelect.svelte` (Bits UI) for application option pickers. Do not add native `<select>` controls to new or updated UI; extend the shared component when a picker needs a new presentation.
+- Reuse the dark workspace design tokens and status semantics from `web/app.css`; do not hard-code divergent light-theme colors in route-local styles.
+
 ## API and runtime boundaries
 
 - Keep HTTP DTOs and TypeScript generation in `baton-server` (under its API/DTO code), not in `baton-core`.

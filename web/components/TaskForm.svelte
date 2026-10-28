@@ -18,7 +18,7 @@ let {
 		description: string;
 		acceptanceCriteria: string;
 		pipelineId: string;
-		status: "draft" | "done";
+		status: "draft" | "doing" | "done";
 	};
 } = $props();
 let title = $state(untrack(() => task?.title ?? ""));
@@ -77,11 +77,6 @@ async function save(event: SubmitEvent) {
 		<Field label="Acceptance criteria" for="acceptanceCriteria" hint="How will you know this task is complete?">
 			{#snippet children({ describedBy, invalid })}<MultilineInput id="acceptanceCriteria" name="acceptanceCriteria" bind:value={acceptanceCriteria} rows={4} placeholder="List the outcomes or conditions that define completion…" {describedBy} {invalid} />{/snippet}
 		</Field>
-		{#if task}
-			<Field label="Status" for="status" hint="Mark the task done to clean up its run worktrees.">
-				{#snippet children({ describedBy })}<select id="status" name="status" bind:value={status} aria-describedby={describedBy}><option value="draft">Draft</option><option value="done">Done</option></select>{/snippet}
-			</Field>
-		{/if}
 		<Field label="Pipeline" for="pipeline" hint="The selected pipeline is captured with this task." required>
 			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}
 		</Field>

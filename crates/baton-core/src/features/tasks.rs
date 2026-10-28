@@ -3,7 +3,7 @@ use crate::{
         pipeline::{PipelineRun, Status, TaskRunContext},
         project::{ConfigState, ProjectConfig},
     },
-    features::pipeline_engine::start_pipeline_for_task_with_worktree,
+    features::pipeline_engine::{start_pipeline_for_task_with_worktree, utc_now},
     ports::{
         project_config::ProjectConfigRepository,
         runs::RunRepository,
@@ -135,7 +135,13 @@ pub fn start_task_run(
         "{}\n\nAcceptance criteria:\n{}",
         task.description, task.acceptance_criteria,
     );
-    start_pipeline_for_task_with_worktree(
+    let previous_status = task.status;
+    task.status = TaskStatus::Doing;
+    task.updated_at = utc_now().max(task.updated_at.clone());
+    task_repository
+        .save(task)
+        .map_err(TaskRunStartError::Infrastructure)?;
+    match start_pipeline_for_task_with_worktree(
         config,
         &task.pipeline_id,
         &prompt,
@@ -146,8 +152,19 @@ pub fn start_task_run(
         },
         runtime,
         runs,
-    )
-    .map_err(TaskRunStartError::Pipeline)
+    ) {
+        Ok(run) => Ok(run),
+        Err(message) => {
+            if previous_status == TaskStatus::Draft {
+                task.status = TaskStatus::Draft;
+                task.updated_at = utc_now().max(task.updated_at.clone());
+                task_repository
+                    .save(task)
+                    .map_err(TaskRunStartError::Infrastructure)?;
+            }
+            Err(TaskRunStartError::Pipeline(message))
+        }
+    }
 }
 
 async fn load_task_project_config(
@@ -305,6 +322,17 @@ pub fn update_task(
     let _lease = repository.acquire_operation_lease(id)?;
     let mut task = repository.load(id)?;
     let was_done = task.status == TaskStatus::Done;
+    let new_status = input.status;
+    if new_status == TaskStatus::Done && !was_done {
+        let latest_run = runs
+            .list()?
+            .into_iter()
+            .filter(|run| run.task_id.as_deref() == Some(id))
+            .max_by(|left, right| left.started_at.cmp(&right.started_at));
+        if !latest_run.is_some_and(|run| run.status == Status::Succeeded) {
+            return Err("A task can only be marked done after a successful run".into());
+        }
+    }
     task.update(input, config, now)?;
     if task.status == TaskStatus::Done && !was_done {
         cleanup_task_worktrees(runs, &mut task)?;
