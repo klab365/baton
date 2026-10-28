@@ -216,7 +216,7 @@ async fn task_routes_return_http_contracts() {
         )
         .await
         .unwrap();
-    assert_eq!(json(response).await["status"], "doing");
+    assert_eq!(json(response).await["status"], "done");
     let run_id = run["id"].as_str().unwrap();
     let response = app
         .clone()
@@ -229,22 +229,6 @@ async fn task_routes_return_http_contracts() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(json(response).await["events"].as_array().unwrap().len() >= 2);
-    let first_worktree = run["worktree"]["path"].clone();
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::post(format!("/api/tasks/{id}/runs"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let second_run = json(response).await;
-    assert_eq!(second_run["worktree"]["path"], first_worktree);
-    let second_run_id = second_run["id"].as_str().unwrap();
-
     let response = app
         .clone()
         .oneshot(
@@ -268,25 +252,18 @@ async fn task_routes_return_http_contracts() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let rerun = json(response).await;
+    assert_eq!(rerun["worktree"]["path"], run["worktree"]["path"]);
     let completed_run =
         baton_adapters::repositories::filesystem_run::FilesystemRunRepository(directory.clone())
             .load(run_id)
             .unwrap();
     assert_eq!(
         completed_run.worktree.as_ref().unwrap().lifecycle,
-        "removed"
+        "retained"
     );
-    assert!(!completed_run.worktree.as_ref().unwrap().path.exists());
-    let second_completed =
-        baton_adapters::repositories::filesystem_run::FilesystemRunRepository(directory.clone())
-            .load(second_run_id)
-            .unwrap();
-    assert_eq!(
-        second_completed.worktree.as_ref().unwrap().lifecycle,
-        "removed"
-    );
-
+    assert!(completed_run.worktree.as_ref().unwrap().path.exists());
     let response = app
         .clone()
         .oneshot(

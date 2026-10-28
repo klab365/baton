@@ -76,5 +76,5 @@ async function save(event: SubmitEvent) {
 		</Field>
 		{#if !pipelines.length}<StatusMessage tone="warning" title="No pipelines available">Add a pipeline to <code>.baton/config.json</code> before creating a task.</StatusMessage>{/if}
 	</div>
-	<footer class="task-form-actions"><Button type="submit" {loading} disabled={!title.trim() || !description.trim() || !pipelines.some((p) => p.id === pipelineId)}>{task ? "Save changes" : "Create task"}</Button></footer>
+	<footer class="task-form-actions" class:task-form-actions-plain={!task}><Button type="submit" {loading} disabled={!title.trim() || !description.trim() || !pipelines.some((p) => p.id === pipelineId)}>{task ? "Save changes" : "Create task"}</Button></footer>
 </form>

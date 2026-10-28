@@ -26,7 +26,7 @@ let tasks = $state<Task[]>([]);
 let runs = $state<Run[]>([]);
 let boardLoaded = $state(false);
 let loadError = $state("");
-let busyTask = $state("");
+let busyTasks = $state<string[]>([]);
 let draggingTask = $state("");
 let error = $state("");
 let feedback = $state("");
@@ -45,21 +45,10 @@ function laneFor(task: Task, run?: Run): Lane {
 	return "draft";
 }
 function statusFor(item: BoardItem) {
-	const error = [
-		item.run?.setupError,
-		...(item.run?.steps.map((step: { error?: string | null }) => step.error) ??
-			[]),
-	]
-		.filter(Boolean)
-		.join(" ")
-		.toLowerCase();
 	if (item.run?.status === "waitingHuman")
 		return { label: "Review pending", tone: "review" };
 	if (item.run?.status === "failed" || item.run?.status === "limitExhausted")
-		return {
-			label: error.includes("ci") ? "CI failed" : "Run failed",
-			tone: "failed",
-		};
+		return { label: "Failed", tone: "failed" };
 	if (item.run?.status === "cancelled")
 		return { label: "Cancelled", tone: "neutral" };
 	if (item.run?.status === "succeeded" || item.task.status === "done")
@@ -79,11 +68,7 @@ function syncItems() {
 }
 $effect(() => {
 	let current = true;
-	boardLoaded = false;
 	loadError = "";
-	tasks = [];
-	runs = [];
-	items = [];
 	data.tasks.then(
 		(loaded) => {
 			if (!current) return;
@@ -123,17 +108,14 @@ onMount(() => {
 		if (!document.hidden)
 			void Promise.all([invalidate("/api/tasks"), invalidate("/api/runs")]);
 	};
-	const interval = window.setInterval(refresh, 5000);
+	const interval = window.setInterval(refresh, 2000);
 	return () => window.clearInterval(interval);
 });
 function laneItems(lane: Lane) {
 	return items.filter((item) => item.lane === lane);
 }
 function canMove(item: BoardItem, from: Lane, to: Lane) {
-	return (
-		(from === "draft" && to === "doing") ||
-		(from === "doing" && item.run?.status === "succeeded" && to === "done")
-	);
+	return (from === "draft" || from === "done") && to === "doing";
 }
 function dndType(lane: Lane) {
 	const item = items.find((candidate) => candidate.id === draggingTask);
@@ -172,8 +154,12 @@ async function finalize(
 async function moveTask(item: BoardItem, lane: Lane) {
 	const from = laneFor(item.task, item.run);
 	const retrying =
-		from === lane && item.run?.status === "failed" && lane === "doing";
-	if (busyTask || (from === lane && !retrying)) {
+		from === lane &&
+		lane === "doing" &&
+		(item.run?.status === "failed" ||
+			item.run?.status === "limitExhausted" ||
+			item.run?.status === "succeeded");
+	if (busyTasks.includes(item.id) || (from === lane && !retrying)) {
 		draggingTask = "";
 		return;
 	}
@@ -182,7 +168,7 @@ async function moveTask(item: BoardItem, lane: Lane) {
 		draggingTask = "";
 		return;
 	}
-	busyTask = item.id;
+	busyTasks = [...busyTasks, item.id];
 	error = "";
 	feedback = "";
 	items = items.map((candidate) =>
@@ -210,13 +196,13 @@ async function moveTask(item: BoardItem, lane: Lane) {
 			const body = await response.json().catch(() => ({}));
 			throw new Error(body.error ?? `Could not move task to ${lane}.`);
 		}
-		feedback = `Task moved to ${lane === "doing" ? "Doing" : "Done"}.`;
+		feedback = "";
 		await invalidateAll();
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : "Could not update task.";
 		syncItems();
 	} finally {
-		busyTask = "";
+		busyTasks = busyTasks.filter((id) => id !== item.id);
 		draggingTask = "";
 	}
 }
@@ -243,7 +229,6 @@ const lanes: {
 	{#snippet actions()}<a class="button" href="/tasks/new"><Plus size={16} /> New task</a>{/snippet}
 </PageHeader>
 {#if error}<StatusMessage tone="error" title="Task update failed">{error}</StatusMessage>{/if}
-{#if feedback}<StatusMessage tone="success" title="Task updated">{feedback}</StatusMessage>{/if}
 {#if loadError}<StatusMessage tone="error" title="Could not load tasks">{loadError}</StatusMessage>{/if}
 {#if !boardLoaded}
 	<div class="board board-loading" aria-label="Loading task board" aria-busy="true">
@@ -261,25 +246,23 @@ const lanes: {
 				<p>{lane.hint}</p>
 			</header>
 			<div class="lane-cards-shell">
-			<div class="lane-cards" class:dragging={!!draggingTask} use:dndzone={{ items: laneItems(lane.id), type: dndType(lane.id), flipDurationMs: 160, dragDisabled: !!busyTask, dropTargetClasses: ["task-drop-target"], delayTouchStart: true, useCursorForDetection: true }} onconsider={(event) => consider(event, lane.id)} onfinalize={(event) => finalize(event, lane.id)}>
+			<div class="lane-cards" class:dragging={!!draggingTask} use:dndzone={{ items: laneItems(lane.id), type: dndType(lane.id), flipDurationMs: 160, dragDisabled: busyTasks.length > 0, dropTargetClasses: ["task-drop-target"], delayTouchStart: true, useCursorForDetection: true }} onconsider={(event) => consider(event, lane.id)} onfinalize={(event) => finalize(event, lane.id)}>
 				{#each laneItems(lane.id) as item (item.id)}
 					{@const isDragging = draggingTask === item.id}
 					{@const status = statusFor(item)}
-					<article class="task-card" aria-label={item.task.title} class:card-busy={busyTask === item.id} class:card-dragging={isDragging}>
+					<article class="task-card status-border-{status.tone}" aria-label={item.task.title} class:card-busy={busyTasks.includes(item.id)} class:card-dragging={isDragging}>
 						<div class="card-topline"><span class="task-id">TASK-{item.id.slice(0, 6).toUpperCase()}</span></div>
 						<a class="task-title" href={`/tasks/${item.id}`}>{item.task.title}</a>
-						{#if item.task.description}<p class="task-description">{item.task.description}</p>{/if}
 						<div class="card-footer"><span class="card-status status-{status.tone}"><span></span>{status.label}</span>
-							{#if lane.id === "draft"}<button class="card-action" type="button" disabled={!!busyTask} onclick={() => moveTask(item, "doing")}>{busyTask === item.id ? "Starting…" : "Start task"}<ArrowRight size={14} /></button>
+							{#if lane.id === "draft"}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}>{busyTasks.includes(item.id) ? "Starting…" : "Start task"}<ArrowRight size={14} /></button>
 							{:else if lane.id === "approval"}<a class="card-action" href={`/runs/${item.run?.id}`}>Review run<ArrowRight size={14} /></a>
-							{:else if lane.id === "doing" && item.run?.status === "failed"}<button class="card-action" type="button" disabled={!!busyTask} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Retry</button>
-							{:else if lane.id === "doing" && item.run?.status === "succeeded"}<button class="card-action" type="button" disabled={!!busyTask} onclick={() => moveTask(item, "done")}>Mark done<ArrowRight size={14} /></button>
+							{:else if lane.id === "doing" && (item.run?.status === "failed" || item.run?.status === "limitExhausted")}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Retry</button>
+							{:else if lane.id === "done"}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Reopen & rerun</button>
 							{/if}
 						</div>
 					</article>
 				{/each}
 			</div>
-			{#if !laneItems(lane.id).length}<div class="lane-empty">Drop a task here</div>{/if}
 			</div>
 		</section>
 	{/each}
@@ -288,10 +271,10 @@ const lanes: {
 
 <style>
 	:global(body) { background:#101114; color:#ededf0; }
-	.board { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); min-height:calc(100vh - 12rem); border:1px solid #28292e; border-radius:.8rem; background:#141518; overflow:auto; }
-	.board-lane { min-width:0; border-right:1px solid #28292e; }
+	.board { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); height:calc(100vh - 12rem); border:1px solid #28292e; border-radius:.8rem; background:#141518; overflow:hidden; }
+	.board-lane { display:flex; min-width:0; min-height:0; flex-direction:column; border-right:1px solid #28292e; }
 	.board-lane:last-child { border-right:0; }
-	.lane-header { padding:1rem 1rem .75rem; border-bottom:1px solid #28292e; }
+	.lane-header { z-index:1; flex:none; padding:1rem 1rem .75rem; border-bottom:1px solid #28292e; background:#141518; }
 	.lane-heading { display:flex; align-items:center; gap:.55rem; }
 	.lane-heading h2 { margin:0; font-size:.9rem; font-weight:650; }
 	.lane-heading :global(svg) { color:#729cf5; }
@@ -299,12 +282,19 @@ const lanes: {
 	.lane-done .lane-heading :global(svg) { color:#53d695; }
 	.lane-count { margin-left:auto; color:#85868f; font-size:.78rem; }
 	.lane-header p { margin:.3rem 0 0 1.5rem; color:#777982; font-size:.73rem; }
-	.lane-cards-shell { position:relative; }
-	.lane-cards { display:flex; flex-direction:column; gap:.65rem; min-height:14rem; padding:.7rem; transition:background .15s,outline-color .15s; }
+	.lane-cards-shell { min-height:0; flex:1; overflow-y:auto; scrollbar-color:#4a4b54 transparent; scrollbar-width:thin; }
+	.lane-cards-shell::-webkit-scrollbar { width:.55rem; }
+	.lane-cards-shell::-webkit-scrollbar-thumb { border:2px solid #141518; border-radius:1rem; background:#4a4b54; }
+	.lane-cards { display:flex; flex-direction:column; gap:.65rem; min-height:100%; padding:.7rem; transition:background .15s,outline-color .15s; }
 	:global(.task-drop-target) { outline:2px solid #729cf5; outline-offset:-2px; background:#1c2639; }
-	.task-card { padding:.85rem; border:1px solid #303137; border-radius:.65rem; background:#1d1e22; box-shadow:0 2px 6px #0003; cursor:grab; transition:border-color .15s,background .15s,opacity .15s; }
+	.task-card { --status-border:#303137; padding:.85rem; border:2px solid var(--status-border); border-radius:.65rem; background:#1d1e22; box-shadow:0 2px 6px #0003; cursor:grab; animation:status-border-pulse 1.5s ease-in-out infinite; transition:border-color .15s,background .15s,opacity .15s; }
+	.status-border-working { --status-border:#6fa5ff; }
+	.status-border-review { --status-border:#f5c442; }
+	.status-border-failed { --status-border:#ff7079; animation:none; }
+	.status-border-ready { --status-border:#303137; animation:none; }
+	.status-border-neutral { --status-border:#303137; animation:none; }
 	.card-dragging { border-color:#93b3ff; opacity:.7; }
-	.task-card:hover { border-color:#50515a; background:#222329; }
+	.task-card:hover { background:#222329; }
 	.card-busy { opacity:.6; }
 	.card-topline,.card-footer { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
 	.task-id { color:#80818a; font: .68rem ui-monospace,monospace; }
@@ -317,14 +307,12 @@ const lanes: {
 	.status-neutral { color:#9b9ca5; }
 	.task-title { display:block; margin:.6rem 0 .3rem; color:#eeeeef; font-size:.88rem; font-weight:650; line-height:1.35; text-decoration:none; }
 	.task-title:hover { color:#93b3ff; }
-	.task-description { display:-webkit-box; overflow:hidden; line-clamp:3; -webkit-line-clamp:3; -webkit-box-orient:vertical; margin:.35rem 0 .8rem; color:#92939b; font-size:.76rem; line-height:1.45; }
 	.card-footer { padding-top:.65rem; border-top:1px solid #303137; }
 	.pipeline-tag { max-width:55%; overflow:hidden; color:#85868f; font-size:.68rem; text-overflow:ellipsis; white-space:nowrap; }
 	.card-action { display:inline-flex; align-items:center; gap:.3rem; border:0; padding:.25rem 0; background:transparent; color:#8eaeff; font:inherit; font-size:.72rem; cursor:pointer; text-decoration:none; }
 	.card-action:hover { color:#c2d2ff; }
 	.card-action:disabled { opacity:.45; cursor:wait; }
 	.done-mark { display:flex; gap:.3rem; align-items:center; color:#53d695; font-size:.72rem; }
-	.lane-empty { position:absolute; inset:.7rem; display:grid; place-items:center; border:1px dashed #303137; border-radius:.55rem; padding:1rem .5rem; color:#62636b; pointer-events:none; text-align:center; font-size:.75rem; }
 	.skeleton-dot,.skeleton-count,.skeleton-card span { display:block; background:linear-gradient(90deg,#24252a 25%,#303138 50%,#24252a 75%); background-size:200% 100%; animation:shimmer 1.3s ease-in-out infinite; }
 	.skeleton-dot { width:.55rem; height:.55rem; border-radius:50%; }
 	.skeleton-count { width:1.2rem; height:.7rem; border-radius:.4rem; }
@@ -335,7 +323,11 @@ const lanes: {
 	.skeleton-card span:last-child { width:68%; }
 	.skeleton-card.short span:last-child { display:none; }
 	@keyframes shimmer { to { background-position:-200% 0; } }
-	@media(prefers-reduced-motion:reduce) { .skeleton-dot,.skeleton-count,.skeleton-card span { animation:none; } }
+	@keyframes status-border-pulse {
+		0%,100% { border-color:color-mix(in srgb,var(--status-border) 35%,#1d1e22); }
+		50% { border-color:color-mix(in srgb,var(--status-border) 35%,white); }
+	}
+	@media(prefers-reduced-motion:reduce) { .task-card,.skeleton-dot,.skeleton-count,.skeleton-card span { animation:none; } }
 	@media(max-width:1050px) { .board { grid-template-columns:repeat(2,minmax(15rem,1fr)); } .board-lane:nth-child(2) { border-right:0; } .board-lane:nth-child(-n+2) { border-bottom:1px solid #28292e; } }
-	@media(max-width:620px) { .board { display:flex; flex-direction:column; overflow:visible; } .board-lane { border-right:0; border-bottom:1px solid #28292e; } .board-lane:last-child { border-bottom:0; } .lane-cards { min-height:6rem; } }
+	@media(max-width:620px) { .board { display:flex; height:auto; flex-direction:column; overflow:visible; } .board-lane { border-right:0; border-bottom:1px solid #28292e; } .board-lane:last-child { border-bottom:0; } .lane-cards-shell { overflow:visible; } .lane-cards { min-height:6rem; } }
 </style>

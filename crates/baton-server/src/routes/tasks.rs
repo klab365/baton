@@ -4,9 +4,9 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use baton_core::features::runs::ListTaskRuns;
 use baton_core::features::tasks::{
-    CreateTask, DeleteTask, GetTask, ListTasks, StartTaskRun, UpdateTask as UpdateTaskCommand,
+    CreateTask, DeleteTask, GetTask, ListTaskRuns, ListTasks, StartTaskRun,
+    UpdateTask as UpdateTaskCommand,
 };
 use baton_core::{
     domain::{
@@ -31,15 +31,6 @@ fn bad(message: impl Into<String>) -> ApiError {
         status: StatusCode::BAD_REQUEST,
         message: message.into(),
     }
-}
-fn path(state: &AppState, id: &str) -> Result<PathBuf, ApiError> {
-    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-        return Err(bad("Invalid task ID"));
-    }
-    Ok(state
-        .project_dir
-        .join(".baton/tasks")
-        .join(format!("{id}.json")))
 }
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Task>>, ApiError> {
     state
@@ -71,10 +62,7 @@ pub async fn create(
     State(state): State<AppState>,
     Json(input): Json<TaskInput>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
-    let mut id = uuid::Uuid::now_v7().to_string();
-    while path(&state, &id)?.exists() {
-        id.push('x');
-    }
+    let id = uuid::Uuid::now_v7().to_string();
     let task = state
         .mediator
         .send(CreateTask {
@@ -119,7 +107,7 @@ async fn list_runs(
 ) -> Result<Json<Vec<PipelineRun>>, ApiError> {
     state
         .mediator
-        .send(GetTask { id: id.clone() })
+        .send(ListTaskRuns { task_id: id })
         .await
         .map_err(|message| {
             if message.contains("No such file") {
@@ -130,13 +118,8 @@ async fn list_runs(
             } else {
                 ApiError::internal(message)
             }
-        })?;
-    state
-        .mediator
-        .send(ListTaskRuns { task_id: id })
-        .await
+        })
         .map(Json)
-        .map_err(ApiError::internal)
 }
 
 async fn start_run(

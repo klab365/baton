@@ -43,6 +43,12 @@ pub struct GetTask {
 }
 
 #[derive(MediCommand)]
+#[medi_command(return_type = Vec<PipelineRun>, error_type = String)]
+pub struct ListTaskRuns {
+    pub task_id: String,
+}
+
+#[derive(MediCommand)]
 #[medi_command(return_type = Task, error_type = String)]
 pub struct CreateTask {
     pub id: String,
@@ -80,11 +86,6 @@ pub fn start_task_run(
     run_id: &str,
     runtime: &mut dyn AgentRuntime,
 ) -> Result<PipelineRun, TaskRunStartError> {
-    if task.status == TaskStatus::Done {
-        return Err(TaskRunStartError::Conflict(
-            "Completed tasks cannot be started".into(),
-        ));
-    }
     let related = runs
         .list()
         .map_err(TaskRunStartError::Infrastructure)?
@@ -150,7 +151,16 @@ pub fn start_task_run(
         runtime,
         runs,
     ) {
-        Ok(run) => Ok(run),
+        Ok(run) => {
+            if run.status == Status::Succeeded {
+                task.status = TaskStatus::Done;
+                task.updated_at = utc_now().max(task.updated_at.clone());
+                task_repository
+                    .save(task)
+                    .map_err(TaskRunStartError::Infrastructure)?;
+            }
+            Ok(run)
+        }
         Err(message) => {
             if previous_status == TaskStatus::Draft {
                 task.status = TaskStatus::Draft;
@@ -195,6 +205,20 @@ async fn get_task_handler(
     command: GetTask,
 ) -> Result<Task, String> {
     resources.tasks.load(&command.id)
+}
+
+#[medi_handler]
+async fn list_task_runs_handler(
+    resources: TaskFeatureResources,
+    command: ListTaskRuns,
+) -> Result<Vec<PipelineRun>, String> {
+    resources.tasks.load(&command.task_id)?;
+    Ok(resources
+        .runs
+        .list()?
+        .into_iter()
+        .filter(|run| run.task_id.as_deref() == Some(&command.task_id))
+        .collect())
 }
 
 #[medi_handler]
@@ -300,6 +324,7 @@ medi_module! {
     commands {
         crate::features::tasks::ListTasks => crate::features::tasks::list_tasks_handler;
         crate::features::tasks::GetTask => crate::features::tasks::get_task_handler;
+        crate::features::tasks::ListTaskRuns => crate::features::tasks::list_task_runs_handler;
         crate::features::tasks::CreateTask => crate::features::tasks::create_task_handler;
         crate::features::tasks::UpdateTask => crate::features::tasks::update_task_handler;
         crate::features::tasks::DeleteTask => crate::features::tasks::delete_task_handler;
@@ -331,9 +356,6 @@ pub fn update_task(
         }
     }
     task.update(input, config, now)?;
-    if task.status == TaskStatus::Done && !was_done {
-        cleanup_task_worktrees(runs, &mut task)?;
-    }
     repository.save(&task)?;
     Ok(task)
 }
