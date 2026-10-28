@@ -7,16 +7,12 @@ import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
 import EmptyState from "../../components/EmptyState.svelte";
 import Field from "../../components/Field.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
-import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
 
-type RuntimeProfile = { id: string; name: string; runtimeKind: string };
-type Configuration = {
-	revision: string;
-	agents: Agent[];
-	runtimeProfiles: RuntimeProfile[];
-	skills: { id: string; name: string }[];
-};
+type Credential = { id: string; name: string; credentialType: string; status: string };
+type CredentialType = { id: string; label: string; provider: string | null };
+type ModelOption = { id: string; label: string };
+type Configuration = { revision: string; agents: Agent[]; skills: { id: string; name: string }[] };
 let { data } = $props();
 const config = $derived(data.configuration as Configuration | null);
 let draft = $state<Agent | null>(null);
@@ -26,15 +22,20 @@ let busy = $state(false);
 let error = $state("");
 let message = $state("");
 let deleting = $state(false);
+let models = $state<ModelOption[]>([]);
+let modelsLoading = $state(false);
+let modelsError = $state("");
 
 function open(agent?: Agent) {
 	if (!config) return;
 	draft = agent
-		? structuredClone(agent)
+		? { ...structuredClone(agent), model: agent.model ?? { provider: "", model: "" } }
 		: {
 				id: crypto.randomUUID(),
 				systemPrompt: "",
-				runtimeProfileId: "",
+				runtimeKind: "rig",
+				model: { provider: "openai", model: "" },
+				credentialId: null,
 				rules: [],
 				skillIds: [],
 			};
@@ -42,6 +43,31 @@ function open(agent?: Agent) {
 	editing = Boolean(agent);
 	error = "";
 	message = "";
+	models = [];
+	modelsError = "";
+	if (draft.credentialId) void loadModels(draft.credentialId);
+}
+async function loadModels(credentialId: string) {
+	modelsLoading = true;
+	modelsError = "";
+	models = [];
+	try {
+		const response = await fetch(`/api/credentials/${encodeURIComponent(credentialId)}/models`);
+		if (!response.ok) throw new Error((await response.json()).error ?? "Could not list models");
+		models = await response.json();
+		if (draft?.credentialId === credentialId && draft.model && !models.some((model) => model.id === draft?.model?.model)) draft.model.model = "";
+	} catch (cause) {
+		modelsError = cause instanceof Error ? cause.message : "Could not list models";
+	} finally { modelsLoading = false; }
+}
+async function selectCredential(credentialId: string) {
+	if (!draft) return;
+	draft.credentialId = credentialId || null;
+	const credential = (data.credentials as Credential[]).find((item) => item.id === credentialId);
+	const type = (data.credentialTypes as CredentialType[]).find((item) => item.id === credential?.credentialType);
+	draft.model = { provider: type?.provider ?? "", model: "" };
+	if (credentialId) await loadModels(credentialId);
+	else models = [];
 }
 function toggle(ids: string[], id: string) {
 	return ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id];
@@ -88,20 +114,22 @@ async function save(remove = false) {
 	<div class="agents-layout">
 		<aside aria-label="Agent library" class="agent-list">
 			<div class="list-heading"><strong>Your agents</strong><span>{config.agents.length}</span></div>
-			<p class="availability-warning">Configure at least one runtime profile in Settings before assigning agents.</p>
+			<p class="availability-warning">Choose a provider, model, and credential directly on each agent.</p>
 			{#each config.agents as agent (agent.id)}
-				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><span><strong>{agent.id}</strong><small>{agent.runtimeProfileId}</small></span></button>
+				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><span><strong>{agent.id}</strong><small>{agent.model ? `${agent.model.provider} · ${agent.model.model}` : agent.runtimeKind}</small></span></button>
 			{:else}<p class="muted">No agents yet. Create a reusable role for your pipelines.</p>{/each}
 		</aside>
 		<section class="agent-editor">
 			{#if !draft}
-				<EmptyState title="Select or create an agent" description="Agents hold instructions, a reusable runtime profile, rules and skills." />
+				<EmptyState title="Select or create an agent" description="Agents hold instructions, provider credentials, model, rules and skills." />
 			{:else}
 				<form onsubmit={(event) => { event.preventDefault(); save(); }}>
 					<div class="editor-header"><div><span class="eyebrow">{editing ? "Editing agent" : "New agent"}</span>{#if !editing}<h2>{draft.id || "Untitled agent"}</h2>{/if}</div><div><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button> <Button type="submit" loading={busy}>Save agent</Button></div></div>
 					<div class="form-grid">
 						<Field label="Agent ID" for="agent-id" required hint="IDs cannot be changed after creation.">{#snippet children({ describedBy })}<input id="agent-id" bind:value={draft!.id} required disabled={busy || editing} aria-describedby={describedBy} />{/snippet}</Field>
-						<Field label="Runtime profile" for="agent-runtime" required hint="Runtime selection belongs to this agent, never pipeline steps.">{#snippet children({ describedBy })}<ResourceSelect id="agent-runtime" bind:value={draft!.runtimeProfileId} items={config.runtimeProfiles} kind="runtime profile" placeholder="Select a runtime profile" disabled={busy} {describedBy} />{/snippet}</Field>
+						<Field label="Credential" for="agent-credential" required hint="Credentials are managed in Settings and can be reused by agents.">{#snippet children({ describedBy })}<select id="agent-credential" value={draft!.credentialId ?? ""} onchange={(event) => selectCredential(event.currentTarget.value)} required disabled={busy} aria-describedby={describedBy}><option value="">Select a credential</option>{#each (data.credentials as Credential[]).filter((credential) => credential.status === "available" && (data.credentialTypes as CredentialType[]).some((type) => type.id === credential.credentialType && type.provider)) as credential}<option value={credential.id}>{credential.name}</option>{/each}</select>{/snippet}</Field>
+						<Field label="Provider" for="agent-provider" required>{#snippet children({ describedBy })}<input id="agent-provider" value={draft!.model!.provider} readonly aria-describedby={describedBy} />{/snippet}</Field>
+						<Field label="Model" for="agent-model" required>{#snippet children({ describedBy })}<select id="agent-model" bind:value={draft!.model!.model} required disabled={busy || modelsLoading || !draft!.credentialId} aria-describedby={describedBy}><option value="">{modelsLoading ? "Loading models…" : "Select a model"}</option>{#each models as model}<option value={model.id}>{model.label}</option>{/each}</select>{#if modelsError}<small role="alert">{modelsError}</small>{/if}{/snippet}</Field>
 					</div>
 					<Field label="System prompt" for="agent-prompt" required>{#snippet children({ describedBy })}<textarea id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field>
 					<Field label="Rules" for="agent-rules" hint="One non-empty rule per line.">{#snippet children({ describedBy })}<textarea id="agent-rules" name="rules" value={draft!.rules.join("\n")} oninput={(event) => { if (draft) draft.rules = event.currentTarget.value.split("\n").filter((rule: string) => rule.trim()); }} rows={4} placeholder="Be concise" disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field>

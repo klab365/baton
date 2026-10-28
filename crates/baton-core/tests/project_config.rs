@@ -2,9 +2,8 @@ use baton_core::domain::project::{ProjectConfig, parse_config};
 
 fn example() -> serde_json::Value {
     serde_json::json!({
-        "schemaVersion": 6,
-        "runtimeProfiles":[{"id":"rig.default", "name":"Rig default", "runtimeKind":"rig", "model":null}],
-        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "rules":[], "runtimeProfileId":"rig.default", "skillIds":["style"]}],
+        "schemaVersion": 7,
+        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "runtimeKind":"rig", "model":{"provider":"openai","model":"gpt-4.1"}, "credentialId":null, "rules":[], "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
             {"id":"plan", "name":"Plan", "agentId":"writer"},
             {"id":"build", "name":"Build", "agentId":"writer"},
@@ -84,9 +83,9 @@ fn actionable_validation_failures() {
             "name must not be empty",
         ),
         (
-            "/agents/0/runtimeProfileId",
-            serde_json::json!("missing"),
-            "Unknown runtime profile",
+            "/agents/0/model/provider",
+            serde_json::json!(" "),
+            "invalid provider or model",
         ),
         (
             "/agents/0/skillIds",

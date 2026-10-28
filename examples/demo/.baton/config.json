@@ -1,117 +1,113 @@
 {
-	"schemaVersion": 6,
-	"agents": [
-		{
-			"id": "writer",
-			"systemPrompt": "Implement the requested changes directly in the isolated project worktree. First inspect the relevant files, then make focused edits with built-in tools and verify them.",
-			"runtimeProfileId": "rig.ollama.minimax-m3_cloud",
-			"rules": [],
-			"skillIds": []
-		},
-		{
-			"id": "reviewer",
-			"systemPrompt": "Independently inspect the writer's changed project files using built-in tools. Review correctness and tests. Never approve without inspecting the changes. When finished, call the report_outcome tool exactly once with approved or revise_build and a concise review summary, then respond naturally. Do not encode pipeline decisions as JSON.",
-			"runtimeProfileId": "rig.ollama.minimax-m3_cloud",
-			"rules": [],
-			"skillIds": []
-		},
-		{
-			"id": "commit-agent",
-			"systemPrompt": "After the reviewer approves, inspect the task context and git diff in the current worktree. Identify intended task changes, including relevant untracked files; exclude .baton-rig session data and unrelated files. Stage only those task files, run git diff --cached --check, then create one Conventional Commit with an accurate type and summary (feat, fix, docs, refactor, chore, etc.). Never amend or rewrite existing commits. Do not modify source files. After a successful commit, call report_outcome exactly once with completed and a summary containing the commit subject and short hash, then respond naturally. Do not encode pipeline decisions as JSON.",
-			"runtimeProfileId": "rig.ollama.minimax-m3_cloud",
-			"rules": [],
-			"skillIds": []
-		}
-	],
-	"runtimeProfiles": [
-		{
-			"id": "rig.ollama.minimax-m3_cloud",
-			"name": "Ollama Cloud",
-			"runtimeKind": "rig",
-			"model": {
-				"provider": "ollama",
-				"model": "minimax-m3:cloud"
-			}
-		}
-	],
-	"pipelines": [
-		{
-			"id": "draft",
-			"name": "Draft and review",
-			"steps": [
-				{
-					"id": "write",
-					"name": "Write",
-					"agentId": "writer",
-					"human": false,
-					"transitions": []
-				},
-				{
-					"id": "review",
-					"name": "Review",
-					"agentId": "reviewer",
-					"human": false,
-					"transitions": [
-						{
-							"outcome": "approved",
-							"to": "commit-message",
-							"maxTraversals": 1
-						},
-						{
-							"outcome": "revise_build",
-							"to": "write",
-							"maxTraversals": 2
-						},
-						{
-							"outcome": "revise_plan",
-							"to": "write",
-							"maxTraversals": 2
-						},
-						{
-							"outcome": "blocked",
-							"to": "human-decision",
-							"maxTraversals": 1
-						}
-					]
-				},
-				{
-					"id": "commit-message",
-					"name": "Create task commit",
-					"agentId": "commit-agent",
-					"human": false,
-					"transitions": [
-						{
-							"outcome": "completed",
-							"to": "human-decision",
-							"maxTraversals": 1
-						}
-					]
-				},
-				{
-					"id": "human-decision",
-					"name": "Human approval",
-					"agentId": "",
-					"human": true,
-					"transitions": [
-						{
-							"outcome": "approved",
-							"to": null,
-							"maxTraversals": 1
-						},
-						{
-							"outcome": "rejected",
-							"to": "write",
-							"maxTraversals": 2
-						},
-						{
-							"outcome": "responded",
-							"to": "write",
-							"maxTraversals": 4
-						}
-					]
-				}
-			]
-		}
-	],
-	"skills": []
+  "schemaVersion": 7,
+  "agents": [
+    {
+      "id": "writer",
+      "systemPrompt": "Implement the requested changes directly in the isolated project worktree. First inspect the relevant files, then make focused edits with built-in tools and verify them.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-6-luna"
+      },
+      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "rules": [],
+      "skillIds": []
+    },
+    {
+      "id": "reviewer",
+      "systemPrompt": "Independently inspect the writer's changed project files using built-in tools. Review correctness and tests. Never approve without inspecting the changes. When finished, call the report_outcome tool exactly once with approved or revise_build and a concise review summary, then respond naturally. Do not encode pipeline decisions as JSON.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "ollama",
+        "model": "deepseek-v4-pro:0813"
+      },
+      "credentialId": "9f95fb10-3d9c-4d18-9fd3-eb8ce098d1e7",
+      "rules": [],
+      "skillIds": []
+    },
+    {
+      "id": "commit-agent",
+      "systemPrompt": "After the reviewer approves, inspect the task context and git diff in the current worktree. Identify intended task changes, including relevant untracked files; exclude .baton-rig session data and unrelated files. Stage only those task files, run git diff --cached --check, then create one Conventional Commit with an accurate type and summary (feat, fix, docs, refactor, chore, etc.). Never amend or rewrite existing commits. Do not modify source files. After a successful commit, call report_outcome exactly once with completed and a summary containing the commit subject and short hash, then respond naturally. Do not encode pipeline decisions as JSON.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-5.6-luna"
+      },
+      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "rules": [],
+      "skillIds": []
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "draft",
+      "name": "Draft and review",
+      "steps": [
+        {
+          "id": "write",
+          "name": "Write",
+          "agentId": "writer",
+          "human": false,
+          "transitions": []
+        },
+        {
+          "id": "review",
+          "name": "Review",
+          "agentId": "reviewer",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "approved",
+              "to": "commit-message"
+            },
+            {
+              "outcome": "revise_build",
+              "to": "write"
+            },
+            {
+              "outcome": "revise_plan",
+              "to": "write"
+            },
+            {
+              "outcome": "blocked",
+              "to": "human-decision"
+            }
+          ]
+        },
+        {
+          "id": "commit-message",
+          "name": "Create commit",
+          "agentId": "commit-agent",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": "human-decision"
+            }
+          ]
+        },
+        {
+          "id": "human-decision",
+          "name": "Human approval",
+          "agentId": "",
+          "human": true,
+          "transitions": [
+            {
+              "outcome": "approved",
+              "to": null
+            },
+            {
+              "outcome": "rejected",
+              "to": "write"
+            },
+            {
+              "outcome": "responded",
+              "to": "write"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "skills": []
 }

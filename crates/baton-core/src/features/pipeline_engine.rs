@@ -195,7 +195,6 @@ pub fn start_pipeline_for_task_with_worktree(
         events: Vec::new(),
         config_snapshot: Some(config.clone()),
         current_step: Some(pipeline.steps[0].id.clone()),
-        transition_counts: Default::default(),
         handoff: Some(task.into()),
         pending_actions: Vec::new(),
         status: Status::Running,
@@ -211,7 +210,6 @@ pub fn start_pipeline_for_task_with_worktree(
                 error: None,
                 outcome: None,
                 selected_transition: None,
-                traversal_count: 0,
                 attempt: 0,
             })
             .collect(),
@@ -261,7 +259,6 @@ fn pending(step: &PipelineStep) -> StepRun {
         error: None,
         outcome: None,
         selected_transition: None,
-        traversal_count: 0,
         attempt: 0,
     }
 }
@@ -288,7 +285,8 @@ pub(crate) fn execute_graph(
             .find(|s| Some(&s.id) == run.current_step.as_ref())
             .ok_or("Unknown current step")?;
         let previous_output = run.handoff.clone().unwrap_or_else(|| run.task.clone());
-        let input = if run.transition_counts.is_empty() && previous_output == run.task {
+        let input = if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task
+        {
             run.task.clone()
         } else {
             format!(

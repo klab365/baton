@@ -7,8 +7,6 @@ use serde::{Deserialize, Serialize};
 pub struct ProjectConfig {
     pub schema_version: u32,
     pub agents: Vec<Agent>,
-    #[serde(default)]
-    pub runtime_profiles: Vec<crate::domain::runtime_profiles::RuntimeProfile>,
     pub pipelines: Vec<Pipeline>,
     pub skills: Vec<Skill>,
 }
@@ -22,13 +20,20 @@ macro_rules! dto {
 }
 
 dto!(Pipeline { id: String, name: String, steps: Vec<PipelineStep> });
-dto!(Agent {
-    id: String,
-    system_prompt: String,
-    runtime_profile_id: String,
-    rules: Vec<String>,
-    skill_ids: Vec<String>
-});
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent {
+    pub id: String,
+    pub system_prompt: String,
+    #[serde(default)]
+    pub runtime_kind: crate::domain::runtime::RuntimeKind,
+    #[serde(default)]
+    pub model: Option<crate::domain::runtime::RuntimeModel>,
+    #[serde(default)]
+    pub credential_id: Option<String>,
+    pub rules: Vec<String>,
+    pub skill_ids: Vec<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PipelineStep {
@@ -56,13 +61,11 @@ pub enum Outcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Transition {
     pub outcome: Outcome,
     // Null is an explicit terminal transition.
     pub to: Option<String>,
-    // Every edge is bounded, so every possible cycle is bounded.
-    pub max_traversals: u32,
 }
 dto!(Skill {
     id: String,
@@ -72,8 +75,7 @@ dto!(Skill {
 
 impl ProjectConfig {
     pub const CURRENT: Self = Self {
-        schema_version: 6,
-        runtime_profiles: Vec::new(),
+        schema_version: 7,
         agents: Vec::new(),
         pipelines: Vec::new(),
         skills: Vec::new(),
@@ -82,21 +84,30 @@ impl ProjectConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != Self::CURRENT.schema_version {
             return Err(format!(
-                "Unsupported schemaVersion {}; expected 6",
+                "Unsupported schemaVersion {}; expected 7",
                 self.schema_version
             ));
         }
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
         let skills = ids("skills", self.skills.iter().map(|x| x.id.as_str()))?;
         let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
-        let profiles = crate::domain::runtime_profiles::validate(&self.runtime_profiles)?;
         for agent in &self.agents {
             nonempty("agent.systemPrompt", &agent.system_prompt)?;
-            if !profiles.contains(agent.runtime_profile_id.as_str()) {
+            if agent.model.as_ref().is_some_and(|model| {
+                model.provider.trim().is_empty() || model.model.trim().is_empty()
+            }) {
                 return Err(format!(
-                    "Unknown runtime profile {:?}; create a runtime profile in Settings",
-                    agent.runtime_profile_id
+                    "Agent {:?} has an invalid provider or model",
+                    agent.id
                 ));
+            }
+            if agent.credential_id.as_ref().is_some_and(|id| {
+                id.is_empty()
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+            }) {
+                return Err(format!("Agent {:?} has an invalid credential ID", agent.id));
             }
             for rule in &agent.rules {
                 nonempty("agent.rules", rule)?;
@@ -139,9 +150,6 @@ impl ProjectConfig {
                         return Err(format!("{step_path}: ambiguous outcome transition"));
                     }
                     outcomes.push(transition.outcome.clone());
-                    if transition.max_traversals == 0 || transition.max_traversals > 1000 {
-                        return Err(format!("{step_path}: maxTraversals must be 1..1000"));
-                    }
                     if let Some(target) = &transition.to
                         && !pipeline.steps.iter().any(|s| &s.id == target)
                     {
@@ -287,6 +295,55 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
             value["runtimeProfiles"] = serde_json::json!([{"id":"rig.default", "name":"Rig default", "runtimeKind":"rig", "model":null}]);
         }
         value["schemaVersion"] = 6.into();
+    }
+    if value["schemaVersion"].as_u64() == Some(6) {
+        let profiles = value["runtimeProfiles"]
+            .as_array()
+            .ok_or("SchemaVersion 6 configuration has no runtimeProfiles to migrate")?
+            .clone();
+        let mut migrated_agents = Vec::new();
+        if let Some(agents) = value["agents"].as_array() {
+            for agent in agents {
+                let mut agent = agent.clone();
+                let object = agent
+                    .as_object_mut()
+                    .ok_or("Invalid agent while migrating runtime profiles")?;
+                let profile_id = object
+                    .remove("runtimeProfileId")
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .ok_or("Agent is missing runtimeProfileId while migrating schemaVersion 6")?;
+                let profile = profiles
+                    .iter()
+                    .find(|profile| profile["id"].as_str() == Some(profile_id.as_str()))
+                    .ok_or_else(|| {
+                        format!("Agent references missing runtime profile {profile_id:?}")
+                    })?;
+                object.insert(
+                    "runtimeKind".into(),
+                    profile
+                        .get("runtimeKind")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::String("rig".into())),
+                );
+                object.insert(
+                    "model".into(),
+                    profile
+                        .get("model")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                );
+                if let Some(credential_id) = profile.get("credentialId") {
+                    object.insert("credentialId".into(), credential_id.clone());
+                }
+                migrated_agents.push(agent);
+            }
+        }
+        value["agents"] = serde_json::Value::Array(migrated_agents);
+        value
+            .as_object_mut()
+            .ok_or("Invalid project configuration")?
+            .remove("runtimeProfiles");
+        value["schemaVersion"] = 7.into();
     }
     let config: ProjectConfig = serde_json::from_value(value)
         .map_err(|error| format!("Invalid project configuration: {error}"))?;

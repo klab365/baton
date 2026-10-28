@@ -45,7 +45,6 @@ pub async fn mutate(
     repository: &dyn ProjectConfigRepository,
     revision: &str,
     mutation: Mutation,
-    profile_available: impl Fn(&str) -> bool,
 ) -> Result<(), AgentError> {
     let mut snapshot = list(repository).await?;
     if snapshot.revision != revision {
@@ -63,14 +62,12 @@ pub async fn mutate(
             {
                 return Err(AgentError::Conflict("Agent ID already exists".into()));
             }
-            ensure_available(&agent, &profile_available)?;
             snapshot.config.agents.push(agent);
         }
         Mutation::Update(id, agent) => {
             if id != agent.id {
                 return Err(AgentError::Validation("Agent ID cannot be changed".into()));
             }
-            ensure_available(&agent, &profile_available)?;
             let existing = snapshot
                 .config
                 .agents
@@ -121,14 +118,7 @@ async fn mutate_agent_handler(
     repository: AgentRepositoryResource,
     command: MutateAgent,
 ) -> Result<(), AgentError> {
-    let snapshot = list(repository.0.as_ref()).await?;
-    mutate(
-        repository.0.as_ref(),
-        &command.revision,
-        command.mutation,
-        |id| crate::domain::runtime_profiles::resolve(&snapshot.config, id).is_ok(),
-    )
-    .await
+    mutate(repository.0.as_ref(), &command.revision, command.mutation).await
 }
 
 medi_module! {
@@ -137,19 +127,5 @@ medi_module! {
     commands {
         crate::features::agents::ListAgents => crate::features::agents::list_agents_handler;
         crate::features::agents::MutateAgent => crate::features::agents::mutate_agent_handler;
-    }
-}
-
-fn ensure_available(
-    agent: &Agent,
-    profile_available: &impl Fn(&str) -> bool,
-) -> Result<(), AgentError> {
-    if profile_available(&agent.runtime_profile_id) {
-        Ok(())
-    } else {
-        Err(AgentError::Validation(format!(
-            "Runtime profile {:?} is not configured; add it in Settings → Runtime profiles",
-            agent.runtime_profile_id
-        )))
     }
 }

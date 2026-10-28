@@ -1,5 +1,6 @@
 use baton_core::domain::{
-    project as domain, runtime::RuntimeModel as CoreRuntimeModel, runtime_profiles as core_profiles,
+    project as domain,
+    runtime::{RuntimeKind as CoreRuntimeKind, RuntimeModel as CoreRuntimeModel},
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -9,8 +10,6 @@ use ts_rs::TS;
 pub struct ProjectConfig {
     pub schema_version: u32,
     pub agents: Vec<Agent>,
-    #[serde(default)]
-    pub runtime_profiles: Vec<RuntimeProfile>,
     pub pipelines: Vec<Pipeline>,
     pub skills: Vec<Skill>,
 }
@@ -20,7 +19,9 @@ pub struct ProjectConfig {
 pub struct Agent {
     pub id: String,
     pub system_prompt: String,
-    pub runtime_profile_id: String,
+    pub runtime_kind: RuntimeKind,
+    pub model: Option<RuntimeModel>,
+    pub credential_id: Option<String>,
     pub rules: Vec<String>,
     pub skill_ids: Vec<String>,
 }
@@ -60,11 +61,10 @@ pub enum Outcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Transition {
     pub outcome: Outcome,
     pub to: Option<String>,
-    pub max_traversals: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -73,16 +73,6 @@ pub struct Skill {
     pub id: String,
     pub name: String,
     pub instructions: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RuntimeProfile {
-    pub id: String,
-    pub name: String,
-    pub runtime_kind: RuntimeKind,
-    #[serde(default)]
-    pub model: Option<RuntimeModel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -104,7 +94,6 @@ impl From<domain::ProjectConfig> for ProjectConfig {
         Self {
             schema_version: value.schema_version,
             agents: value.agents.into_iter().map(Into::into).collect(),
-            runtime_profiles: value.runtime_profiles.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
             skills: value.skills.into_iter().map(Into::into).collect(),
         }
@@ -116,7 +105,6 @@ impl From<ProjectConfig> for domain::ProjectConfig {
         Self {
             schema_version: value.schema_version,
             agents: value.agents.into_iter().map(Into::into).collect(),
-            runtime_profiles: value.runtime_profiles.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
             skills: value.skills.into_iter().map(Into::into).collect(),
         }
@@ -128,7 +116,9 @@ impl From<domain::Agent> for Agent {
         Self {
             id: value.id,
             system_prompt: value.system_prompt,
-            runtime_profile_id: value.runtime_profile_id,
+            runtime_kind: value.runtime_kind.into(),
+            model: value.model.map(Into::into),
+            credential_id: value.credential_id,
             rules: value.rules,
             skill_ids: value.skill_ids,
         }
@@ -140,7 +130,9 @@ impl From<Agent> for domain::Agent {
         Self {
             id: value.id,
             system_prompt: value.system_prompt,
-            runtime_profile_id: value.runtime_profile_id,
+            runtime_kind: value.runtime_kind.into(),
+            model: value.model.map(Into::into),
+            credential_id: value.credential_id,
             rules: value.rules,
             skill_ids: value.skill_ids,
         }
@@ -226,7 +218,6 @@ impl From<domain::Transition> for Transition {
         Self {
             outcome: value.outcome.into(),
             to: value.to,
-            max_traversals: value.max_traversals,
         }
     }
 }
@@ -236,7 +227,6 @@ impl From<Transition> for domain::Transition {
         Self {
             outcome: value.outcome.into(),
             to: value.to,
-            max_traversals: value.max_traversals,
         }
     }
 }
@@ -261,38 +251,16 @@ impl From<Skill> for domain::Skill {
     }
 }
 
-impl From<core_profiles::RuntimeProfile> for RuntimeProfile {
-    fn from(value: core_profiles::RuntimeProfile) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            runtime_kind: value.runtime_kind.into(),
-            model: value.model.map(Into::into),
-        }
-    }
-}
-
-impl From<RuntimeProfile> for core_profiles::RuntimeProfile {
-    fn from(value: RuntimeProfile) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            runtime_kind: value.runtime_kind.into(),
-            model: value.model.map(Into::into),
-        }
-    }
-}
-
-impl From<core_profiles::RuntimeKind> for RuntimeKind {
-    fn from(value: core_profiles::RuntimeKind) -> Self {
+impl From<CoreRuntimeKind> for RuntimeKind {
+    fn from(value: CoreRuntimeKind) -> Self {
         match value {
-            core_profiles::RuntimeKind::Rig => Self::Rig,
-            core_profiles::RuntimeKind::Fake => Self::Fake,
+            CoreRuntimeKind::Rig => Self::Rig,
+            CoreRuntimeKind::Fake => Self::Fake,
         }
     }
 }
 
-impl From<RuntimeKind> for core_profiles::RuntimeKind {
+impl From<RuntimeKind> for CoreRuntimeKind {
     fn from(value: RuntimeKind) -> Self {
         match value {
             RuntimeKind::Rig => Self::Rig,

@@ -29,9 +29,8 @@ impl ProjectConfigRepository for MemoryRepository {
 
 fn fixture() -> (MemoryRepository, ProjectConfig) {
     let config: ProjectConfig = serde_json::from_str(
-        r#"{"schemaVersion":6,"runtimeProfiles":[{"id":"rig.default","name":"Rig default","runtimeKind":"rig","model":null}],"agents":[{"id":"writer","systemPrompt":"Write clearly","runtimeProfileId":"rig.default","rules":[],"skillIds":[]}],"pipelines":[{"id":"draft","name":"Draft and review","steps":[{"id":"write","name":"Write","agentId":"writer","human":false,"transitions":[]}]}],"skills":[]}"#,
-    )
-    .unwrap();
+        r#"{"schemaVersion":7,"agents":[{"id":"writer","systemPrompt":"Write clearly","runtimeKind":"rig","model":{"provider":"openai","model":"gpt-4.1"},"credentialId":null,"rules":[],"skillIds":[]}],"pipelines":[{"id":"draft","name":"Draft and review","steps":[{"id":"write","name":"Write","agentId":"writer","human":false,"transitions":[]}]}],"skills":[]}"#,
+    ).unwrap();
     (
         MemoryRepository(Mutex::new(ConfigSnapshot {
             config: config.clone(),
@@ -42,22 +41,15 @@ fn fixture() -> (MemoryRepository, ProjectConfig) {
 }
 
 #[tokio::test]
-async fn agents_crud_require_runtime_profiles_and_unreferenced_deletion() {
+async fn agents_can_be_configured_directly_and_unreferenced_agents_deleted() {
     let (repository, original) = fixture();
     let snapshot = agents::list(&repository).await.unwrap();
     let mut agent = original.agents[0].clone();
     agent.id = "new-agent".into();
-    let profile = agent.runtime_profile_id.clone();
-
-    assert!(matches!(
-        agents::mutate(&repository, &snapshot.revision, Mutation::Create(agent.clone()), |_| false).await,
-        Err(AgentError::Validation(message)) if message.contains("not configured")
-    ));
     agents::mutate(
         &repository,
         &snapshot.revision,
         Mutation::Create(agent.clone()),
-        |id| id == profile,
     )
     .await
     .unwrap();
@@ -68,21 +60,19 @@ async fn agents_crud_require_runtime_profiles_and_unreferenced_deletion() {
         &repository,
         &snapshot.revision,
         Mutation::Update(agent.id.clone(), agent.clone()),
-        |_| true,
     )
     .await
     .unwrap();
 
     let snapshot = agents::list(&repository).await.unwrap();
-    assert!(matches!(
-        agents::mutate(&repository, &snapshot.revision, Mutation::Delete("writer".into()), |_| true).await,
-        Err(AgentError::Conflict(message)) if message.contains("Draft and review") && message.contains("Write")
-    ));
+    assert!(
+        matches!(agents::mutate(&repository, &snapshot.revision, Mutation::Delete("writer".into())).await,
+        Err(AgentError::Conflict(message)) if message.contains("Draft and review") && message.contains("Write"))
+    );
     agents::mutate(
         &repository,
         &snapshot.revision,
         Mutation::Delete(agent.id.clone()),
-        |_| true,
     )
     .await
     .unwrap();

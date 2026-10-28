@@ -1,27 +1,23 @@
 {
-	"schemaVersion": 6,
+	"schemaVersion": 7,
 	"agents": [
 		{
 			"id": "writer",
 			"systemPrompt": "Write clearly",
-			"runtimeProfileId": "rig.openai.gpt-4.1",
+			"runtimeKind": "rig",
+			"model": { "provider": "openai", "model": "gpt-4.1" },
+			"credentialId": null,
 			"rules": [],
 			"skillIds": []
 		},
 		{
 			"id": "reviewer",
 			"systemPrompt": "Review carefully",
-			"runtimeProfileId": "rig.openai.gpt-4.1",
+			"runtimeKind": "rig",
+			"model": { "provider": "openai", "model": "gpt-4.1" },
+			"credentialId": null,
 			"rules": [],
 			"skillIds": []
-		}
-	],
-	"runtimeProfiles": [
-		{
-			"id": "rig.openai.gpt-4.1",
-			"name": "Rig · openai · gpt-4.1",
-			"runtimeKind": "rig",
-			"model": { "provider": "openai", "model": "gpt-4.1" }
 		}
 	],
 	"pipelines": [
@@ -29,20 +25,8 @@
 			"id": "draft",
 			"name": "Draft and review",
 			"steps": [
-				{
-					"id": "write",
-					"name": "Write",
-					"agentId": "writer",
-					"human": false,
-					"transitions": []
-				},
-				{
-					"id": "review",
-					"name": "Review",
-					"agentId": "reviewer",
-					"human": false,
-					"transitions": []
-				}
+				{ "id": "write", "name": "Write", "agentId": "writer", "human": false, "transitions": [] },
+				{ "id": "review", "name": "Review", "agentId": "reviewer", "human": false, "transitions": [] }
 			]
 		}
 	],

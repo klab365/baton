@@ -28,7 +28,7 @@ async fn json(response: axum::response::Response) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn agent_routes_enforce_runtime_profiles_and_pipeline_references() {
+async fn agent_routes_accept_direct_runtime_configuration_and_enforce_pipeline_references() {
     let directory = fixture();
     let app = router(AppState::new(directory.clone()));
 
@@ -39,13 +39,13 @@ async fn agent_routes_enforce_runtime_profiles_and_pipeline_references() {
         .unwrap();
     assert_eq!(listing.status(), StatusCode::OK);
     let listing = json(listing).await;
-    assert_eq!(listing["runtimeProfiles"][0]["id"], "rig.openai.gpt-4.1");
+    assert!(listing.get("runtimeProfiles").is_none());
     let revision = listing["revision"].as_str().unwrap();
     let config: ProjectConfig =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     let mut agent: Agent = config.agents[0].clone();
     agent.id = "new-agent".into();
-    agent.runtime_profile_id = "missing".into();
+    agent.model.as_mut().unwrap().provider.clear();
 
     let response = app
         .clone()
@@ -61,7 +61,7 @@ async fn agent_routes_enforce_runtime_profiles_and_pipeline_references() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    agent.runtime_profile_id = "rig.openai.gpt-4.1".into();
+    agent.model.as_mut().unwrap().provider = "openai".into();
     let response = app
         .clone()
         .oneshot(

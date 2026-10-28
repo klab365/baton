@@ -1,4 +1,4 @@
-use crate::api::dto::{Agent as AgentDto, RuntimeProfile as RuntimeProfileDto, Skill as SkillDto};
+use crate::api::dto::{Agent as AgentDto, Skill as SkillDto};
 use crate::{ApiError, AppState, StatusCode};
 use axum::{
     Json, Router,
@@ -23,12 +23,10 @@ impl From<AgentError> for ApiError {
 
 async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let snapshot = state.mediator.send(ListAgents).await?;
-    let profiles = baton_core::domain::runtime_profiles::list(&snapshot.config);
     Ok(Json(serde_json::json!({
         "revision": snapshot.revision,
         "agents": snapshot.config.agents.into_iter().map(AgentDto::from).collect::<Vec<_>>(),
         "skills": snapshot.config.skills.into_iter().map(SkillDto::from).collect::<Vec<_>>(),
-        "runtimeProfiles": profiles.into_iter().map(RuntimeProfileDto::from).collect::<Vec<_>>(),
     })))
 }
 

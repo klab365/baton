@@ -32,21 +32,7 @@ pub(crate) fn route(
             run.steps[index].error = Some("No configured transition for outcome".into());
             return Ok(());
         };
-        let key = format!(
-            "{}:{}",
-            step.id,
-            serde_json::to_string(&outcome).map_err(|error| error.to_string())?
-        );
-        let count = run.transition_counts.entry(key).or_default();
         run.steps[index].selected_transition = Some(transition.clone());
-        if *count >= transition.max_traversals {
-            run.status = Status::LimitExhausted;
-            run.steps[index].traversal_count = *count;
-            run.steps[index].error = Some("Transition limit exhausted. Inspect attempts and start a new run after correcting the task or pipeline; no automatic retry.".into());
-            return Ok(());
-        }
-        *count += 1;
-        run.steps[index].traversal_count = *count;
         transition.to.clone()
     };
     run.current_step = next;

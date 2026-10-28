@@ -197,7 +197,6 @@ mod tests {
             steps: vec![],
             config_snapshot: None,
             current_step: None,
-            transition_counts: Default::default(),
             handoff: None,
             pending_actions: vec![],
         };

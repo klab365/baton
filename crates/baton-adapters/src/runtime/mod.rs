@@ -1,7 +1,7 @@
+mod configured;
 mod fake;
-mod profiles;
 mod rig;
 
+pub use configured::{ConfiguredRuntime, ConfiguredRuntimeFactory};
 pub use fake::FakeRuntime;
-pub use profiles::{ProfileRuntime, ProfileRuntimeFactory};
 pub use rig::RigRuntime;

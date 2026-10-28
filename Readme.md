@@ -17,7 +17,7 @@ Application use cases and domain (crates/baton-core)
 Filesystem configuration (.baton/config.json)
 ```
 
-The Rust workspace is organized as a modular monolith. The web UI is a separate client; it does not own project persistence or domain rules. Pipeline orchestration is implemented through a replaceable `AgentRuntime` port. Agents select reusable runtime profiles; the embedded Rig profile contract is ready for its adapter integration. The deterministic fake runtime requires explicit selection for offline tests. Setup, breaking migration, and security boundaries are documented in [docs/orchestration.md](docs/orchestration.md).
+The Rust workspace is organized as a modular monolith. The web UI is a separate client; it does not own project persistence or domain rules. Pipeline orchestration is implemented through a replaceable `AgentRuntime` port. Each agent directly selects its provider/model and reusable local credential. The deterministic fake runtime is available for offline tests. Setup, breaking migration, and security boundaries are documented in [docs/orchestration.md](docs/orchestration.md).
 
 ## Development
 
@@ -29,7 +29,7 @@ bun install
 mise run dev
 ```
 
-The Axum API listens on `127.0.0.1:5173`; Vite serves the UI at `127.0.0.1:5174`. The demo project configuration is versioned at `examples/demo/.baton/config.json`. See [runtime orchestration](docs/orchestration.md) for runtime-profile setup and the isolated artifact-writing/review pipeline.
+The Axum API listens on `127.0.0.1:5173`; Vite serves the UI at `127.0.0.1:5174`. The demo project configuration is versioned at `examples/demo/.baton/config.json`. See [runtime orchestration](docs/orchestration.md) for agent runtime setup and the isolated artifact-writing/review pipeline.
 
 ## Checks
 
@@ -59,4 +59,4 @@ The first UI setup action creates `.baton/config.json` through the backend API. 
 
 ## Current status
 
-The backend and UI support project configuration, reusable agents/runtime profiles, pipelines, tasks, isolated runs, runtime-profile configuration, isolated runs, and human decisions. Baton never manages provider credentials. Remote execution targets are not implemented.
+The backend and UI support project configuration, agents with direct provider/model and credential selection, pipelines, tasks, isolated runs, local credential management, and human decisions. Remote execution targets are not implemented.
