@@ -193,6 +193,7 @@ mod tests {
             ended_at: Some("2026-01-01T00:00:01Z".into()),
             duration_ms: Some(1),
             events: vec![],
+            trace: vec![],
             status: Status::Cancelled,
             steps: vec![],
             config_snapshot: None,

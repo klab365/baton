@@ -1,4 +1,5 @@
 use baton_core::{
+    domain::pipeline::RunTraceEntry,
     domain::{
         project::{Agent, Outcome, ProjectConfig},
         runtime::RuntimeKind,
@@ -12,6 +13,7 @@ pub struct ConfiguredRuntime {
     config: ProjectConfig,
     fake: super::FakeRuntime,
     decision: Option<AgentDecision>,
+    trace: Vec<RunTraceEntry>,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     auth_root: std::path::PathBuf,
 }
@@ -25,6 +27,7 @@ impl ConfiguredRuntime {
             config,
             fake: super::FakeRuntime::default(),
             decision: None,
+            trace: Vec::new(),
             credentials,
             auth_root,
         }
@@ -80,6 +83,7 @@ impl AgentRuntime for ConfiguredRuntime {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<String, String> {
         self.decision = None;
+        self.trace.clear();
         match agent.runtime_kind {
             RuntimeKind::Rig => {
                 let runtime_credential = if let Some(id) = agent.credential_id.as_deref() {
@@ -93,7 +97,7 @@ impl AgentRuntime for ConfiguredRuntime {
                 } else {
                     None
                 };
-                let (output, decision) = super::rig::RigRuntime::execute(
+                let (output, decision, trace) = super::rig::RigRuntime::execute(
                     directory,
                     agent,
                     &self.config.skills,
@@ -110,6 +114,7 @@ impl AgentRuntime for ConfiguredRuntime {
                     cancelled,
                 )?;
                 self.decision = decision;
+                self.trace = trace;
                 Ok(output)
             }
             RuntimeKind::Fake => self
@@ -119,5 +124,8 @@ impl AgentRuntime for ConfiguredRuntime {
     }
     fn take_decision(&mut self) -> Option<AgentDecision> {
         self.decision.take()
+    }
+    fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+        std::mem::take(&mut self.trace)
     }
 }

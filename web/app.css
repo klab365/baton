@@ -382,6 +382,80 @@ select option {
 	display: grid;
 	gap: 1rem;
 }
+.run-overview {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	align-items: center;
+	margin-bottom: 1rem;
+	padding: 1rem 1.1rem;
+	border: 1px solid #3c4560;
+	border-radius: 0.6rem;
+	background: #202638;
+}
+.run-overview > div:first-child {
+	display: grid;
+	gap: 0.45rem;
+}
+.run-overview-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.8rem;
+}
+.run-graph {
+	display: grid;
+	gap: 0.55rem;
+	padding-left: 1.35rem;
+}
+.run-graph li {
+	padding: 0.35rem 0.55rem;
+	border-left: 3px solid #4a4b53;
+}
+.run-graph li.current {
+	border-color: #7897e8;
+	background: #202638;
+}
+.run-graph span {
+	display: block;
+	color: #b8b9c0;
+	font-size: 0.85rem;
+}
+.run-steps li {
+	padding: 0.85rem;
+	border: 1px solid #303137;
+	border-radius: 0.5rem;
+	background: #191a1e;
+}
+.run-steps li > header {
+	display: flex;
+	justify-content: space-between;
+	gap: 0.75rem;
+	align-items: center;
+}
+.run-steps details,
+.run-events details {
+	margin-top: 0.65rem;
+}
+.run-steps summary,
+.run-events summary {
+	cursor: pointer;
+	color: #b9ccff;
+	font-weight: 650;
+}
+.run-steps pre,
+.run-events pre {
+	margin: 0.55rem 0 0;
+	border: 1px solid #3b3c45;
+	background: #111217;
+	color: #f1f3f8;
+	line-height: 1.55;
+}
+@media (max-width: 600px) {
+	.run-overview {
+		align-items: stretch;
+		flex-direction: column;
+	}
+}
 .run-list,
 .run-steps,
 .run-events {
