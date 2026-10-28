@@ -2,7 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use baton_core::project::{Agent, ProjectConfig};
+use baton_core::domain::project::{Agent, ProjectConfig};
 use baton_server::{AppState, router};
 use tower::ServiceExt;
 

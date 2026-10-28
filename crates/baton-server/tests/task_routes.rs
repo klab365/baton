@@ -2,7 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use baton_core::orchestration::RunRepository;
+use baton_core::ports::runs::RunRepository;
 use baton_server::{AppState, router};
 use std::sync::OnceLock;
 use tower::ServiceExt;
@@ -105,10 +105,7 @@ async fn tasks_do_not_depend_on_obsolete_local_provider_settings() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    assert_eq!(
-        json(response).await["configSnapshot"]["agents"][0]["runtimeProfileId"],
-        "rig.openai.gpt-4.1"
-    );
+    assert!(json(response).await.get("configSnapshot").is_none());
     unsafe {
         std::env::remove_var("BATON_PROVIDER_DIR");
     }
@@ -163,7 +160,15 @@ async fn task_routes_return_http_contracts() {
     let task = json(response).await;
     let id = task["id"].as_str().unwrap().to_owned();
     assert_eq!(task["status"], "draft");
-    assert_eq!(task["configSnapshot"]["pipelines"][0]["id"], "draft");
+    assert!(task.get("configSnapshot").is_none());
+
+    let response = app
+        .clone()
+        .oneshot(Request::get("/api/tasks").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json(response).await[0]["id"], id);
 
     let response = app
         .clone()
@@ -202,6 +207,21 @@ async fn task_routes_return_http_contracts() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(json(response).await["events"].as_array().unwrap().len() >= 2);
+    let first_worktree = run["worktree"]["path"].clone();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/tasks/{id}/runs"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let second_run = json(response).await;
+    assert_eq!(second_run["worktree"]["path"], first_worktree);
+    let second_run_id = second_run["id"].as_str().unwrap();
 
     let response = app
         .clone()
@@ -217,8 +237,18 @@ async fn task_routes_return_http_contracts() {
     let updated = json(response).await;
     assert_eq!(updated["title"], "Updated feature");
     assert_eq!(updated["status"], "done");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/tasks/{id}/runs"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     let completed_run =
-        baton_adapters::filesystem_run_repository::FilesystemRunRepository(directory.clone())
+        baton_adapters::repositories::filesystem_run::FilesystemRunRepository(directory.clone())
             .load(run_id)
             .unwrap();
     assert_eq!(
@@ -226,6 +256,14 @@ async fn task_routes_return_http_contracts() {
         "removed"
     );
     assert!(!completed_run.worktree.as_ref().unwrap().path.exists());
+    let second_completed =
+        baton_adapters::repositories::filesystem_run::FilesystemRunRepository(directory.clone())
+            .load(second_run_id)
+            .unwrap();
+    assert_eq!(
+        second_completed.worktree.as_ref().unwrap().lifecycle,
+        "removed"
+    );
 
     let response = app
         .clone()

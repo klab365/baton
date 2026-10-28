@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use baton_core::{
-    agents::{self, AgentError, Mutation},
-    project::{ConfigSnapshot, ConfigState, ProjectConfig},
-    project_config::ProjectConfigRepository,
+    domain::project::{ConfigSnapshot, ConfigState, ProjectConfig},
+    features::agents::{self, AgentError, Mutation},
+    ports::project_config::ProjectConfigRepository,
 };
 use std::sync::Mutex;
 

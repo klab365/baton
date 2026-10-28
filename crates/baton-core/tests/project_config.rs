@@ -1,4 +1,4 @@
-use baton_core::project::{ProjectConfig, parse_config};
+use baton_core::domain::project::{ProjectConfig, parse_config};
 
 fn example() -> serde_json::Value {
     serde_json::json!({
@@ -29,6 +29,35 @@ fn migrates_only_exact_legacy_marker() {
     ] {
         assert!(parse_config(input).is_err(), "{input}");
     }
+}
+
+#[test]
+fn demo_commit_agent_pipeline_is_valid_and_commits_before_human_approval() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/demo/.baton/config.json");
+    let source = std::fs::read_to_string(path).unwrap();
+    let config = parse_config(&source).unwrap();
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == "draft")
+        .unwrap();
+    let commit = pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == "commit-message")
+        .unwrap();
+    assert_eq!(commit.agent_id, "commit-agent");
+    assert_eq!(commit.transitions[0].to.as_deref(), Some("human-decision"));
+    let review = pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == "review")
+        .unwrap();
+    assert!(review.transitions.iter().any(|transition| {
+        transition.outcome == baton_core::domain::project::Outcome::Approved
+            && transition.to.as_deref() == Some("commit-message")
+    }));
 }
 
 #[test]

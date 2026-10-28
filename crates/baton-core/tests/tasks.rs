@@ -1,4 +1,4 @@
-use baton_core::{
+use baton_core::domain::{
     project::ProjectConfig,
     tasks::{Task, TaskInput, TaskStatus},
 };
@@ -18,7 +18,7 @@ fn input(pipeline_id: &str) -> TaskInput {
 }
 
 #[test]
-fn tasks_validate_inputs_and_preserve_snapshots_until_pipeline_changes() {
+fn tasks_validate_inputs_without_storing_project_configuration() {
     let config = config();
     let pipeline = config.pipelines[0].id.clone();
     assert!(
@@ -50,12 +50,12 @@ fn tasks_validate_inputs_and_preserve_snapshots_until_pipeline_changes() {
     )
     .unwrap();
     assert!(matches!(task.status, TaskStatus::Draft));
-    let original = task.config_snapshot.clone();
     let mut changed = config;
     changed.pipelines[0].name = "Changed".into();
     task.update(input(&pipeline), changed, "2025-01-02T00:00:00.000Z".into())
         .unwrap();
-    assert_eq!(task.config_snapshot, original);
+    let serialized = serde_json::to_value(&task).unwrap();
+    assert!(serialized.get("configSnapshot").is_none());
     assert_eq!(task.created_at, "2025-01-01T00:00:00.000Z");
     assert_eq!(task.updated_at, "2025-01-02T00:00:00.000Z");
 }

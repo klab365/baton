@@ -20,7 +20,7 @@ let { data } = $props();
 				{#each data.tasks as task}
 					<tr ondblclick={() => goto(`/tasks/${task.id}#edit`)}>
 						<th scope="row"><a class="task-table-title" href="/tasks/{task.id}#edit">{task.title}</a></th>
-						<td data-label="Pipeline"><span class="task-pipeline-name">{task.configSnapshot.pipelines.find((pipeline: { id: string }) => pipeline.id === task.pipelineId)?.name ?? "Unavailable pipeline"}</span><span class="task-pipeline-id">{task.pipelineId}</span></td>
+						<td data-label="Pipeline"><span class="task-pipeline-name">{data.project.config?.pipelines.find((pipeline: { id: string }) => pipeline.id === task.pipelineId)?.name ?? "Unavailable pipeline"}</span><span class="task-pipeline-id">{task.pipelineId}</span></td>
 						<td data-label="Status"><span class="task-status">{task.status}</span></td>
 						<td data-label="Updated"><time datetime={task.updatedAt}>{new Date(task.updatedAt).toLocaleDateString()}</time></td>
 					</tr>

@@ -2,6 +2,9 @@ use std::{env, path::PathBuf};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
     let project_dir = env::var_os("BATON_PROJECT_DIR")
         .map(PathBuf::from)
         .unwrap_or(env::current_dir()?);
