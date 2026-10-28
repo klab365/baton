@@ -9,10 +9,19 @@ import Field from "../../components/Field.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import type { Agent } from "../../lib/generated/Agent";
 
-type Credential = { id: string; name: string; credentialType: string; status: string };
+type Credential = {
+	id: string;
+	name: string;
+	credentialType: string;
+	status: string;
+};
 type CredentialType = { id: string; label: string; provider: string | null };
 type ModelOption = { id: string; label: string };
-type Configuration = { revision: string; agents: Agent[]; skills: { id: string; name: string }[] };
+type Configuration = {
+	revision: string;
+	agents: Agent[];
+	skills: { id: string; name: string }[];
+};
 let { data } = $props();
 const config = $derived(data.configuration as Configuration | null);
 let draft = $state<Agent | null>(null);
@@ -29,7 +38,10 @@ let modelsError = $state("");
 function open(agent?: Agent) {
 	if (!config) return;
 	draft = agent
-		? { ...structuredClone(agent), model: agent.model ?? { provider: "", model: "" } }
+		? {
+				...structuredClone(agent),
+				model: agent.model ?? { provider: "", model: "" },
+			}
 		: {
 				id: crypto.randomUUID(),
 				systemPrompt: "",
@@ -52,19 +64,34 @@ async function loadModels(credentialId: string) {
 	modelsError = "";
 	models = [];
 	try {
-		const response = await fetch(`/api/credentials/${encodeURIComponent(credentialId)}/models`);
-		if (!response.ok) throw new Error((await response.json()).error ?? "Could not list models");
+		const response = await fetch(
+			`/api/credentials/${encodeURIComponent(credentialId)}/models`,
+		);
+		if (!response.ok)
+			throw new Error((await response.json()).error ?? "Could not list models");
 		models = await response.json();
-		if (draft?.credentialId === credentialId && draft.model && !models.some((model) => model.id === draft?.model?.model)) draft.model.model = "";
+		if (
+			draft?.credentialId === credentialId &&
+			draft.model &&
+			!models.some((model) => model.id === draft?.model?.model)
+		)
+			draft.model.model = "";
 	} catch (cause) {
-		modelsError = cause instanceof Error ? cause.message : "Could not list models";
-	} finally { modelsLoading = false; }
+		modelsError =
+			cause instanceof Error ? cause.message : "Could not list models";
+	} finally {
+		modelsLoading = false;
+	}
 }
 async function selectCredential(credentialId: string) {
 	if (!draft) return;
 	draft.credentialId = credentialId || null;
-	const credential = (data.credentials as Credential[]).find((item) => item.id === credentialId);
-	const type = (data.credentialTypes as CredentialType[]).find((item) => item.id === credential?.credentialType);
+	const credential = (data.credentials as Credential[]).find(
+		(item) => item.id === credentialId,
+	);
+	const type = (data.credentialTypes as CredentialType[]).find(
+		(item) => item.id === credential?.credentialType,
+	);
 	draft.model = { provider: type?.provider ?? "", model: "" };
 	if (credentialId) await loadModels(credentialId);
 	else models = [];

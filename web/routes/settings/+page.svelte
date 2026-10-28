@@ -3,8 +3,24 @@ import Button from "../../components/Button.svelte";
 import DetailPanel from "../../components/DetailPanel.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 let { data } = $props();
-type Credential = { id: string; name: string; credentialType: string; status: "available" | "missing_secret" | "unavailable" };
-type CredentialType = { id: string; label: string; authentication: "secret_input" | "device_code"; supportsTest: boolean; configurationFields: { id: string; label: string; required: boolean; secret: boolean }[] };
+type Credential = {
+	id: string;
+	name: string;
+	credentialType: string;
+	status: "available" | "missing_secret" | "unavailable";
+};
+type CredentialType = {
+	id: string;
+	label: string;
+	authentication: "secret_input" | "device_code";
+	supportsTest: boolean;
+	configurationFields: {
+		id: string;
+		label: string;
+		required: boolean;
+		secret: boolean;
+	}[];
+};
 let credentials = $state<Credential[]>([]);
 let credentialTypes = $state<CredentialType[]>([]);
 let credentialName = $state("");
@@ -12,64 +28,125 @@ let credentialType = $state("");
 let credentialSecret = $state("");
 let credentialConfiguration = $state<Record<string, string>>({});
 let authCredentialId = $state("");
-let authStatus = $state<{ status: string; verificationUri?: string; userCode?: string; message?: string } | null>(null);
+let authStatus = $state<{
+	status: string;
+	verificationUri?: string;
+	userCode?: string;
+	message?: string;
+} | null>(null);
 let authTimer: ReturnType<typeof setTimeout> | undefined;
 let error = $state("");
 let busy = $state(false);
 async function load() {
 	busy = true;
 	try {
-		const [credentialResponse, typeResponse] = await Promise.all([fetch("/api/credentials"), fetch("/api/credential-types")]);
-		if (!credentialResponse.ok || !typeResponse.ok) throw new Error("Could not load credentials");
+		const [credentialResponse, typeResponse] = await Promise.all([
+			fetch("/api/credentials"),
+			fetch("/api/credential-types"),
+		]);
+		if (!credentialResponse.ok || !typeResponse.ok)
+			throw new Error("Could not load credentials");
 		credentials = await credentialResponse.json();
 		credentialTypes = await typeResponse.json();
 		credentialType ||= credentialTypes[0]?.id ?? "";
 	} catch (cause) {
-		error = cause instanceof Error ? cause.message : "Credential loading failed";
-	} finally { busy = false; }
+		error =
+			cause instanceof Error ? cause.message : "Credential loading failed";
+	} finally {
+		busy = false;
+	}
 }
 async function pollAuthentication() {
 	if (!authCredentialId) return;
 	try {
-		const response = await fetch(`/api/credentials/${encodeURIComponent(authCredentialId)}/authentication`);
+		const response = await fetch(
+			`/api/credentials/${encodeURIComponent(authCredentialId)}/authentication`,
+		);
 		if (!response.ok) throw new Error("Could not read authentication status");
 		authStatus = await response.json();
 		if (authStatus?.status === "available") await load();
-		else if (["pending", "not_started"].includes(authStatus?.status ?? "")) authTimer = setTimeout(pollAuthentication, 2000);
-	} catch (cause) { error = cause instanceof Error ? cause.message : "Authentication status failed"; }
+		else if (["pending", "not_started"].includes(authStatus?.status ?? ""))
+			authTimer = setTimeout(pollAuthentication, 2000);
+	} catch (cause) {
+		error =
+			cause instanceof Error ? cause.message : "Authentication status failed";
+	}
 }
 async function startAuthentication() {
 	if (!credentialName.trim()) return;
 	error = "";
-	if (authStatus?.status !== "failed" || !authCredentialId) authCredentialId = crypto.randomUUID();
+	if (authStatus?.status !== "failed" || !authCredentialId)
+		authCredentialId = crypto.randomUUID();
 	authStatus = { status: "starting" };
 	try {
-		const response = await fetch(`/api/credentials/${encodeURIComponent(authCredentialId)}/authenticate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: credentialName.trim() }) });
-		if (!response.ok) throw new Error((await response.json()).error ?? "Could not start authentication");
+		const response = await fetch(
+			`/api/credentials/${encodeURIComponent(authCredentialId)}/authenticate`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: credentialName.trim() }),
+			},
+		);
+		if (!response.ok)
+			throw new Error(
+				(await response.json()).error ?? "Could not start authentication",
+			);
 		authStatus = await response.json();
 		credentialName = "";
 		await load();
-		if (authStatus?.status === "pending") authTimer = setTimeout(pollAuthentication, 1500);
-	} catch (cause) { error = cause instanceof Error ? cause.message : "Authentication failed"; }
+		if (authStatus?.status === "pending")
+			authTimer = setTimeout(pollAuthentication, 1500);
+	} catch (cause) {
+		error = cause instanceof Error ? cause.message : "Authentication failed";
+	}
 }
 async function saveCredential() {
 	if (!credentialName.trim() || !credentialType || !credentialSecret) return;
-	await mutate(`/api/credentials/${encodeURIComponent(crypto.randomUUID())}`, "PUT", { name: credentialName.trim(), credentialType, configuration: credentialConfiguration, secret: credentialSecret });
-	credentialName = ""; credentialSecret = ""; credentialConfiguration = {};
+	await mutate(
+		`/api/credentials/${encodeURIComponent(crypto.randomUUID())}`,
+		"PUT",
+		{
+			name: credentialName.trim(),
+			credentialType,
+			configuration: credentialConfiguration,
+			secret: credentialSecret,
+		},
+	);
+	credentialName = "";
+	credentialSecret = "";
+	credentialConfiguration = {};
 }
 async function deleteCredential(credential: Credential) {
-	await mutate(`/api/credentials/${encodeURIComponent(credential.id)}`, "DELETE", {});
+	await mutate(
+		`/api/credentials/${encodeURIComponent(credential.id)}`,
+		"DELETE",
+		{},
+	);
 }
 async function mutate(url: string, method: string, body: unknown) {
-	busy = true; error = "";
+	busy = true;
+	error = "";
 	try {
-		const response = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-		if (!response.ok) throw new Error((await response.json()).error ?? "Could not update credential");
+		const response = await fetch(url, {
+			method,
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		if (!response.ok)
+			throw new Error(
+				(await response.json()).error ?? "Could not update credential",
+			);
 		await load();
-	} catch (cause) { error = cause instanceof Error ? cause.message : "Credential update failed"; }
-	finally { busy = false; }
+	} catch (cause) {
+		error = cause instanceof Error ? cause.message : "Credential update failed";
+	} finally {
+		busy = false;
+	}
 }
-$effect(() => { load(); return () => clearTimeout(authTimer); });
+$effect(() => {
+	load();
+	return () => clearTimeout(authTimer);
+});
 </script>
 
 <svelte:head><title>Settings · Baton</title></svelte:head>

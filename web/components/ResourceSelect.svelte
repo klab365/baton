@@ -28,7 +28,9 @@ let {
 	onValueChange?: (value: string) => void;
 } = $props();
 const Icon = $derived(Box);
-const groupLabel = $derived(kind === "agent" ? "Configured agents" : "Pipelines");
+const groupLabel = $derived(
+	kind === "agent" ? "Configured agents" : "Pipelines",
+);
 </script>
 
 <Select.Root bind:value {name} {required} {disabled} {onValueChange} type="single">

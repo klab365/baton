@@ -6,6 +6,8 @@ export const GET: RequestHandler = async ({ fetch }) => {
 	);
 	return new Response(response.body, {
 		status: response.status,
-		headers: { "Content-Type": response.headers.get("Content-Type") ?? "text/plain" },
+		headers: {
+			"Content-Type": response.headers.get("Content-Type") ?? "text/plain",
+		},
 	});
 };

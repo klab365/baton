@@ -25,8 +25,20 @@
 			"id": "draft",
 			"name": "Draft and review",
 			"steps": [
-				{ "id": "write", "name": "Write", "agentId": "writer", "human": false, "transitions": [] },
-				{ "id": "review", "name": "Review", "agentId": "reviewer", "human": false, "transitions": [] }
+				{
+					"id": "write",
+					"name": "Write",
+					"agentId": "writer",
+					"human": false,
+					"transitions": []
+				},
+				{
+					"id": "review",
+					"name": "Review",
+					"agentId": "reviewer",
+					"human": false,
+					"transitions": []
+				}
 			]
 		}
 	],
