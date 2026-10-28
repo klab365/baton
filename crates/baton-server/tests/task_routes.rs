@@ -164,6 +164,18 @@ async fn task_routes_return_http_contracts() {
 
     let response = app
         .clone()
+        .oneshot(
+            Request::put(format!("/api/tasks/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({ "title": "Implement feature", "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft", "status": "done" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
         .oneshot(Request::get("/api/tasks").body(Body::empty()).unwrap())
         .await
         .unwrap();
