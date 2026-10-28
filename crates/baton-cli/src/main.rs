@@ -27,7 +27,6 @@ async fn main() -> anyhow::Result<()> {
                 let input = baton_core::domain::tasks::TaskInput {
                     title: task.title.clone(),
                     description: task.description.clone(),
-                    acceptance_criteria: task.acceptance_criteria.clone(),
                     pipeline_id: task.pipeline_id.clone(),
                     status: baton_core::domain::tasks::TaskStatus::Done,
                 };

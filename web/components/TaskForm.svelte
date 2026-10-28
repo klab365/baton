@@ -16,14 +16,12 @@ let {
 		id: string;
 		title: string;
 		description: string;
-		acceptanceCriteria: string;
 		pipelineId: string;
 		status: "draft" | "doing" | "done";
 	};
 } = $props();
 let title = $state(untrack(() => task?.title ?? ""));
 let description = $state(untrack(() => task?.description ?? ""));
-let acceptanceCriteria = $state(untrack(() => task?.acceptanceCriteria ?? ""));
 let pipelineId = $state(untrack(() => task?.pipelineId ?? ""));
 let status = $state(untrack(() => task?.status ?? "draft"));
 let error = $state("");
@@ -41,7 +39,6 @@ async function save(event: SubmitEvent) {
 				body: JSON.stringify({
 					title,
 					description,
-					acceptanceCriteria,
 					pipelineId,
 					status,
 				}),
@@ -71,11 +68,8 @@ async function save(event: SubmitEvent) {
 		<Field label="Title" for="title" hint="A short name for this task." required>
 			{#snippet children({ describedBy, invalid })}<input id="title" name="title" bind:value={title} placeholder="e.g. Add user authentication" aria-describedby={describedBy} aria-invalid={invalid} required />{/snippet}
 		</Field>
-		<Field label="Description" for="description" hint="Describe the task and include any relevant context." required>
+		<Field label="Description" for="description" hint="Describe the task, including context and acceptance criteria." required>
 			{#snippet children({ describedBy, invalid })}<MultilineInput id="description" name="description" bind:value={description} rows={6} placeholder="What needs to be done? Include background or constraints…" {describedBy} {invalid} />{/snippet}
-		</Field>
-		<Field label="Acceptance criteria" for="acceptanceCriteria" hint="How will you know this task is complete?">
-			{#snippet children({ describedBy, invalid })}<MultilineInput id="acceptanceCriteria" name="acceptanceCriteria" bind:value={acceptanceCriteria} rows={4} placeholder="List the outcomes or conditions that define completion…" {describedBy} {invalid} />{/snippet}
 		</Field>
 		<Field label="Pipeline" for="pipeline" hint="The selected pipeline is captured with this task." required>
 			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}

@@ -131,10 +131,7 @@ pub fn start_task_run(
             worktree
         }
     };
-    let prompt = format!(
-        "{}\n\nAcceptance criteria:\n{}",
-        task.description, task.acceptance_criteria,
-    );
+    let prompt = task.description.clone();
     let previous_status = task.status;
     task.status = TaskStatus::Doing;
     task.updated_at = utc_now().max(task.updated_at.clone());

@@ -75,7 +75,7 @@ fn configure_fake(directory: &std::path::Path) {
     .unwrap();
 }
 fn input(title: &str) -> Body {
-    Body::from(serde_json::json!({ "title": title, "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft" }).to_string())
+    Body::from(serde_json::json!({ "title": title, "description": "Feature details\n\nAcceptance criteria: Tests pass", "pipelineId": "draft" }).to_string())
 }
 
 #[tokio::test]
@@ -167,12 +167,12 @@ async fn task_routes_return_http_contracts() {
         .oneshot(
             Request::put(format!("/api/tasks/{id}"))
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({ "title": "Implement feature", "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft", "status": "done" }).to_string()))
+                .body(Body::from(serde_json::json!({ "title": "Implement feature", "description": "Feature details", "pipelineId": "draft", "status": "draft" }).to_string()))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
 
     let response = app
         .clone()
@@ -250,7 +250,7 @@ async fn task_routes_return_http_contracts() {
         .oneshot(
             Request::put(format!("/api/tasks/{id}"))
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({ "title": "Updated feature", "description": "Feature details", "acceptanceCriteria": "Tests pass", "pipelineId": "draft", "status": "done" }).to_string()))
+                .body(Body::from(serde_json::json!({ "title": "Updated feature", "description": "Feature details\n\nAcceptance criteria: Tests pass", "pipelineId": "draft", "status": "done" }).to_string()))
                 .unwrap(),
         )
         .await

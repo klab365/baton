@@ -10,8 +10,7 @@ fn config() -> ProjectConfig {
 fn input(pipeline_id: &str) -> TaskInput {
     TaskInput {
         title: "Implement a feature".into(),
-        description: "Feature details".into(),
-        acceptance_criteria: "Tests pass".into(),
+        description: "Feature details\n\nAcceptance criteria: tests pass".into(),
         pipeline_id: pipeline_id.into(),
         status: TaskStatus::Draft,
     }
