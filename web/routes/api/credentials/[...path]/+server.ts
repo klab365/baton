@@ -5,11 +5,11 @@ const proxy: RequestHandler = async ({ params, fetch, request }) => {
 		? `/${params.path.split("/").map(encodeURIComponent).join("/")}`
 		: "";
 	const response = await fetch(
-		`${process.env.BATON_API_URL ?? "http://127.0.0.1:5173"}/api/runtime-profiles${suffix}`,
+		`${process.env.BATON_API_URL ?? "http://127.0.0.1:5173"}/api/credentials${suffix}`,
 		{
 			method: request.method,
 			headers: { "Content-Type": "application/json" },
-			body: ["PUT", "DELETE"].includes(request.method)
+			body: ["PUT", "POST", "DELETE"].includes(request.method)
 				? await request.text()
 				: undefined,
 		},
@@ -23,4 +23,5 @@ const proxy: RequestHandler = async ({ params, fetch, request }) => {
 };
 export const GET = proxy;
 export const PUT = proxy;
+export const POST = proxy;
 export const DELETE = proxy;

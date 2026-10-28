@@ -1,31 +1,42 @@
 use baton_core::{
     domain::{
         project::{Agent, Outcome, ProjectConfig},
-        runtime_profiles::{self, RuntimeKind},
+        runtime::RuntimeKind,
     },
     ports::runtime::{AgentDecision, AgentRuntime, AgentRuntimeFactory},
 };
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
-/// Dispatch strictly by the agent's snapshotted runtime profile. Never fall back.
-pub struct ProfileRuntime {
+/// Dispatch strictly by the agent's configured runtime. Never fall back.
+pub struct ConfiguredRuntime {
     config: ProjectConfig,
     fake: super::FakeRuntime,
     decision: Option<AgentDecision>,
+    credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
+    auth_root: std::path::PathBuf,
 }
-impl ProfileRuntime {
-    pub fn new(config: ProjectConfig) -> Self {
+impl ConfiguredRuntime {
+    pub fn new(
+        config: ProjectConfig,
+        credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
+        auth_root: std::path::PathBuf,
+    ) -> Self {
         Self {
             config,
             fake: super::FakeRuntime::default(),
             decision: None,
+            credentials,
+            auth_root,
         }
     }
 }
-#[derive(Clone, Copy, Default)]
-pub struct ProfileRuntimeFactory;
+#[derive(Clone)]
+pub struct ConfiguredRuntimeFactory {
+    pub credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
+    pub auth_root: std::path::PathBuf,
+}
 
-impl AgentRuntimeFactory for ProfileRuntimeFactory {
+impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
     fn create(
         &self,
         config: &ProjectConfig,
@@ -39,11 +50,15 @@ impl AgentRuntimeFactory for ProfileRuntimeFactory {
         {
             return Err("Selected pipeline does not exist".into());
         }
-        Ok(Box::new(ProfileRuntime::new(config.clone())))
+        Ok(Box::new(ConfiguredRuntime::new(
+            config.clone(),
+            self.credentials.clone(),
+            self.auth_root.clone(),
+        )))
     }
 }
 
-impl AgentRuntime for ProfileRuntime {
+impl AgentRuntime for ConfiguredRuntime {
     fn execute(&mut self, directory: &Path, agent: &Agent, input: &str) -> Result<String, String> {
         self.execute_cancellable(directory, agent, input, &|| false)
     }
@@ -65,15 +80,32 @@ impl AgentRuntime for ProfileRuntime {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<String, String> {
         self.decision = None;
-        let profile = runtime_profiles::resolve(&self.config, &agent.runtime_profile_id)?;
-        match profile.runtime_kind {
+        match agent.runtime_kind {
             RuntimeKind::Rig => {
+                let runtime_credential = if let Some(id) = agent.credential_id.as_deref() {
+                    self.credentials
+                        .get_sync(id)?
+                        .map(|metadata| {
+                            let secret = self.credentials.secret_sync(id)?;
+                            Ok::<_, String>((metadata, secret))
+                        })
+                        .transpose()?
+                } else {
+                    None
+                };
                 let (output, decision) = super::rig::RigRuntime::execute(
                     directory,
                     agent,
                     &self.config.skills,
                     input,
-                    &profile,
+                    super::rig::RigAgentContext {
+                        agent,
+                        credential: runtime_credential,
+                        auth_store_dir: agent
+                            .credential_id
+                            .as_ref()
+                            .map(|id| self.auth_root.join("auth").join(id)),
+                    },
                     allowed_outcomes,
                     cancelled,
                 )?;

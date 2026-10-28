@@ -232,7 +232,7 @@ fn human_restart_reader() {
 }
 
 #[test]
-fn review_can_return_to_plan_and_limits_stop_rework_durably() {
+fn review_can_repeat_rework_without_a_traversal_limit() {
     let fixture = Fixture::new();
     let mut runtime = Script::new(&[
         "plan",
@@ -243,6 +243,10 @@ fn review_can_return_to_plan_and_limits_stop_rework_durably() {
         REWORK,
         "fixed",
         REWORK,
+        "another build",
+        REWORK,
+        "final build",
+        APPROVED,
     ]);
     let run = start_pipeline(
         &config(),
@@ -253,14 +257,12 @@ fn review_can_return_to_plan_and_limits_stop_rework_durably() {
         &fixture.repo(),
     )
     .unwrap();
-    assert_eq!(run.status, Status::LimitExhausted);
-    assert_eq!(runtime.directories.len(), 8);
-    assert!(run.ended_at.is_some());
+    assert_eq!(run.status, Status::WaitingHuman);
+    assert_eq!(runtime.directories.len(), 12);
+    assert!(run.ended_at.is_none());
     let attempt = run.steps.last().unwrap();
-    assert_eq!(attempt.outcome, Some(Outcome::ReviseBuild));
-    assert_eq!(attempt.traversal_count, 1);
-    assert!(attempt.error.as_ref().unwrap().contains("start a new run"));
-    assert_eq!(run.transition_counts.values().sum::<u32>(), 2);
+    assert_eq!(attempt.outcome, Some(Outcome::Approved));
+    assert!(attempt.error.is_none());
     fixture.repo().recover_interrupted().unwrap();
     assert_eq!(fixture.repo().load("limit").unwrap(), run);
 }
@@ -296,14 +298,12 @@ fn unknown_outcomes_and_unconfigured_routes_fail_without_advancing() {
 
 #[test]
 fn invalid_graphs_are_rejected_before_allocating_a_worktree() {
-    for change in ["target", "zero", "unbounded", "duplicate", "human"] {
+    for change in ["target", "duplicate", "human"] {
         let fixture = Fixture::new();
         let mut cfg = config();
         let review = &mut cfg.pipelines[0].steps[2];
         match change {
             "target" => review.transitions[0].to = Some("missing".into()),
-            "zero" => review.transitions[0].max_traversals = 0,
-            "unbounded" => review.transitions[0].max_traversals = 1001,
             "duplicate" => review.transitions.push(review.transitions[0].clone()),
             "human" => cfg.pipelines[0].steps[3].transitions[0].outcome = Outcome::RevisePlan,
             _ => unreachable!(),

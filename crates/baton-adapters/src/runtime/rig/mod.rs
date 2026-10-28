@@ -7,17 +7,14 @@ use self::{
     tools::{ReportOutcome, outcome_name},
 };
 use baton_core::{
-    domain::{
-        project::{Agent as BatonAgent, Outcome, Skill},
-        runtime_profiles::RuntimeProfile,
-    },
+    domain::project::{Agent as BatonAgent, Outcome, Skill},
     ports::runtime::AgentDecision,
 };
 use bevy_app::PluginGroup;
 use rig::{
     catalog::Catalog,
     catalog::ModelSpec,
-    providers::{ollama::Ollama, registry::ProviderId},
+    providers::registry::ProviderId,
     serve::{ErasedHandler, adapters::ModelAdapter},
 };
 use rig_harness::{
@@ -40,20 +37,28 @@ use std::{
 };
 
 pub struct RigRuntime;
+
+pub struct RigAgentContext<'a> {
+    pub agent: &'a BatonAgent,
+    pub credential: Option<(baton_core::domain::credentials::Credential, Option<String>)>,
+    pub auth_store_dir: Option<std::path::PathBuf>,
+}
 impl RigRuntime {
     pub fn execute(
         directory: &Path,
         baton_agent: &BatonAgent,
         skills: &[Skill],
         input: &str,
-        profile: &RuntimeProfile,
+        agent_context: RigAgentContext<'_>,
         allowed_outcomes: &[Outcome],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(String, Option<AgentDecision>), String> {
-        let model_config = profile
+        let runtime_credential = agent_context.credential;
+        let model_config = agent_context
+            .agent
             .model
             .as_ref()
-            .ok_or("Rig profile needs an explicit provider and model")?;
+            .ok_or("Agent needs an explicit provider and model")?;
         if cancelled() {
             return Err("Run cancelled".into());
         }
@@ -69,19 +74,85 @@ impl RigRuntime {
         let spec = ModelSpec::new(provider, &model_config.model).with_tools(true);
         // Ollama's direct Rig client reads its distinct OLLAMA_API_BASE_URL setting;
         // the generic registry dialect otherwise falls back to localhost.
-        let handler = if model_config.provider == "ollama" {
-            let client =
-                Ollama::from_env().map_err(|error| format!("Ollama configuration: {error}"))?;
+        let handler = if model_config.provider == "chatgpt" {
+            use rig::providers::chatgpt::auth::{
+                AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
+            };
+            let (metadata, _) = runtime_credential
+                .as_ref()
+                .ok_or("ChatGPT runtime requires a configured session credential")?;
+            if metadata.credential_type.0 != "chatgpt_session" {
+                return Err("ChatGPT runtime requires a chatgpt_session credential".into());
+            }
+            let directory = agent_context
+                .auth_store_dir
+                .ok_or("ChatGPT runtime requires a credential reference")?;
+            let spec = Catalog::builtin()
+                .resolve(&format!("chatgpt/{}", model_config.model))
+                .map_err(|error| format!("ChatGPT model is not available: {error}"))?
+                .spec
+                .clone();
+            let authenticator = Authenticator::new(
+                AuthSource::OAuth,
+                FileTokenStore::new(directory),
+                DeviceCodeHandler::default(),
+                false,
+            );
+            let signed_in = rig::client::signed_in::SignedInModel::new(
+                spec,
+                authenticator,
+                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default()),
+            )
+            .map_err(|error| format!("ChatGPT model configuration: {error}"))?;
+            ErasedHandler::new(signed_in)
+        } else if model_config.provider == "ollama" {
+            let mut config = rig::providers::ollama::OllamaConfig::new();
+            if let Some((credential, secret)) = runtime_credential {
+                if credential.credential_type.0 != "ollama_api_key" {
+                    return Err("Ollama runtime requires an ollama_api_key credential".into());
+                }
+                if let Some(base_url) = credential.configuration.get("baseUrl") {
+                    config = config.with_base_url(base_url);
+                }
+                if let Some(secret) = secret {
+                    config = config.with_api_key(secret);
+                }
+            }
+            let client = config.client();
             ErasedHandler::new(ModelAdapter::new(
-                profile.id.clone(),
+                baton_agent.id.clone(),
                 client.completion(model_config.model.clone()),
             ))
         } else {
             let model_reference = format!("{}/{}", model_config.provider, model_config.model);
-            let model = Catalog::builtin()
-                .connect(model_reference.as_str())
-                .map_err(|error| format!("Rig provider configuration: {error}"))?;
-            ErasedHandler::new(ModelAdapter::new(profile.id.clone(), model))
+            let catalog = Catalog::builtin();
+            let model = if model_config.provider == "openai" {
+                let (metadata, secret) = runtime_credential
+                    .as_ref()
+                    .ok_or("OpenAI runtime requires an API-key credential")?;
+                if metadata.credential_type.0 != "openai_api_key" {
+                    return Err("OpenAI runtime requires an openai_api_key credential".into());
+                }
+                let secret = secret
+                    .as_deref()
+                    .ok_or("OpenAI credential has no stored secret")?;
+                let model_spec = catalog
+                    .resolve(&model_reference)
+                    .map_err(|error| format!("OpenAI model is not available: {error}"))?
+                    .spec
+                    .clone();
+                catalog
+                    .connect_with(
+                        &model_spec,
+                        rig::providers::registry::ConnectOptions::new().api_key(secret),
+                    )
+                    .map_err(|error| format!("Rig provider configuration: {error}"))?
+            } else {
+                catalog
+                    .connect(model_reference.as_str())
+                    .map_err(|error| format!("Rig provider configuration: {error}"))?
+            };
+            ErasedHandler::new(ModelAdapter::new(baton_agent.id.clone(), model))
         };
         let connection = Connection {
             spec: Arc::new(spec),

@@ -27,8 +27,6 @@ pub struct StepRun {
     #[serde(default)]
     pub selected_transition: Option<crate::domain::project::Transition>,
     #[serde(default)]
-    pub traversal_count: u32,
-    #[serde(default)]
     pub attempt: u32,
 }
 
@@ -58,8 +56,6 @@ pub struct PipelineRun {
     pub config_snapshot: Option<ProjectConfig>,
     #[serde(default)]
     pub current_step: Option<String>,
-    #[serde(default)]
-    pub transition_counts: std::collections::BTreeMap<String, u32>,
     #[serde(default)]
     pub handoff: Option<String>,
     #[serde(default)]

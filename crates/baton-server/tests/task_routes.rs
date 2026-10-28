@@ -59,9 +59,9 @@ fn configure_fake(directory: &std::path::Path) {
     )
     .unwrap();
     for agent in config["agents"].as_array_mut().unwrap() {
-        agent["runtimeProfileId"] = "fake.default".into();
+        agent["runtimeKind"] = "fake".into();
+        agent["model"] = serde_json::Value::Null;
     }
-    config["runtimeProfiles"] = serde_json::json!([{"id":"fake.default", "name":"Offline", "runtimeKind":"fake", "model":null}]);
     let steps = config["pipelines"][0]["steps"].as_array_mut().unwrap();
     steps.retain(|step| step["id"] == "write" || step["id"] == "review");
     for step in steps {

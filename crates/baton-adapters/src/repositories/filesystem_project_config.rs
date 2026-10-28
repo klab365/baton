@@ -186,14 +186,6 @@ mod tests {
         assert!(initialize_project(&repo).await.is_err());
         let initial = snapshot(&repo).await;
         let mut changed = initial.config.clone();
-        changed
-            .runtime_profiles
-            .push(baton_core::domain::runtime_profiles::RuntimeProfile {
-                id: "rig.default".into(),
-                name: "Rig default".into(),
-                runtime_kind: baton_core::domain::runtime_profiles::RuntimeKind::Rig,
-                model: None,
-            });
         changed.agents.push(sample_agent());
         changed.pipelines.push(sample_pipeline());
         update_project_config(&repo, &initial.revision, &changed)
@@ -222,7 +214,7 @@ mod tests {
         let old = snapshot(&repo).await;
         assert_eq!(fs::read_to_string(repo.config_path()).unwrap(), legacy);
         repo.update(&old.revision, &old.config).await.unwrap();
-        assert_eq!(snapshot(&repo).await.config.schema_version, 6);
+        assert_eq!(snapshot(&repo).await.config.schema_version, 7);
     }
 
     #[tokio::test]
@@ -273,8 +265,13 @@ mod tests {
         baton_core::domain::project::Agent {
             id: "writer".into(),
             system_prompt: "Write clearly".into(),
+            runtime_kind: baton_core::domain::runtime::RuntimeKind::Rig,
+            model: Some(baton_core::domain::runtime::RuntimeModel {
+                provider: "openai".into(),
+                model: "gpt-4.1".into(),
+            }),
+            credential_id: None,
             rules: vec![],
-            runtime_profile_id: "rig.default".into(),
             skill_ids: vec![],
         }
     }
@@ -314,14 +311,6 @@ mod tests {
         initialize_project(&repo).await.unwrap();
         let initial = snapshot(&repo).await;
         let mut changed = initial.config;
-        changed
-            .runtime_profiles
-            .push(baton_core::domain::runtime_profiles::RuntimeProfile {
-                id: "rig.default".into(),
-                name: "Rig default".into(),
-                runtime_kind: baton_core::domain::runtime_profiles::RuntimeKind::Rig,
-                model: None,
-            });
         changed.agents.push(sample_agent());
         changed.pipelines.push(sample_pipeline());
         let other = fixture.repo();

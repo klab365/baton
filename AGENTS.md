@@ -11,7 +11,7 @@
 - Organize `baton-core` by responsibility: `domain/` contains business models and rules, `features/` contains use cases and application commands, and `ports/` contains contracts required by the core.
 - Keep the domain independent of adapters and infrastructure. Do not add Rig, Bevy, HTTP, filesystem, or Git implementations to `baton-core`.
 - Put adapter implementations in `baton-adapters`. Adapters implement core ports; the server is responsible for composing them.
-- Keep runtime profiles and other project configuration free of credentials. Credentials belong in environment variables and must not be copied into configuration snapshots or run data.
+- Runtime profiles are not part of the project model; agents carry provider/model configuration and a credential ID directly. Keep secret material in the local credential vault, never in project config, snapshots, run data, logs, or version control.
 
 ## Mediator and commands
 

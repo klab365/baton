@@ -19,7 +19,7 @@ let {
 	value?: string;
 	items: { id: string; name?: string }[];
 	placeholder: string;
-	kind?: "agent" | "pipeline" | "resource" | "runtime profile";
+	kind?: "agent" | "pipeline" | "resource";
 	describedBy?: string;
 	invalid?: boolean;
 	name?: string;
@@ -29,11 +29,7 @@ let {
 } = $props();
 const Icon = $derived(Box);
 const groupLabel = $derived(
-	kind === "agent"
-		? "Configured agents"
-		: kind === "runtime profile"
-			? "Runtime profiles"
-			: "Pipelines",
+	kind === "agent" ? "Configured agents" : "Pipelines",
 );
 </script>
 

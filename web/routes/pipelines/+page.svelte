@@ -149,14 +149,13 @@ async function save(remove = false) {
           <Field label="Step name" for={`name-${step.id}`} required>{#snippet children()}<input id={`name-${step.id}`} bind:value={step.name} required disabled={busy} placeholder="e.g. Research request" />{/snippet}</Field>
           <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<select id={`type-${step.id}`} value={step.human ? "human" : "agent"} disabled={busy} onchange={(event) => { step.human = event.currentTarget.value === "human"; step.agentId = step.human ? "" : config.agents[0]?.id ?? ""; step.transitions = []; }}><option value="agent">Agent</option><option value="human">Human wait</option></select>{/snippet}</Field>
           {#if !step.human}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
-          <div><p>No transitions means sequential execution. Explicit transitions require a matching structured outcome. Every edge has a traversal limit.</p>
+          <div><p>No transitions means sequential execution. Explicit transitions route matching structured outcomes.</p>
           {#each step.transitions as transition, routeIndex}
             <Field label="Outcome" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children()}<select id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} disabled={busy}>{#each outcomes.filter((o) => !step.human || ["approved", "rejected", "responded"].includes(o)) as outcome}<option value={outcome}>{outcome}</option>{/each}</select>{/snippet}</Field>
             <Field label="Destination" for={`target-${step.id}-${routeIndex}`}>{#snippet children()}<select id={`target-${step.id}-${routeIndex}`} value={transition.to ?? ""} disabled={busy} onchange={(event) => { transition.to = event.currentTarget.value || null; }}><option value="">End run</option>{#each draft?.steps ?? [] as target}<option value={target.id}>{target.name || target.id}</option>{/each}</select>{/snippet}</Field>
-            <Field label="Maximum traversals" for={`limit-${step.id}-${routeIndex}`}>{#snippet children()}<input id={`limit-${step.id}-${routeIndex}`} type="number" min="1" max="1000" required bind:value={transition.maxTraversals} disabled={busy} />{/snippet}</Field>
             <Button variant="danger" disabled={busy} onclick={() => { step.transitions = step.transitions.filter((_, i) => i !== routeIndex); }}>Remove transition</Button>
           {/each}
-          <Button variant="secondary" disabled={busy} onclick={() => { step.transitions.push({ outcome: step.human ? "approved" : "completed", to: null, maxTraversals: 1 }); }}>Add transition</Button></div>
+          <Button variant="secondary" disabled={busy} onclick={() => { step.transitions.push({ outcome: step.human ? "approved" : "completed", to: null }); }}>Add transition</Button></div>
          </div>{/if}
         </article>
        </li>

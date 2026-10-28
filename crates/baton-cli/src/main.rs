@@ -103,12 +103,22 @@ async fn main() -> anyhow::Result<()> {
         );
         let repository =
             baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project);
+        let credential_store =
+            baton_adapters::credentials::FilesystemCredentialRepository::for_local_user()
+                .map_err(anyhow::Error::msg)?;
+        let auth_root = credential_store.root_path().to_path_buf();
+        let credentials: std::sync::Arc<dyn baton_core::ports::credentials::CredentialRepository> =
+            std::sync::Arc::new(credential_store);
         let run = baton_core::features::pipeline_engine::start_pipeline(
             &config,
             &args[1],
             &args[2],
             &id,
-            &mut baton_adapters::runtime::ProfileRuntime::new(config.clone()),
+            &mut baton_adapters::runtime::ConfiguredRuntime::new(
+                config.clone(),
+                credentials,
+                auth_root,
+            ),
             &repository,
         )
         .map_err(anyhow::Error::msg)?;

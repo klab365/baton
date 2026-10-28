@@ -51,7 +51,7 @@ async fn project_routes_dispatch_commands_and_return_api_dtos() {
     assert_eq!(response.status(), StatusCode::OK);
     let project = json(response).await;
     assert_eq!(project["status"], "ready");
-    assert_eq!(project["config"]["schemaVersion"], 6);
+    assert_eq!(project["config"]["schemaVersion"], 7);
 
     std::fs::remove_dir_all(directory).unwrap();
 }

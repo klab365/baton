@@ -1,16 +1,14 @@
 # Runtime orchestration
 
-Baton owns pipeline routing, worktrees, human decisions and durable state. `AgentRuntime` is the generic outbound port; adapters live in `baton-adapters`. Agents select a reusable `runtimeProfileId`. Steps select only an agent (or a human decision); no runtime, model or provider selection is allowed on steps.
+Baton owns pipeline routing, worktrees, human decisions and durable state. `AgentRuntime` is the generic outbound port; adapters live in `baton-adapters`. Each agent directly selects its runtime kind, provider/model, and (where required) a credential ID. Pipeline steps select only an agent or a human decision.
 
-## Runtime profiles
+## Agent runtime configuration
 
-Runtime profiles are configured in **Settings → Runtime profiles** and stored in `.baton/config.json`, for example `rig.openai.gpt-4.1`. A profile represents one runtime/provider/model combination and can be assigned to many agents. Profile IDs use safe ASCII segments and must match `runtime.provider.model`.
+Agents are configured in the **Agents** UI. Provider/model and credential are separate choices: credentials are reusable local records, while each agent selects the model it uses. Only credential IDs are stored in `.baton/config.json`; secret material and refreshable auth records remain in the local vault. The selected credential type must match the provider integration.
 
-The current embedded runtime contract is `rig`. Its UI allows a provider and model to be recorded now, but execution intentionally fails until the Rig adapter is integrated. This preserves the project configuration and API shape while preventing a configured profile from silently falling back to another runtime.
+The embedded runtime is `rig`. `fake` is a deterministic offline runtime intended for tests; it is explicitly selected and returns `agentId: input` without contacting a model.
 
-`fake` is a deterministic offline runtime intended for tests. It must be explicitly configured and assigned; it returns `agentId: input` and never contacts a model.
-
-Provider credentials are never stored in `.baton/config.json`, agent definitions, task snapshots or run records. The forthcoming Rig adapter will define its supported providers, credential sources and model discovery without changing the profile or orchestration contracts.
+Schema-v6 runtime profiles are migrated to direct agent settings on read. A profile shared by multiple agents is copied to each of them and then removed from the v7 configuration.
 
 ## Execution boundaries
 
