@@ -1,7 +1,7 @@
 <script lang="ts">
 import { invalidate, invalidateAll } from "$app/navigation";
 import { onMount } from "svelte";
-import { dndzone } from "svelte-dnd-action";
+import { dndzone, TRIGGERS } from "svelte-dnd-action";
 import {
 	ArrowRight,
 	CircleCheck,
@@ -27,7 +27,9 @@ let runs = $state<Run[]>([]);
 let boardLoaded = $state(false);
 let loadError = $state("");
 let busyTask = $state("");
+let draggingTask = $state("");
 let error = $state("");
+let feedback = $state("");
 const latestRuns = $derived.by(() => {
 	const byTask = new Map<string, Run[]>();
 	for (const run of runs) {
@@ -127,36 +129,62 @@ onMount(() => {
 function laneItems(lane: Lane) {
 	return items.filter((item) => item.lane === lane);
 }
-function consider(event: CustomEvent<{ items: BoardItem[] }>, lane: Lane) {
+function canMove(item: BoardItem, from: Lane, to: Lane) {
+	return (
+		(from === "draft" && to === "doing") ||
+		(from === "doing" && item.run?.status === "succeeded" && to === "done")
+	);
+}
+function dndType(lane: Lane) {
+	const item = items.find((candidate) => candidate.id === draggingTask);
+	if (!item) return "baton-tasks";
+	const from = laneFor(item.task, item.run);
+	return lane === from || canMove(item, from, lane)
+		? `baton-task-${item.id}`
+		: `baton-task-blocked-${lane}`;
+}
+function consider(
+	event: CustomEvent<{ items: BoardItem[]; info: { id: string } }>,
+	lane: Lane,
+) {
+	draggingTask ||= event.detail.info.id;
 	const ids = new Set(event.detail.items.map((item) => item.id));
 	items = items.map((item) => (ids.has(item.id) ? { ...item, lane } : item));
 }
 async function finalize(
-	event: CustomEvent<{ items: BoardItem[] }>,
+	event: CustomEvent<{
+		items: BoardItem[];
+		info: { id: string; trigger: TRIGGERS };
+	}>,
 	lane: Lane,
 ) {
-	const item = event.detail.items.find(
-		(candidate) => laneFor(candidate.task, candidate.run) !== lane,
-	);
+	if (event.detail.info.trigger !== TRIGGERS.DROPPED_INTO_ZONE) {
+		if (event.detail.info.trigger === TRIGGERS.DROPPED_OUTSIDE_OF_ANY) {
+			syncItems();
+			draggingTask = "";
+		}
+		return;
+	}
+	const item = items.find((candidate) => candidate.id === event.detail.info.id);
 	if (!item) return;
 	await moveTask(item, lane);
 }
 async function moveTask(item: BoardItem, lane: Lane) {
+	const from = laneFor(item.task, item.run);
 	const retrying =
-		item.lane === lane && item.run?.status === "failed" && lane === "doing";
-	if (busyTask || (item.lane === lane && !retrying)) return;
-	if (
-		!retrying &&
-		!(
-			(item.lane === "draft" && lane === "doing") ||
-			(item.lane === "doing" && lane === "done")
-		)
-	) {
+		from === lane && item.run?.status === "failed" && lane === "doing";
+	if (busyTask || (from === lane && !retrying)) {
+		draggingTask = "";
+		return;
+	}
+	if (!retrying && !canMove(item, from, lane)) {
 		syncItems();
+		draggingTask = "";
 		return;
 	}
 	busyTask = item.id;
 	error = "";
+	feedback = "";
 	items = items.map((candidate) =>
 		candidate.id === item.id ? { ...candidate, lane } : candidate,
 	);
@@ -183,12 +211,14 @@ async function moveTask(item: BoardItem, lane: Lane) {
 			const body = await response.json().catch(() => ({}));
 			throw new Error(body.error ?? `Could not move task to ${lane}.`);
 		}
+		feedback = `Task moved to ${lane === "doing" ? "Doing" : "Done"}.`;
 		await invalidateAll();
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : "Could not update task.";
 		syncItems();
 	} finally {
 		busyTask = "";
+		draggingTask = "";
 	}
 }
 const lanes: {
@@ -214,6 +244,7 @@ const lanes: {
 	{#snippet actions()}<a class="button" href="/tasks/new"><Plus size={16} /> New task</a>{/snippet}
 </PageHeader>
 {#if error}<StatusMessage tone="error" title="Task update failed">{error}</StatusMessage>{/if}
+{#if feedback}<StatusMessage tone="success" title="Task updated">{feedback}</StatusMessage>{/if}
 {#if loadError}<StatusMessage tone="error" title="Could not load tasks">{loadError}</StatusMessage>{/if}
 {#if !boardLoaded}
 	<div class="board board-loading" aria-label="Loading task board" aria-busy="true">
@@ -230,10 +261,12 @@ const lanes: {
 				<div class="lane-heading"><Icon size={17} aria-hidden="true" /><h2>{lane.title}</h2><span class="lane-count">{laneItems(lane.id).length}</span></div>
 				<p>{lane.hint}</p>
 			</header>
-			<div class="lane-cards" use:dndzone={{ items: laneItems(lane.id), type: "baton-tasks", flipDurationMs: 160, dropFromOthersDisabled: lane.id === "approval" }} onconsider={(event) => consider(event, lane.id)} onfinalize={(event) => finalize(event, lane.id)}>
+			<div class="lane-cards-shell">
+			<div class="lane-cards" class:dragging={!!draggingTask} use:dndzone={{ items: laneItems(lane.id), type: dndType(lane.id), flipDurationMs: 160, dragDisabled: !!busyTask, dropTargetClasses: ["task-drop-target"], delayTouchStart: true, useCursorForDetection: true }} onconsider={(event) => consider(event, lane.id)} onfinalize={(event) => finalize(event, lane.id)}>
 				{#each laneItems(lane.id) as item (item.id)}
+					{@const isDragging = draggingTask === item.id}
 					{@const status = statusFor(item)}
-					<article class="task-card" class:card-busy={busyTask === item.id}>
+					<article class="task-card" aria-label={item.task.title} class:card-busy={busyTask === item.id} class:card-dragging={isDragging}>
 						<div class="card-topline"><span class="task-id">TASK-{item.id.slice(0, 6).toUpperCase()}</span></div>
 						<a class="task-title" href={`/tasks/${item.id}`}>{item.task.title}</a>
 						{#if item.task.description}<p class="task-description">{item.task.description}</p>{/if}
@@ -246,7 +279,8 @@ const lanes: {
 						</div>
 					</article>
 				{/each}
-				{#if !laneItems(lane.id).length}<div class="lane-empty">Drop a task here</div>{/if}
+			</div>
+			{#if !laneItems(lane.id).length}<div class="lane-empty">Drop a task here</div>{/if}
 			</div>
 		</section>
 	{/each}
@@ -266,8 +300,11 @@ const lanes: {
 	.lane-done .lane-heading :global(svg) { color:#53d695; }
 	.lane-count { margin-left:auto; color:#85868f; font-size:.78rem; }
 	.lane-header p { margin:.3rem 0 0 1.5rem; color:#777982; font-size:.73rem; }
-	.lane-cards { display:flex; flex-direction:column; gap:.65rem; min-height:14rem; padding:.7rem; }
-	.task-card { padding:.85rem; border:1px solid #303137; border-radius:.65rem; background:#1d1e22; box-shadow:0 2px 6px #0003; cursor:grab; transition:border-color .15s,background .15s; }
+	.lane-cards-shell { position:relative; }
+	.lane-cards { display:flex; flex-direction:column; gap:.65rem; min-height:14rem; padding:.7rem; transition:background .15s,outline-color .15s; }
+	:global(.task-drop-target) { outline:2px solid #729cf5; outline-offset:-2px; background:#1c2639; }
+	.task-card { padding:.85rem; border:1px solid #303137; border-radius:.65rem; background:#1d1e22; box-shadow:0 2px 6px #0003; cursor:grab; transition:border-color .15s,background .15s,opacity .15s; }
+	.card-dragging { border-color:#93b3ff; opacity:.7; }
 	.task-card:hover { border-color:#50515a; background:#222329; }
 	.card-busy { opacity:.6; }
 	.card-topline,.card-footer { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
@@ -288,7 +325,7 @@ const lanes: {
 	.card-action:hover { color:#c2d2ff; }
 	.card-action:disabled { opacity:.45; cursor:wait; }
 	.done-mark { display:flex; gap:.3rem; align-items:center; color:#53d695; font-size:.72rem; }
-	.lane-empty { border:1px dashed #303137; border-radius:.55rem; padding:1rem .5rem; color:#62636b; text-align:center; font-size:.75rem; }
+	.lane-empty { position:absolute; inset:.7rem; display:grid; place-items:center; border:1px dashed #303137; border-radius:.55rem; padding:1rem .5rem; color:#62636b; pointer-events:none; text-align:center; font-size:.75rem; }
 	.skeleton-dot,.skeleton-count,.skeleton-card span { display:block; background:linear-gradient(90deg,#24252a 25%,#303138 50%,#24252a 75%); background-size:200% 100%; animation:shimmer 1.3s ease-in-out infinite; }
 	.skeleton-dot { width:.55rem; height:.55rem; border-radius:50%; }
 	.skeleton-count { width:1.2rem; height:.7rem; border-radius:.4rem; }
