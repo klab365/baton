@@ -38,7 +38,9 @@ async function remove() {
 			method: "DELETE",
 		});
 		if (!response.ok)
-			throw new Error((await response.json()).error ?? "Could not delete task.");
+			throw new Error(
+				(await response.json()).error ?? "Could not delete task.",
+			);
 		await goto("/tasks", { invalidateAll: true });
 	} catch (e) {
 		error = e instanceof Error ? e.message : "Could not delete task.";
