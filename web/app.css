@@ -378,6 +378,9 @@ select option {
 	border-top: 1px solid #dbe0e9;
 	background: #fafbfc;
 }
+.task-form-actions-plain {
+	background: transparent;
+}
 .task-detail-layout {
 	display: grid;
 	gap: 1rem;
@@ -802,6 +805,9 @@ select option {
 .task-form-actions {
 	border-color: #303137;
 	background: #191a1e;
+}
+.task-form-actions-plain {
+	background: transparent;
 }
 .status {
 	background: #202a3d;

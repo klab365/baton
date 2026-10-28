@@ -51,7 +51,7 @@ const groupLabel = $derived(
 				<Select.Item value={item.id} label={item.name ?? item.id}>
 					{#if kind !== "agent"}<Icon size={15} />{/if}
 					<span>{item.name ?? item.id}</span>
-					{#if item.name && item.name !== item.id}<small>{item.id}</small>{/if}
+					{#if kind !== "pipeline" && item.name && item.name !== item.id}<small>{item.id}</small>{/if}
 				</Select.Item>
 			{/each}
 		</Select.Group>

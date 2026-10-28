@@ -107,6 +107,46 @@
 					]
 				}
 			]
+		},
+		{
+			"id": "42008d6c-a0c9-490d-ac00-1fd22c6024ca",
+			"name": "Test2",
+			"steps": [
+				{
+					"id": "0d23694e-24db-47ee-8963-e1d7e2890483",
+					"name": "Writer",
+					"agentId": "writer",
+					"human": false,
+					"transitions": []
+				},
+				{
+					"id": "7e1f760e-1e59-42e5-a5f1-049e9c4642d3",
+					"name": "Human Review",
+					"agentId": "",
+					"human": true,
+					"transitions": [
+						{
+							"outcome": "approved",
+							"to": "7a1fee67-db8b-4fda-b2ca-9b87548a1975"
+						},
+						{
+							"outcome": "rejected",
+							"to": null
+						},
+						{
+							"outcome": "responded",
+							"to": "0d23694e-24db-47ee-8963-e1d7e2890483"
+						}
+					]
+				},
+				{
+					"id": "7a1fee67-db8b-4fda-b2ca-9b87548a1975",
+					"name": "pr-creation",
+					"agentId": "writer",
+					"human": false,
+					"transitions": []
+				}
+			]
 		}
 	],
 	"skills": []
