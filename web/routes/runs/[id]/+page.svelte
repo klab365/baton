@@ -5,6 +5,7 @@ import DetailPanel from "../../../components/DetailPanel.svelte";
 import MultilineInput from "../../../components/MultilineInput.svelte";
 import PageHeader from "../../../components/PageHeader.svelte";
 import StatusMessage from "../../../components/StatusMessage.svelte";
+import StatusBadge from "../../../components/StatusBadge.svelte";
 let { data } = $props();
 let loading = $state(false);
 let error = $state("");
@@ -77,7 +78,7 @@ async function cancel() {
 {#if error}<StatusMessage tone="error">{error}</StatusMessage>{/if}
 
 <section class="run-overview" aria-label="Run overview">
-	<div><span class:status-review={data.run.status === "waitingHuman"} class:status-failed={data.run.status === "failed"} class="task-status">{data.run.status}</span><strong>{nextAction}</strong><span>{completedSteps} of {totalSteps} steps completed {data.run.currentStep ? `· Current: ${data.run.currentStep}` : ""}</span></div>
+	<div><StatusBadge status={data.run.status} /><strong>{nextAction}</strong><span>{completedSteps} of {totalSteps} steps completed {data.run.currentStep ? `· Current: ${data.run.currentStep}` : ""}</span></div>
 	<div class="run-overview-links"><a href="#steps">Step details</a><a href="#trace">Execution trace</a><a href="#events">Run events</a></div>
 </section>
 
@@ -95,7 +96,7 @@ async function cancel() {
 		{#if pipeline}<ol class="run-graph">{#each pipeline.steps as step}<li class:current={step.id === data.run.currentStep}><strong>{step.id}</strong><span>{step.human ? "Human decision" : "Agent step"}</span></li>{/each}</ol>{:else}<p>Step configuration is unavailable for this legacy run.</p>{/if}
 	</DetailPanel>
 	<DetailPanel title="Run status"><dl class="task-facts"><div><dt>Started</dt><dd>{new Date(data.run.startedAt).toLocaleString()}</dd></div><div><dt>Ended</dt><dd>{data.run.endedAt ? new Date(data.run.endedAt).toLocaleString() : "In progress"}</dd></div><div><dt>Duration</dt><dd>{data.run.durationMs == null ? "In progress" : `${data.run.durationMs} ms`}</dd></div><div><dt>Current step</dt><dd>{data.run.currentStep ?? "Complete"}</dd></div></dl></DetailPanel>
-	<DetailPanel title="Step details" id="steps"><ol class="run-steps">{#each data.run.steps.filter((step: { attempt: number }) => step.attempt > 0).sort((a: { attempt: number }, b: { attempt: number }) => a.attempt - b.attempt) as step}<li><header><strong>Attempt {step.attempt}: {step.stepId}</strong><span class="task-status">{step.status}</span></header>{#if step.input}<details><summary>Context received by this step</summary><pre>{step.input}</pre></details>{/if}{#if step.selectedTransition}<p><strong>Transition handoff</strong> — <code>{step.selectedTransition.outcome}</code> → {step.selectedTransition.to ?? "Complete"}. The summary below came from <code>report_outcome</code> and is sent to the next step.</p>{:else if step.output}<p><strong>Agent response</strong> — this step has no configured transition.</p>{/if}{#if step.output}<details open><summary>{step.selectedTransition ? "Handoff summary" : "Agent response"}</summary><pre>{step.output}</pre></details>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}</li>{/each}</ol></DetailPanel>
+	<DetailPanel title="Step details" id="steps"><ol class="run-steps">{#each data.run.steps.filter((step: { attempt: number }) => step.attempt > 0).sort((a: { attempt: number }, b: { attempt: number }) => a.attempt - b.attempt) as step}<li><header><strong>Attempt {step.attempt}: {step.stepId}</strong><StatusBadge status={step.status} /></header>{#if step.input}<details><summary>Context received by this step</summary><pre>{step.input}</pre></details>{/if}{#if step.selectedTransition}<p><strong>Transition handoff</strong> — <code>{step.selectedTransition.outcome}</code> → {step.selectedTransition.to ?? "Complete"}. The summary below came from <code>report_outcome</code> and is sent to the next step.</p>{:else if step.output}<p><strong>Agent response</strong> — this step has no configured transition.</p>{/if}{#if step.output}<details open><summary>{step.selectedTransition ? "Handoff summary" : "Agent response"}</summary><pre>{step.output}</pre></details>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}</li>{/each}</ol></DetailPanel>
 	<DetailPanel title="Execution trace" id="trace"><p class="muted">Persisted agent messages, tool calls and results, when supplied by the runtime. Older runs may not have a trace.</p>{#if data.run.trace?.length}<ol class="run-events">{#each data.run.trace as entry}<li><time datetime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString()}</time> <strong>{entry.kind}</strong><details><summary>Show entry</summary><pre>{entry.content}</pre></details></li>{/each}</ol>{:else}<p>No persisted runtime trace is available for this run.</p>{/if}</DetailPanel>
 	<DetailPanel title="Run events" id="events"><ol class="run-events">{#each data.run.events as event}<li><time datetime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time> — {event.message ?? event.status}</li>{/each}</ol></DetailPanel>
 </div>

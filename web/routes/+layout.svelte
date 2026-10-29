@@ -61,7 +61,7 @@ const navigation = [
 			<div class="sidebar-bottom"><a href="/settings" aria-current={page.url.pathname.startsWith("/settings") ? "page" : undefined}><Settings2 size={17} /><span>Settings</span></a><div class="sidebar-footnote">AI workflow orchestration</div></div>
 		</aside>
 		<div class="workspace">
-			<header class="mobile-header"><a class="brand" href="/"><span class="brand-mark"><GitBranch size={18} /></span>Baton</a><span>{data.project.name}</span></header>
+			<header class="mobile-header"><a class="brand" href="/"><span class="brand-mark"><GitBranch size={18} /></span>Baton</a><span class="mobile-project-name" title={data.project.name}>{data.project.name}</span></header>
 			<main id="main-content" class="page-content">{@render children()}</main>
 		</div>
 	</div>

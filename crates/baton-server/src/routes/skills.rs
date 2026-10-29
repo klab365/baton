@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     routing::get,
 };
-use baton_core::features::skills::{DeleteSkill, ListSkills, SaveSkill, SkillError};
+use baton_core::features::skills::{DeleteSkill, ImportSkill, ListSkills, SaveSkill, SkillError};
 use serde::Deserialize;
 
 impl From<SkillError> for ApiError {
@@ -41,6 +41,26 @@ async fn create(
         .await?;
     Ok(StatusCode::CREATED)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Import {
+    url: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+async fn import(
+    State(state): State<AppState>,
+    Json(body): Json<Import>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .mediator
+        .send(ImportSkill {
+            url: body.url,
+            overwrite: body.overwrite,
+        })
+        .await?;
+    Ok(StatusCode::CREATED)
+}
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -71,6 +91,7 @@ async fn delete(
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/skills", get(list).post(create))
+        .route("/api/skills/import", axum::routing::post(import))
         .route(
             "/api/skills/{id}",
             axum::routing::put(update).delete(delete),

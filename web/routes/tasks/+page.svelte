@@ -14,6 +14,7 @@ import {
 import Button from "../../components/Button.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import StatusMessage from "../../components/StatusMessage.svelte";
+import StatusBadge from "../../components/StatusBadge.svelte";
 import type { TaskBoardRun, TaskBoardTask } from "$lib/task-board";
 
 let { data } = $props();
@@ -253,7 +254,7 @@ const lanes: {
 					<article class="task-card status-border-{status.tone}" aria-label={item.task.title} class:card-busy={busyTasks.includes(item.id)} class:card-dragging={isDragging}>
 						<div class="card-topline"><span class="task-id">TASK-{item.id.slice(0, 6).toUpperCase()}</span></div>
 						<a class="task-title" href={`/tasks/${item.id}`}>{item.task.title}</a>
-						<div class="card-footer"><span class="card-status status-{status.tone}"><span></span>{status.label}</span>
+						<div class="card-footer"><StatusBadge status={item.run?.status ?? item.task.status} />
 							{#if lane.id === "draft"}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}>{busyTasks.includes(item.id) ? "Starting…" : "Start task"}<ArrowRight size={14} /></button>
 							{:else if lane.id === "approval"}<a class="card-action" href={`/runs/${item.run?.id}`}>Review run<ArrowRight size={14} /></a>
 							{:else if lane.id === "doing" && (item.run?.status === "failed" || item.run?.status === "limitExhausted")}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Retry</button>
@@ -298,13 +299,6 @@ const lanes: {
 	.card-busy { opacity:.6; }
 	.card-topline,.card-footer { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
 	.task-id { color:#80818a; font: .68rem ui-monospace,monospace; }
-	.card-status { display:inline-flex; align-items:center; gap:.35rem; color:#aaa; font-size:.7rem; font-weight:600; }
-	.card-status > span { width:.4rem; height:.4rem; border-radius:50%; background:currentColor; box-shadow:0 0 7px currentColor; }
-	.status-working { color:#6fa5ff; }
-	.status-review { color:#f5c442; }
-	.status-failed { color:#ff7079; }
-	.status-ready { color:#53d695; }
-	.status-neutral { color:#9b9ca5; }
 	.task-title { display:block; margin:.6rem 0 .3rem; color:#eeeeef; font-size:.88rem; font-weight:650; line-height:1.35; text-decoration:none; }
 	.task-title:hover { color:#93b3ff; }
 	.card-footer { padding-top:.65rem; border-top:1px solid #303137; }

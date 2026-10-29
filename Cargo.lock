@@ -682,11 +682,13 @@ name = "baton-adapters"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "baton-core",
  "bevy_app",
  "bevy_ecs",
  "bevy_log",
  "libc",
+ "reqwest 0.12.28",
  "rig",
  "rig-harness",
  "schemars 1.2.3",

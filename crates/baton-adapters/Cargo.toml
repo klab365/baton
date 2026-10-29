@@ -13,6 +13,8 @@ serde.workspace = true
 serde_json.workspace = true
 schemars = "1"
 tracing.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+base64 = "0.22"
 rig = { version = "=0.45.0", default-features = false, features = ["agent", "reqwest", "derive", "rustls"] }
 rig-harness = "=0.45.0"
 bevy_ecs = "=0.20.0"

@@ -9,16 +9,19 @@ fn resolves_only_assigned_skills_in_order_without_permission_changes() {
         Skill {
             id: "first".into(),
             description: "First skill".into(),
+            metadata: String::new(),
             instructions: "---\nname: first\ndescription: metadata\n---\nFirst instruction".into(),
         },
         Skill {
             id: "second".into(),
             description: "Second skill".into(),
+            metadata: String::new(),
             instructions: "---\nname: second\n---\nSecond instruction".into(),
         },
         Skill {
             id: "unused".into(),
             description: "Unused skill".into(),
+            metadata: String::new(),
             instructions: "---\nname: unused\n---\nNever include".into(),
         },
     ];

@@ -1,4 +1,7 @@
-use baton_core::{domain::project::Skill, ports::skills::SkillRepository};
+use baton_core::{
+    domain::project::Skill,
+    ports::{skill_downloader::DownloadedSkillFile, skills::SkillRepository},
+};
 use std::{
     fs,
     io::Write,
@@ -8,9 +11,9 @@ use std::{
 pub struct FilesystemSkillRepository {
     root: PathBuf,
 }
-fn parse_skill(source: &str) -> Result<(String, String), String> {
+fn parse_skill(source: &str) -> Result<(String, String, String), String> {
     if !source.starts_with("---\n") && !source.starts_with("---\r\n") {
-        return Ok((String::new(), source.to_string()));
+        return Ok((String::new(), String::new(), source.to_string()));
     }
     let start = source.find('\n').unwrap() + 1;
     let end = source[start..]
@@ -25,18 +28,26 @@ fn parse_skill(source: &str) -> Result<(String, String), String> {
         .position(|line| line.starts_with("description:"))
     {
         let value = lines[index]["description:".len()..].trim();
-        if value == "|" || value == "|-" || value == "|+" {
-            description = lines[index + 1..]
+        if matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+") {
+            let lines = lines[index + 1..]
                 .iter()
-                .take_while(|line| line.starts_with("  ") || line.is_empty())
-                .map(|line| line.strip_prefix("  ").unwrap_or(line))
-                .collect::<Vec<_>>()
-                .join("\n");
+                .take_while(|line| line.starts_with(' ') || line.is_empty())
+                .map(|line| line.trim_start())
+                .collect::<Vec<_>>();
+            description = if value.starts_with('>') {
+                lines.join(" ")
+            } else {
+                lines.join("\n")
+            };
         } else {
             description = value.trim_matches(['"', '\'']).to_string();
         }
     }
-    Ok((description, source[body_start..].to_string()))
+    Ok((
+        description,
+        source[start..end].to_string(),
+        source[body_start..].to_string(),
+    ))
 }
 fn reject_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
@@ -59,6 +70,7 @@ impl FilesystemSkillRepository {
         baton_core::features::skills::validate(&Skill {
             id: id.into(),
             description: "validation".into(),
+            metadata: String::new(),
             instructions: "validation".into(),
         })?;
         reject_symlink(self.root.parent().unwrap())?;
@@ -89,12 +101,16 @@ impl SkillRepository for FilesystemSkillRepository {
                 .into_string()
                 .map_err(|_| "Skill ID must be UTF-8")?;
             let file = self.file(&id)?;
+            if !file.exists() {
+                continue;
+            }
             let instructions = fs::read_to_string(&file)
                 .map_err(|e| format!("Could not read {}: {e}", file.display()))?;
-            let (description, instructions) = parse_skill(&instructions)?;
+            let (description, metadata, instructions) = parse_skill(&instructions)?;
             let skill = Skill {
                 id,
                 description,
+                metadata,
                 instructions,
             };
             baton_core::features::skills::validate(&skill)?;
@@ -108,17 +124,21 @@ impl SkillRepository for FilesystemSkillRepository {
         let file = self.file(&skill.id)?;
         let parent = file.parent().unwrap();
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let instructions = format!(
-            "---\nname: {}\ndescription: |\n{}\n---\n{}",
-            skill.id,
-            skill
-                .description
-                .lines()
-                .map(|line| format!("  {line}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            skill.instructions
-        );
+        let frontmatter = if skill.metadata.is_empty() {
+            format!(
+                "name: {}\ndescription: |\n{}",
+                skill.id,
+                skill
+                    .description
+                    .lines()
+                    .map(|line| format!("  {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        } else {
+            skill.metadata.clone()
+        };
+        let instructions = format!("---\n{frontmatter}\n---\n{}", skill.instructions);
         let temporary = parent.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| {
             let mut output = fs::OpenOptions::new()
@@ -134,6 +154,35 @@ impl SkillRepository for FilesystemSkillRepository {
         })();
         let _ = fs::remove_file(temporary);
         result
+    }
+    fn save_imported(&self, skill: &Skill, files: &[DownloadedSkillFile]) -> Result<(), String> {
+        self.save(skill)?;
+        let root = self.file(&skill.id)?.parent().unwrap().to_path_buf();
+        for file in files {
+            let relative = Path::new(&file.path);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                return Err(format!("Invalid imported skill file path {:?}", file.path));
+            }
+            if file.path == "SKILL.md" {
+                continue;
+            }
+            let target = root.join(relative);
+            let parent = target.parent().ok_or("Imported skill file has no parent")?;
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            fs::write(target, &file.contents).map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+    fn replace_imported(&self, skill: &Skill, files: &[DownloadedSkillFile]) -> Result<(), String> {
+        let directory = self.file(&skill.id)?.parent().unwrap().to_path_buf();
+        if directory.exists() {
+            fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+        }
+        self.save_imported(skill, files)
     }
     fn delete(&self, id: &str) -> Result<(), String> {
         let file = self.file(id)?;
@@ -151,6 +200,7 @@ mod tests {
         let mut skill = Skill {
             id: "style".into(),
             description: "Tone rules\nKeep it concise".into(),
+            metadata: String::new(),
             instructions: "Be concise".into(),
         };
         repo.save(&skill).unwrap();
@@ -187,6 +237,48 @@ mod tests {
         assert!(repo.list().unwrap().is_empty());
         skill.id = "../escape".into();
         assert!(repo.save(&skill).is_err());
+    }
+    #[test]
+    fn saves_imported_companion_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = FilesystemSkillRepository::new(temp.path().into());
+        let skill = Skill {
+            id: "bundle".into(),
+            description: "A bundle".into(),
+            metadata: String::new(),
+            instructions: "Use references/example.md".into(),
+        };
+        repo.save_imported(
+            &skill,
+            &[DownloadedSkillFile {
+                path: "references/example.md".into(),
+                contents: b"Example".to_vec(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(
+                temp.path()
+                    .join(".agents/skills/bundle/references/example.md")
+            )
+            .unwrap(),
+            "Example"
+        );
+    }
+    #[test]
+    fn reads_folded_frontmatter_description() {
+        let source = "---\nname: ponytail\ndescription: >\n  Lazy senior dev mode.\n  Keep changes small.\nlicense: MIT\n---\nInstructions";
+        let (description, metadata, instructions) = parse_skill(source).unwrap();
+        assert_eq!(description, "Lazy senior dev mode. Keep changes small.");
+        assert!(metadata.contains("license: MIT"));
+        assert_eq!(instructions, "Instructions");
+    }
+    #[test]
+    fn ignores_skill_directories_without_a_skill_file() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join(".agents/skills/deleted")).unwrap();
+        let repo = FilesystemSkillRepository::new(temp.path().into());
+        assert!(repo.list().unwrap().is_empty());
     }
     #[cfg(unix)]
     #[test]

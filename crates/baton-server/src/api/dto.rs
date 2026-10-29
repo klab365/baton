@@ -71,6 +71,8 @@ pub struct Transition {
 pub struct Skill {
     pub id: String,
     pub description: String,
+    #[serde(default)]
+    pub metadata: String,
     pub instructions: String,
 }
 
@@ -233,6 +235,7 @@ impl From<domain::Skill> for Skill {
         Self {
             id: value.id,
             description: value.description,
+            metadata: value.metadata,
             instructions: value.instructions,
         }
     }
@@ -243,6 +246,7 @@ impl From<Skill> for domain::Skill {
         Self {
             id: value.id,
             description: value.description,
+            metadata: value.metadata,
             instructions: value.instructions,
         }
     }

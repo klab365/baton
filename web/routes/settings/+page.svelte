@@ -197,23 +197,15 @@ onMount(() => {
 <ConfirmationDialog bind:open={deleteDialogOpen} title="Delete credential?" loading={busy} onconfirm={() => credentialToDelete && deleteCredential(credentialToDelete)}>Agents using this credential will no longer be able to start new runs until you assign another available credential.</ConfirmationDialog>
 
 <style>
-	.credential-builder { display:grid; gap:.45rem; max-width:44rem; margin:1.5rem 0 2rem; padding:1.25rem; border:1px solid #dbe0e9; border-radius:.75rem; background:#fff; }
-	.credential-builder label { margin-top:.35rem; color:#27324a; font-size:.86rem; font-weight:650; }
-	.credential-builder input { width:100%; min-height:2.8rem; padding:.65rem .75rem; border:1px solid #cbd2df; border-radius:.45rem; background:#fff; color:#172033; font:inherit; }
+	.credential-builder { display:grid; gap:.45rem; max-width:none; margin:0; padding:1.25rem; border:1px solid var(--border); border-radius:.75rem; background:var(--surface-raised); }
+	.credential-builder label { margin-top:.35rem; color:var(--text); font-size:.86rem; font-weight:650; }
 	.credential-builder :global(.button) { margin-top:.75rem; justify-self:start; }
+	.credential-builder :global(.button-secondary) { margin-top:0; }
 	.credential-list { display:grid; gap:.65rem; }
-	.credential-card { display:flex; align-items:center; gap:1rem; padding:.85rem 1rem; border:1px solid #dbe0e9; border-radius:.65rem; background:#fff; }
+	.credential-card { display:flex; align-items:center; gap:1rem; padding:.85rem 1rem; border:1px solid var(--border); border-radius:.65rem; background:var(--surface-raised); }
 	.credential-card > div { display:grid; gap:.18rem; min-width:0; flex:1; }
-	.credential-card code,.credential-card span { overflow-wrap:anywhere; color:#69758b; font-size:.78rem; }
-	.empty-hint,.error { padding:.85rem; border-radius:.5rem; background:#f8f9fc; color:#69758b; }
-	.error { background:#fff0ef; color:#b42318; }
-	/* Workspace theme overrides */
-	.credential-builder { border-color:#303137; background:#1b1c20; }
-	.credential-builder label { color:#d9d9dd; }
-	.credential-builder input { border-color:#393a42; background:#17181c; color:#eee; }
-	.credential-card { border-color:#303137; background:#1b1c20; }
-	.credential-card code,.credential-card span { color:#92939b; }
-	.empty-hint { background:#1b1c20; color:#92939b; }
+	.credential-card code,.credential-card span { overflow-wrap:anywhere; color:var(--text-muted); font-size:.78rem; }
+	.empty-hint,.error { padding:.85rem; border-radius:.5rem; background:var(--surface-raised); color:var(--text-muted); }
 	.error { background:#3a2024; color:#ffd9dc; }
 	.credentials-section { margin-top:1.5rem; }.credentials-section > header { display:flex; align-items:end; justify-content:space-between; gap:1rem; margin-bottom:.8rem; }.credentials-section h2 { margin:.15rem 0 0; color:#ededf0; font-size:1rem; }.credential-heading { display:flex; align-items:center; gap:.55rem; }.credential-heading > span { border-radius:999px; padding:.15rem .5rem; background:#28344f; color:#aac2ff; font-size:.75rem; }.credential-section-actions { display:flex; align-items:center; gap:.7rem; }.credential-builder { max-width:none; margin:0; }.credential-builder :global(.button-secondary) { margin-top:0; }
 </style>

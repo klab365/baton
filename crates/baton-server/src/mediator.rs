@@ -1,9 +1,16 @@
+// Composition wires independent feature resources; medi-rs also generates a
+// constructor with one parameter per resource.
+#![allow(clippy::too_many_arguments)]
+
 use baton_core::{
     agents_feature, credentials_feature,
     features::{
-        agents::AgentRepositoryResource, credentials::CredentialRepositoryResource,
-        pipelines::PipelineRepositoryResource, runs::RunFeatureResources,
-        skills::SkillRepositoryResource, tasks::TaskFeatureResources,
+        agents::AgentRepositoryResource,
+        credentials::CredentialRepositoryResource,
+        pipelines::PipelineRepositoryResource,
+        runs::RunFeatureResources,
+        skills::{SkillDownloaderResource, SkillRepositoryResource},
+        tasks::TaskFeatureResources,
     },
     pipelines_feature,
     ports::project_config::ProjectConfigRepository,
@@ -28,6 +35,7 @@ pub fn new(
     task_resources: TaskFeatureResources,
     run_resources: RunFeatureResources,
     skills: Arc<dyn baton_core::ports::skills::SkillRepository>,
+    skill_downloader: Arc<dyn baton_core::ports::skill_downloader::SkillDownloader>,
 ) -> ServerMediator {
     ServerMediator::builder()
         .repository(repository.clone())
@@ -42,5 +50,6 @@ pub fn new(
         .task_resources(task_resources)
         .run_resources(run_resources)
         .skill_repository(SkillRepositoryResource(skills, repository))
+        .skill_downloader(SkillDownloaderResource(skill_downloader))
         .build()
 }
