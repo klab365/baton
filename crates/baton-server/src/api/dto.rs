@@ -21,7 +21,6 @@ pub struct Agent {
     pub runtime_kind: RuntimeKind,
     pub model: Option<RuntimeModel>,
     pub credential_id: Option<String>,
-    pub rules: Vec<String>,
     pub skill_ids: Vec<String>,
 }
 
@@ -118,7 +117,6 @@ impl From<domain::Agent> for Agent {
             runtime_kind: value.runtime_kind.into(),
             model: value.model.map(Into::into),
             credential_id: value.credential_id,
-            rules: value.rules,
             skill_ids: value.skill_ids,
         }
     }
@@ -132,7 +130,6 @@ impl From<Agent> for domain::Agent {
             runtime_kind: value.runtime_kind.into(),
             model: value.model.map(Into::into),
             credential_id: value.credential_id,
-            rules: value.rules,
             skill_ids: value.skill_ids,
         }
     }

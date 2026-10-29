@@ -7,7 +7,6 @@
 			"runtimeKind": "rig",
 			"model": { "provider": "openai", "model": "gpt-4.1" },
 			"credentialId": null,
-			"rules": [],
 			"skillIds": []
 		},
 		{
@@ -16,7 +15,6 @@
 			"runtimeKind": "rig",
 			"model": { "provider": "openai", "model": "gpt-4.1" },
 			"credentialId": null,
-			"rules": [],
 			"skillIds": []
 		}
 	],

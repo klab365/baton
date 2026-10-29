@@ -30,7 +30,6 @@ pub struct Agent {
     pub model: Option<crate::domain::runtime::RuntimeModel>,
     #[serde(default)]
     pub credential_id: Option<String>,
-    pub rules: Vec<String>,
     pub skill_ids: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,9 +109,6 @@ impl ProjectConfig {
                         .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
             }) {
                 return Err(format!("Agent {:?} has an invalid credential ID", agent.id));
-            }
-            for rule in &agent.rules {
-                nonempty("agent.rules", rule)?;
             }
             ids("agent.skillIds", agent.skill_ids.iter().map(String::as_str))?;
         }
@@ -251,6 +247,18 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
         .is_some_and(Vec::is_empty)
     {
         value.as_object_mut().unwrap().remove("skills");
+    }
+    // Rules were folded into the system prompt. Accept and discard the removed
+    // field so existing project configurations remain loadable.
+    if let Some(agents) = value
+        .get_mut("agents")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for agent in agents {
+            if let Some(agent) = agent.as_object_mut() {
+                agent.remove("rules");
+            }
+        }
     }
     let legacy_version = value["schemaVersion"].as_u64();
     if legacy_version == Some(5) {

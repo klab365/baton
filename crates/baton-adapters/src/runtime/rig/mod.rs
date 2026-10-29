@@ -231,9 +231,6 @@ impl RigRuntime {
         }
 
         let mut preamble = baton_agent.system_prompt.clone();
-        for rule in &baton_agent.rules {
-            preamble.push_str(&format!("\nRule: {rule}"));
-        }
         for skill_id in &baton_agent.skill_ids {
             let skill = skills
                 .iter()
