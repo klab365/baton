@@ -30,7 +30,7 @@
 			"linter": { "enabled": false }
 		},
 		{
-			"includes": ["**/.baton"],
+			"includes": ["**/.baton/**", "**/.agents/**"],
 			"formatter": { "enabled": false },
 			"linter": { "enabled": false }
 		},
