@@ -1,4 +1,36 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    io::{self, IsTerminal, Write},
+    path::PathBuf,
+};
+
+const BATON_GITIGNORE: &str = "runs/\ntasks/\n";
+
+fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
+    let baton_dir = project.join(".baton");
+    let was_missing = !baton_dir.exists();
+    std::fs::create_dir_all(&baton_dir)?;
+    let gitignore = baton_dir.join(".gitignore");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&gitignore)
+    {
+        Ok(mut file) => file.write_all(BATON_GITIGNORE.as_bytes())?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(was_missing)
+}
+
+fn confirm_project_initialization() -> anyhow::Result<bool> {
+    print!("Initialize this Baton project now? [Y/n] ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let answer = answer.trim();
+    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
+}
 
 async fn load_project_config(
     project: &std::path::Path,
@@ -148,7 +180,76 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5173);
+    let first_bootstrap = bootstrap_project(&project_dir)?;
+    if first_bootstrap && io::stdin().is_terminal() && confirm_project_initialization()? {
+        use baton_core::ports::project_config::ProjectConfigRepository;
+        let repository = baton_adapters::repositories::filesystem_project_config::FilesystemProjectConfigRepository::new(project_dir.clone());
+        match repository.load().await.map_err(anyhow::Error::msg)? {
+            baton_core::domain::project::ConfigState::Missing => {
+                baton_core::features::project_config::initialize_project(&repository)
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                println!("Baton project initialized.");
+            }
+            baton_core::domain::project::ConfigState::Ready(_) => {
+                println!("Baton project configuration already exists.")
+            }
+            baton_core::domain::project::ConfigState::Invalid(message) => anyhow::bail!(message),
+        }
+    }
     println!("Baton is starting for {}", project_dir.display());
     println!("Web interface: http://{host}:{port}");
     baton_server::serve(project_dir, host, port).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "baton-cli-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn bootstraps_missing_baton_directory_and_gitignore() {
+        let project = TempDir::new();
+        assert!(bootstrap_project(&project.0).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(project.0.join(".baton/.gitignore")).unwrap(),
+            BATON_GITIGNORE
+        );
+        assert!(!bootstrap_project(&project.0).unwrap());
+    }
+
+    #[test]
+    fn bootstrap_preserves_existing_gitignore() {
+        let project = TempDir::new();
+        let baton = project.0.join(".baton");
+        std::fs::create_dir(&baton).unwrap();
+        std::fs::write(baton.join(".gitignore"), "custom/\n").unwrap();
+        assert!(!bootstrap_project(&project.0).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(baton.join(".gitignore")).unwrap(),
+            "custom/\n"
+        );
+    }
 }
