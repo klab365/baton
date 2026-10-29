@@ -93,6 +93,7 @@ impl ProjectConfigRepository for FilesystemProjectConfigRepository {
                             Ok::<_, String>(baton_core::domain::project::Skill {
                                 id,
                                 description,
+                                metadata: String::new(),
                                 instructions,
                             })
                         })

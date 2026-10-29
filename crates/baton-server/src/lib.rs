@@ -61,11 +61,14 @@ impl AppState {
         let skills: Arc<dyn baton_core::ports::skills::SkillRepository> = Arc::new(
             baton_adapters::skills::FilesystemSkillRepository::new(project_dir.clone()),
         );
+        let skill_downloader: Arc<dyn baton_core::ports::skill_downloader::SkillDownloader> =
+            Arc::new(baton_adapters::skill_downloader::GithubSkillDownloader::default());
         let task_resources = TaskFeatureResources {
             tasks: task_repository,
             runs: run_repository.clone(),
             project_config: repository.clone(),
             runtime_factory: runtime_factory.clone(),
+            skills: skills.clone(),
         };
         let run_resources = RunFeatureResources {
             runs: run_repository,
@@ -79,6 +82,7 @@ impl AppState {
             task_resources,
             run_resources,
             skills,
+            skill_downloader,
         ));
         Self {
             project_dir: Arc::new(project_dir),

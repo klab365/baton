@@ -11,7 +11,7 @@
 			},
 			"credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
 			"rules": [],
-			"skillIds": []
+			"skillIds": ["ponytail"]
 		},
 		{
 			"id": "reviewer",
@@ -148,6 +148,5 @@
 				}
 			]
 		}
-	],
-	"skills": []
+	]
 }

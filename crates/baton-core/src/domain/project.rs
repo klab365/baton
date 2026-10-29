@@ -71,6 +71,9 @@ pub struct Transition {
 pub struct Skill {
     pub id: String,
     pub description: String,
+    /// Original SKILL.md frontmatter, retained to preserve source-specific metadata.
+    #[serde(default)]
+    pub metadata: String,
     pub instructions: String,
 }
 

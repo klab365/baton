@@ -5,6 +5,7 @@ import ConfirmationDialog from "../../../components/ConfirmationDialog.svelte";
 import DetailPanel from "../../../components/DetailPanel.svelte";
 import PageHeader from "../../../components/PageHeader.svelte";
 import StatusMessage from "../../../components/StatusMessage.svelte";
+import StatusBadge from "../../../components/StatusBadge.svelte";
 import TaskForm from "../../../components/TaskForm.svelte";
 let { data } = $props();
 let confirm = $state(false);
@@ -58,7 +59,7 @@ async function remove() {
 <div class="task-detail-layout">
 	<DetailPanel title="Task state">
 		<dl class="task-facts">
-			<div><dt>Status</dt><dd><span class="task-status">{data.task.status}</span></dd></div>
+			<div><dt>Status</dt><dd><StatusBadge status={data.task.status} /></dd></div>
 			<div><dt>Pipeline</dt><dd>{selectedPipeline?.name ?? "Unavailable pipeline"}<span class="task-pipeline-id">{data.task.pipelineId}</span></dd></div>
 			<div><dt>Created</dt><dd>{new Date(data.task.createdAt).toLocaleString()}</dd></div>
 			<div><dt>Last updated</dt><dd>{new Date(data.task.updatedAt).toLocaleString()}</dd></div>
@@ -68,7 +69,7 @@ async function remove() {
 		{#if data.runs.length}
 			<ul class="run-list">
 				{#each data.runs as run}
-					<li><a href={`/runs/${run.id}`}>{run.id}</a><span class="task-status">{run.status}</span><time datetime={run.startedAt}>{new Date(run.startedAt).toLocaleString()}</time></li>
+					<li><a href={`/runs/${run.id}`}>{run.id}</a><StatusBadge status={run.status} /><time datetime={run.startedAt}>{new Date(run.startedAt).toLocaleString()}</time></li>
 				{/each}
 			</ul>
 		{:else}<p class="muted">This task has not been started yet.</p>{/if}

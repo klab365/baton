@@ -1,6 +1,9 @@
 use crate::{
     domain::project::{ConfigState, Skill},
-    ports::{project_config::ProjectConfigRepository, skills::SkillRepository},
+    ports::{
+        project_config::ProjectConfigRepository, skill_downloader::SkillDownloader,
+        skills::SkillRepository,
+    },
 };
 use medi_rs::{MediCommand, medi_handler, medi_module};
 use std::sync::Arc;
@@ -17,6 +20,8 @@ pub struct SkillRepositoryResource(
     pub Arc<dyn SkillRepository>,
     pub Arc<dyn ProjectConfigRepository>,
 );
+#[derive(Clone)]
+pub struct SkillDownloaderResource(pub Arc<dyn SkillDownloader>);
 #[derive(MediCommand)]
 #[medi_command(return_type = Vec<Skill>, error_type = SkillError)]
 pub struct ListSkills;
@@ -30,6 +35,12 @@ pub struct SaveSkill {
 #[medi_command(error_type = SkillError)]
 pub struct DeleteSkill {
     pub id: String,
+}
+#[derive(MediCommand)]
+#[medi_command(error_type = SkillError)]
+pub struct ImportSkill {
+    pub url: String,
+    pub overwrite: bool,
 }
 
 pub fn validate(skill: &Skill) -> Result<(), String> {
@@ -47,6 +58,53 @@ pub fn validate(skill: &Skill) -> Result<(), String> {
         return Err("Skill instructions must not be empty".into());
     }
     Ok(())
+}
+pub fn parse_skill(source: &str, id: String) -> Result<Skill, String> {
+    let Some(after_open) = source
+        .strip_prefix("---\n")
+        .or_else(|| source.strip_prefix("---\r\n"))
+    else {
+        return Ok(Skill {
+            id,
+            description: String::new(),
+            metadata: String::new(),
+            instructions: source.into(),
+        });
+    };
+    let Some((frontmatter, instructions)) = after_open
+        .split_once("\n---\n")
+        .or_else(|| after_open.split_once("\r\n---\r\n"))
+    else {
+        return Err("Invalid SKILL.md frontmatter: missing closing --- delimiter".into());
+    };
+    let lines: Vec<_> = frontmatter.lines().collect();
+    let description = lines
+        .iter()
+        .position(|line| line.starts_with("description:"))
+        .map(|index| {
+            let value = lines[index]["description:".len()..].trim();
+            if matches!(value, "|" | "|-" | "|+" | ">" | ">-" | ">+") {
+                let block = lines[index + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with(' ') || line.is_empty())
+                    .map(|line| line.trim_start())
+                    .collect::<Vec<_>>();
+                if value.starts_with('>') {
+                    block.join(" ")
+                } else {
+                    block.join("\n")
+                }
+            } else {
+                value.trim_matches(['\"', '\'']).into()
+            }
+        })
+        .unwrap_or_default();
+    Ok(Skill {
+        id,
+        description,
+        metadata: frontmatter.into(),
+        instructions: instructions.into(),
+    })
 }
 fn instruction_body(contents: &str) -> Result<&str, String> {
     if !contents.starts_with("---") {
@@ -116,6 +174,41 @@ async fn save_handler(
         .map_err(SkillError::Storage)
 }
 #[medi_handler]
+async fn import_handler(
+    repository: SkillRepositoryResource,
+    downloader: SkillDownloaderResource,
+    command: ImportSkill,
+) -> Result<(), SkillError> {
+    let downloaded = downloader
+        .0
+        .download_skill(&command.url)
+        .await
+        .map_err(SkillError::Storage)?;
+    let url = command.url;
+    let id = url
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    let skill = parse_skill(&downloaded.skill_md, id).map_err(SkillError::Validation)?;
+    validate(&skill).map_err(SkillError::Validation)?;
+    let exists = repository
+        .0
+        .list()
+        .map_err(SkillError::Storage)?
+        .iter()
+        .any(|existing| existing.id == skill.id);
+    if exists && !command.overwrite {
+        return Err(SkillError::Conflict("Skill ID already exists".into()));
+    }
+    if exists {
+        repository.0.replace_imported(&skill, &downloaded.files)
+    } else {
+        repository.0.save_imported(&skill, &downloaded.files)
+    }
+    .map_err(SkillError::Storage)
+}
+#[medi_handler]
 async fn delete_handler(
     repository: SkillRepositoryResource,
     command: DeleteSkill,
@@ -152,8 +245,27 @@ async fn delete_handler(
         .delete(&command.id)
         .map_err(SkillError::Storage)
 }
-medi_module! { pub manifest skills_feature; resources { skill_repository: crate::features::skills::SkillRepositoryResource; } commands {
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    #[test]
+    fn parses_folded_description_and_keeps_all_frontmatter_metadata() {
+        let source = "---\nname: ponytail\ndescription: >\n  Lazy senior dev mode: smallest change.\n  A reply a busy human understands.\nargument-hint: [lite|full|ultra]\nlicense: MIT\n---\nInstructions go here.\n";
+        let skill = parse_skill(source, "ponytail".into()).unwrap();
+        assert_eq!(
+            skill.description,
+            "Lazy senior dev mode: smallest change. A reply a busy human understands."
+        );
+        assert!(skill.metadata.contains("argument-hint: [lite|full|ultra]"));
+        assert!(skill.metadata.contains("license: MIT"));
+        assert_eq!(skill.instructions, "Instructions go here.\n");
+    }
+}
+
+medi_module! { pub manifest skills_feature; resources { skill_repository: crate::features::skills::SkillRepositoryResource; skill_downloader: crate::features::skills::SkillDownloaderResource; } commands {
 crate::features::skills::ListSkills => crate::features::skills::list_handler;
 crate::features::skills::SaveSkill => crate::features::skills::save_handler;
+crate::features::skills::ImportSkill => crate::features::skills::import_handler;
 crate::features::skills::DeleteSkill => crate::features::skills::delete_handler;
 } }

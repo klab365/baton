@@ -8,6 +8,7 @@ use crate::{
         project_config::ProjectConfigRepository,
         runs::RunRepository,
         runtime::{AgentRuntime, AgentRuntimeFactory},
+        skills::SkillRepository,
         tasks::TaskRepository,
     },
 };
@@ -30,6 +31,7 @@ pub struct TaskFeatureResources {
     pub runs: Arc<dyn RunRepository>,
     pub project_config: Arc<dyn ProjectConfigRepository>,
     pub runtime_factory: Arc<dyn AgentRuntimeFactory>,
+    pub skills: Arc<dyn SkillRepository>,
 }
 
 #[derive(MediCommand)]
@@ -174,6 +176,45 @@ pub fn start_task_run(
     }
 }
 
+fn validate_task_readiness(
+    config: &ProjectConfig,
+    pipeline_id: &str,
+    skills: &dyn SkillRepository,
+) -> Result<(), String> {
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == pipeline_id)
+        .ok_or_else(|| format!("Pipeline {pipeline_id:?} does not exist"))?;
+    let available = skills
+        .list()
+        .map_err(|error| format!("Could not validate skills: {error}"))?;
+    for step in &pipeline.steps {
+        if step.human {
+            continue;
+        }
+        let agent = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == step.agent_id)
+            .ok_or_else(|| {
+                format!(
+                    "Pipeline step {:?} references missing agent {:?}",
+                    step.id, step.agent_id
+                )
+            })?;
+        for skill_id in &agent.skill_ids {
+            if !available.iter().any(|skill| &skill.id == skill_id) {
+                return Err(format!(
+                    "Agent {:?} references missing skill {:?}; restore the skill or remove its assignment before starting the task",
+                    agent.id, skill_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn load_task_project_config(
     resources: &TaskFeatureResources,
 ) -> Result<ProjectConfig, String> {
@@ -296,6 +337,8 @@ async fn start_task_run_handler(
         }
         ConfigState::Invalid(message) => return Err(TaskRunStartError::Pipeline(message)),
     };
+    validate_task_readiness(&config, &task.pipeline_id, resources.skills.as_ref())
+        .map_err(TaskRunStartError::Pipeline)?;
     let mut runtime = resources
         .runtime_factory
         .create(&config, &task.pipeline_id)
