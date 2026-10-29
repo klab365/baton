@@ -1,3 +1,7 @@
+// Composition wires independent feature resources; medi-rs also generates a
+// constructor with one parameter per resource.
+#![allow(clippy::too_many_arguments)]
+
 use baton_core::{
     agents_feature, credentials_feature,
     features::{
