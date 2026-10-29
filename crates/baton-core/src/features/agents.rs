@@ -116,8 +116,19 @@ async fn list_agents_handler(
 #[medi_handler]
 async fn mutate_agent_handler(
     repository: AgentRepositoryResource,
+    skills: crate::features::skills::SkillRepositoryResource,
     command: MutateAgent,
 ) -> Result<(), AgentError> {
+    if let Mutation::Create(agent) | Mutation::Update(_, agent) = &command.mutation {
+        let available = skills.0.list().map_err(AgentError::Storage)?;
+        for id in &agent.skill_ids {
+            if !available.iter().any(|skill| &skill.id == id) {
+                return Err(AgentError::Validation(format!(
+                    "Unknown assigned skill {id:?}"
+                )));
+            }
+        }
+    }
     mutate(repository.0.as_ref(), &command.revision, command.mutation).await
 }
 

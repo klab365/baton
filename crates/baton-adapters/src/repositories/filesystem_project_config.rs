@@ -58,13 +58,78 @@ impl FilesystemProjectConfigRepository {
 impl ProjectConfigRepository for FilesystemProjectConfigRepository {
     async fn load(&self) -> Result<ConfigState, String> {
         match tokio::fs::read_to_string(self.config_path()).await {
-            Ok(contents) => match parse_config(&contents) {
-                Ok(config) => Ok(ConfigState::Ready(ConfigSnapshot {
-                    config,
-                    revision: contents,
-                })),
-                Err(message) => Ok(ConfigState::Invalid(message)),
-            },
+            Ok(mut contents) => {
+                let mut value: serde_json::Value = match serde_json::from_str(&contents) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Ok(ConfigState::Invalid(format!(
+                            "Invalid project configuration: {error}"
+                        )));
+                    }
+                };
+                if let Some(inline) = value.get("skills").and_then(serde_json::Value::as_array) {
+                    use crate::skills::FilesystemSkillRepository;
+                    use baton_core::ports::skills::SkillRepository;
+                    let skills: Vec<baton_core::domain::project::Skill> = inline
+                        .iter()
+                        .map(|value| {
+                            let object =
+                                value.as_object().ok_or("Inline skill must be an object")?;
+                            let id = object
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or("Inline skill has no ID")?
+                                .to_owned();
+                            let description = object
+                                .get("description")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("")
+                                .to_owned();
+                            let instructions = object
+                                .get("instructions")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or("Inline skill has no instructions")?
+                                .to_owned();
+                            Ok::<_, String>(baton_core::domain::project::Skill {
+                                id,
+                                description,
+                                instructions,
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    value.as_object_mut().unwrap().remove("skills");
+                    let config = parse_config(&value.to_string())?;
+                    let repository = FilesystemSkillRepository::new(self.project_dir.clone());
+                    let existing = repository.list()?;
+                    let mut ids = std::collections::HashSet::new();
+                    for skill in &skills {
+                        baton_core::features::skills::validate(skill)?;
+                        if !ids.insert(&skill.id) {
+                            return Err(format!("Duplicate inline skill ID {:?}", skill.id));
+                        }
+                        if existing.iter().any(|item| item.id == skill.id) {
+                            return Err(format!(
+                                "Cannot migrate inline skill {:?}: folder already exists; reconcile it before removing the inline list",
+                                skill.id
+                            ));
+                        }
+                    }
+                    for skill in &skills {
+                        repository.save(skill)?;
+                    }
+                    self.persist(Some(&contents), &config).await?;
+                    contents = tokio::fs::read_to_string(self.config_path())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                match parse_config(&contents) {
+                    Ok(config) => Ok(ConfigState::Ready(ConfigSnapshot {
+                        config,
+                        revision: contents,
+                    })),
+                    Err(message) => Ok(ConfigState::Invalid(message)),
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ConfigState::Missing),
             Err(error) => Err(format!("Could not read project configuration: {error}")),
         }

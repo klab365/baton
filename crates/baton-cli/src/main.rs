@@ -1,5 +1,19 @@
 use std::{env, path::PathBuf};
 
+async fn load_project_config(
+    project: &std::path::Path,
+) -> anyhow::Result<baton_core::domain::project::ProjectConfig> {
+    use baton_core::ports::project_config::ProjectConfigRepository;
+    let repository = baton_adapters::repositories::filesystem_project_config::FilesystemProjectConfigRepository::new(project.to_path_buf());
+    match repository.load().await.map_err(anyhow::Error::msg)? {
+        baton_core::domain::project::ConfigState::Ready(snapshot) => Ok(snapshot.config),
+        baton_core::domain::project::ConfigState::Missing => {
+            anyhow::bail!("Project configuration is missing")
+        }
+        baton_core::domain::project::ConfigState::Invalid(message) => anyhow::bail!(message),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     if matches!(
@@ -20,10 +34,7 @@ async fn main() -> anyhow::Result<()> {
         match args[1].as_str() {
             "task-done" => {
                 let mut task = tasks.load(&args[3]).map_err(anyhow::Error::msg)?;
-                let config = baton_core::domain::project::parse_config(&std::fs::read_to_string(
-                    project.join(".baton/config.json"),
-                )?)
-                .map_err(anyhow::Error::msg)?;
+                let config = load_project_config(&project).await?;
                 let input = baton_core::domain::tasks::TaskInput {
                     title: task.title.clone(),
                     description: task.description.clone(),
@@ -89,10 +100,7 @@ async fn main() -> anyhow::Result<()> {
             anyhow::bail!("Usage: baton run <project-directory> <pipeline-id> <task-prompt>");
         }
         let project = PathBuf::from(&args[0]).canonicalize()?;
-        let config = baton_core::domain::project::parse_config(&std::fs::read_to_string(
-            project.join(".baton/config.json"),
-        )?)
-        .map_err(anyhow::Error::msg)?;
+        let config = load_project_config(&project).await?;
         let id = format!(
             "{}-{}",
             std::process::id(),
@@ -100,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_nanos()
         );
+        let skills = baton_core::ports::skills::SkillRepository::list(
+            &baton_adapters::skills::FilesystemSkillRepository::new(project.clone()),
+        )
+        .map_err(anyhow::Error::msg)?;
         let repository =
             baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project);
         let credential_store =
@@ -113,11 +125,7 @@ async fn main() -> anyhow::Result<()> {
             &args[1],
             &args[2],
             &id,
-            &mut baton_adapters::runtime::ConfiguredRuntime::new(
-                config.clone(),
-                credentials,
-                auth_root,
-            ),
+            &mut baton_adapters::runtime::ConfiguredRuntime::new(credentials, auth_root, skills),
             &repository,
         )
         .map_err(anyhow::Error::msg)?;

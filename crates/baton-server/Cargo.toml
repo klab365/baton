@@ -25,3 +25,4 @@ ts-rs.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+tempfile = "3.27.0"

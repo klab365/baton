@@ -3,11 +3,11 @@ use baton_core::{
     features::{
         agents::AgentRepositoryResource, credentials::CredentialRepositoryResource,
         pipelines::PipelineRepositoryResource, runs::RunFeatureResources,
-        tasks::TaskFeatureResources,
+        skills::SkillRepositoryResource, tasks::TaskFeatureResources,
     },
     pipelines_feature,
     ports::project_config::ProjectConfigRepository,
-    project_config, runs_feature, tasks_feature,
+    project_config, runs_feature, skills_feature, tasks_feature,
 };
 use medi_rs::mediator;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ mediator! {
     pub struct ServerMediator {
         event_queue_capacity: 1;
         event_workers: 1;
-        modules: [project_config, agents_feature, pipelines_feature, credentials_feature, tasks_feature, runs_feature];
+        modules: [project_config, agents_feature, pipelines_feature, credentials_feature, tasks_feature, runs_feature, skills_feature];
     }
 }
 
@@ -27,6 +27,7 @@ pub fn new(
     credential_models: Arc<dyn baton_core::ports::credentials::CredentialModelCatalog>,
     task_resources: TaskFeatureResources,
     run_resources: RunFeatureResources,
+    skills: Arc<dyn baton_core::ports::skills::SkillRepository>,
 ) -> ServerMediator {
     ServerMediator::builder()
         .repository(repository.clone())
@@ -35,10 +36,11 @@ pub fn new(
         .credential_repository(CredentialRepositoryResource(
             credentials,
             credential_types,
-            repository,
+            repository.clone(),
             credential_models,
         ))
         .task_resources(task_resources)
         .run_resources(run_resources)
+        .skill_repository(SkillRepositoryResource(skills, repository))
         .build()
 }

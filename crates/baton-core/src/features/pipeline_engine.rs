@@ -345,19 +345,7 @@ pub(crate) fn execute_graph(
             .iter()
             .map(|transition| transition.outcome.clone())
             .collect::<Vec<_>>();
-        let mut assigned = agent.clone();
-        for id in &agent.skill_ids {
-            let skill = config
-                .skills
-                .iter()
-                .find(|skill| &skill.id == id)
-                .ok_or("Unknown assigned skill")?;
-            assigned.system_prompt.push_str(&format!(
-                "\n\nAssigned skill {}:\n{}",
-                skill.name, skill.instructions
-            ));
-        }
-        assigned.skill_ids.clear();
+        let assigned = agent.clone();
         let cancellation_id = run.id.clone();
         let cancelled = || {
             repository

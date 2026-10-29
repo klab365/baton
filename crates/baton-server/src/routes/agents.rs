@@ -1,4 +1,4 @@
-use crate::api::dto::{Agent as AgentDto, Skill as SkillDto};
+use crate::api::dto::Agent as AgentDto;
 use crate::{ApiError, AppState, StatusCode};
 use axum::{
     Json, Router,
@@ -26,7 +26,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>, 
     Ok(Json(serde_json::json!({
         "revision": snapshot.revision,
         "agents": snapshot.config.agents.into_iter().map(AgentDto::from).collect::<Vec<_>>(),
-        "skills": snapshot.config.skills.into_iter().map(SkillDto::from).collect::<Vec<_>>(),
+        "skills": state.mediator.send(baton_core::features::skills::ListSkills).await?,
     })))
 }
 

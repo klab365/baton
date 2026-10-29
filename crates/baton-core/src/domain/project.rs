@@ -8,7 +8,6 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     pub agents: Vec<Agent>,
     pub pipelines: Vec<Pipeline>,
-    pub skills: Vec<Skill>,
 }
 
 macro_rules! dto {
@@ -67,18 +66,19 @@ pub struct Transition {
     // Null is an explicit terminal transition.
     pub to: Option<String>,
 }
-dto!(Skill {
-    id: String,
-    name: String,
-    instructions: String
-});
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Skill {
+    pub id: String,
+    pub description: String,
+    pub instructions: String,
+}
 
 impl ProjectConfig {
     pub const CURRENT: Self = Self {
         schema_version: 7,
         agents: Vec::new(),
         pipelines: Vec::new(),
-        skills: Vec::new(),
     };
 
     pub fn validate(&self) -> Result<(), String> {
@@ -89,7 +89,6 @@ impl ProjectConfig {
             ));
         }
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
-        let skills = ids("skills", self.skills.iter().map(|x| x.id.as_str()))?;
         let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
         for agent in &self.agents {
             nonempty("agent.systemPrompt", &agent.system_prompt)?;
@@ -112,7 +111,7 @@ impl ProjectConfig {
             for rule in &agent.rules {
                 nonempty("agent.rules", rule)?;
             }
-            references("agent.skillIds", &agent.skill_ids, &skills)?;
+            ids("agent.skillIds", agent.skill_ids.iter().map(String::as_str))?;
         }
         for pipeline in &self.pipelines {
             let path = format!("pipelines[{}]", pipeline.id);
@@ -158,13 +157,6 @@ impl ProjectConfig {
                 }
             }
         }
-        for skill in &self.skills {
-            nonempty(&format!("skills[{}].name", skill.id), &skill.name)?;
-            nonempty(
-                &format!("skills[{}].instructions", skill.id),
-                &skill.instructions,
-            )?;
-        }
         Ok(())
     }
 }
@@ -202,14 +194,6 @@ fn reference(path: &str, id: &str, targets: &HashSet<&str>) -> Result<(), String
     } else {
         Err(format!("{path}: unknown reference {id:?}"))
     }
-}
-
-fn references(path: &str, values: &[String], targets: &HashSet<&str>) -> Result<(), String> {
-    ids(path, values.iter().map(String::as_str))?;
-    for value in values {
-        reference(path, value, targets)?;
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +242,13 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
     }
     let mut value: serde_json::Value = serde_json::from_str(contents)
         .map_err(|error| format!("Invalid project configuration: {error}"))?;
+    if value
+        .get("skills")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        value.as_object_mut().unwrap().remove("skills");
+    }
     let legacy_version = value["schemaVersion"].as_u64();
     if legacy_version == Some(5) {
         return Err("Pi runtime profiles are no longer supported; replace them with explicit Rig profiles before upgrading to schemaVersion 6".into());

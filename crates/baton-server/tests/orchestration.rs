@@ -73,21 +73,9 @@ fn config() -> baton_core::domain::project::ProjectConfig {
 }
 
 #[test]
-fn assigned_skills_are_expanded_without_discovering_unassigned_context() {
+fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
     let fixture = Fixture::new();
     let mut config = config();
-    config.skills = vec![
-        baton_core::domain::project::Skill {
-            id: "assigned".into(),
-            name: "Assigned".into(),
-            instructions: "authorized skill body".into(),
-        },
-        baton_core::domain::project::Skill {
-            id: "unassigned".into(),
-            name: "Unassigned".into(),
-            instructions: "must never reach runtime".into(),
-        },
-    ];
     config.agents[0].skill_ids.push("assigned".into());
     struct Inspect;
     impl AgentRuntime for Inspect {
@@ -97,13 +85,13 @@ fn assigned_skills_are_expanded_without_discovering_unassigned_context() {
             agent: &baton_core::domain::project::Agent,
             _: &str,
         ) -> Result<String, String> {
-            assert!(agent.skill_ids.is_empty());
-            assert!(!agent.system_prompt.contains("must never reach runtime"));
             if agent.id == "writer" {
-                assert!(agent.system_prompt.contains("authorized skill body"));
+                assert_eq!(agent.skill_ids, ["assigned"]);
             } else {
-                assert!(!agent.system_prompt.contains("authorized skill body"));
+                assert!(agent.skill_ids.is_empty());
             }
+            assert!(!agent.system_prompt.contains("must never reach runtime"));
+            assert!(!agent.system_prompt.contains("authorized skill body"));
             Ok("done".into())
         }
     }

@@ -54,9 +54,13 @@ impl AppState {
         let run_repository: Arc<dyn RunRepository> =
             Arc::new(FilesystemRunRepository(project_dir.clone()));
         let runtime_factory: Arc<dyn AgentRuntimeFactory> = Arc::new(ConfiguredRuntimeFactory {
+            project_dir: project_dir.clone(),
             credentials: credentials.clone(),
             auth_root,
         });
+        let skills: Arc<dyn baton_core::ports::skills::SkillRepository> = Arc::new(
+            baton_adapters::skills::FilesystemSkillRepository::new(project_dir.clone()),
+        );
         let task_resources = TaskFeatureResources {
             tasks: task_repository,
             runs: run_repository.clone(),
@@ -74,6 +78,7 @@ impl AppState {
             credential_models,
             task_resources,
             run_resources,
+            skills,
         ));
         Self {
             project_dir: Arc::new(project_dir),
@@ -87,6 +92,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::project::router())
         .merge(routes::agents::router())
+        .merge(routes::skills::router())
         .merge(routes::credentials::router())
         .merge(routes::tasks::router())
         .merge(routes::pipelines::router())
