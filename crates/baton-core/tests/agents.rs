@@ -29,7 +29,7 @@ impl ProjectConfigRepository for MemoryRepository {
 
 fn fixture() -> (MemoryRepository, ProjectConfig) {
     let config: ProjectConfig = serde_json::from_str(
-        r#"{"schemaVersion":7,"agents":[{"id":"writer","systemPrompt":"Write clearly","runtimeKind":"rig","model":{"provider":"openai","model":"gpt-4.1"},"credentialId":null,"rules":[],"skillIds":[]}],"pipelines":[{"id":"draft","name":"Draft and review","steps":[{"id":"write","name":"Write","agentId":"writer","human":false,"transitions":[]}]}]}"#,
+        r#"{"schemaVersion":7,"agents":[{"id":"writer","systemPrompt":"Write clearly","runtimeKind":"rig","model":{"provider":"openai","model":"gpt-4.1"},"credentialId":null,"skillIds":[]}],"pipelines":[{"id":"draft","name":"Draft and review","steps":[{"id":"write","name":"Write","agentId":"writer","human":false,"transitions":[]}]}]}"#,
     ).unwrap();
     (
         MemoryRepository(Mutex::new(ConfigSnapshot {

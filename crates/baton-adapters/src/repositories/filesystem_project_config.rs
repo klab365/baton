@@ -337,7 +337,6 @@ mod tests {
                 model: "gpt-4.1".into(),
             }),
             credential_id: None,
-            rules: vec![],
             skill_ids: vec![],
         }
     }

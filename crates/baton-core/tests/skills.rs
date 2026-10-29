@@ -4,7 +4,7 @@ use baton_core::{
 };
 #[test]
 fn resolves_only_assigned_skills_in_order_without_permission_changes() {
-    let mut agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent","systemPrompt":"Base","runtimeKind":"fake","model":null,"credentialId":null,"rules":["Rule"],"skillIds":["second","first"]})).unwrap();
+    let mut agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent","systemPrompt":"Base","runtimeKind":"fake","model":null,"credentialId":null,"skillIds":["second","first"]})).unwrap();
     let skills = vec![
         Skill {
             id: "first".into(),
@@ -33,7 +33,6 @@ fn resolves_only_assigned_skills_in_order_without_permission_changes() {
     );
     assert!(!resolved.system_prompt.contains("Never include"));
     assert!(!resolved.system_prompt.contains("description: metadata"));
-    assert_eq!(resolved.rules, agent.rules);
     assert_eq!(resolved.runtime_kind, agent.runtime_kind);
     agent.skill_ids.push("missing".into());
     assert!(resolve(&agent, &skills).unwrap_err().contains("missing"));

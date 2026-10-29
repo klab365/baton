@@ -60,7 +60,6 @@ function open(agent?: Agent) {
 				runtimeKind: "rig",
 				model: { provider: "openai", model: "" },
 				credentialId: null,
-				rules: [],
 				skillIds: [],
 			};
 	revision = config.revision;
@@ -163,7 +162,7 @@ async function save(remove = false) {
 		</aside>
 		<section class="agent-editor">
 			{#if !draft}
-				<EmptyState title="Select or create an agent" description="Agents hold instructions, provider credentials, model, rules and skills." />
+				<EmptyState title="Select or create an agent" description="Agents hold instructions, provider credentials, model and skills." />
 			{:else}
 				<form onsubmit={(event) => { event.preventDefault(); save(); }}>
 					<div class="editor-header"><div><span class="eyebrow">{editing ? "Editing agent" : "New agent"}</span>{#if !editing}<h2>{draft.id || "Untitled agent"}</h2>{/if}</div><div><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button> <Button type="submit" loading={busy}>Save agent</Button></div></div>
@@ -174,7 +173,7 @@ async function save(remove = false) {
 						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" bind:value={draft!.model!.model} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert">{modelsError}</small>{/if}{/snippet}</Field>
 					</div></section>
 					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="System prompt" for="agent-prompt" required hint="Define this agent’s role, scope, and response style.">{#snippet children({ describedBy })}<textarea id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field>
-					<Field label="Rules" for="agent-rules" hint="One non-empty rule per line.">{#snippet children({ describedBy })}<textarea id="agent-rules" name="rules" value={draft!.rules.join("\n")} oninput={(event) => { if (draft) draft.rules = event.currentTarget.value.split("\n").filter((rule: string) => rule.trim()); }} rows={4} placeholder="Be concise" disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field></section>
+					</section>
 					<section class="references form-section" aria-labelledby="agent-skills-heading"><header class="skills-header"><div><span class="eyebrow">Capabilities</span><h3 id="agent-skills-heading">Skills</h3></div><Button variant="secondary" disabled={busy || !config.skills.some((skill) => !(draft?.skillIds.includes(skill.id) ?? false))} onclick={addSkill}><Plus size={16} /> Add skill</Button></header>{#if draft!.skillIds.length}<ol class="assigned-skills">{#each draft!.skillIds as skillId, index}<li><Field label="Skill" for={`agent-skill-${index}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-skill-${index}`} value={skillId} items={config.skills.filter((skill) => skill.id === skillId || !draft!.skillIds.includes(skill.id)).map((skill) => ({ id: skill.id, name: skill.id }))} placeholder="Select a skill" label="Available skills" {describedBy} {invalid} disabled={busy} onValueChange={(id) => { if (draft) draft.skillIds = draft.skillIds.map((item, itemIndex) => itemIndex === index ? id : item); }} />{/snippet}</Field><button type="button" class="remove-skill" aria-label={`Remove ${skillId}`} disabled={busy} onclick={() => { if (draft) draft.skillIds = draft.skillIds.filter((_, itemIndex) => itemIndex !== index); }}><Trash2 size={15} /></button></li>{/each}</ol>{:else}<p class="muted">No skills assigned. Add skills to give this agent reusable guidance.</p>{/if}</section>
 					{#if editing}<div class="delete-row"><Button variant="danger" disabled={busy} onclick={() => deleting = true}><Trash2 size={16} /> Delete agent</Button></div>{/if}
 				</form>
