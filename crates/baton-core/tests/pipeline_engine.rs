@@ -94,7 +94,6 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
     let snapshot = pipelines::list(&repository).await.unwrap();
     assert_eq!(snapshot.config.pipelines.last(), Some(&pipeline));
     assert_eq!(snapshot.config.agents, original.agents);
-    assert_eq!(snapshot.config.skills, original.skills);
 
     pipelines::mutate(
         &repository,

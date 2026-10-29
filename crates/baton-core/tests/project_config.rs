@@ -8,8 +8,7 @@ fn example() -> serde_json::Value {
             {"id":"plan", "name":"Plan", "agentId":"writer"},
             {"id":"build", "name":"Build", "agentId":"writer"},
             {"id":"review", "name":"Review", "agentId":"writer"}
-        ]}],
-        "skills":[{"id":"style", "name":"Style", "instructions":"Be concise"}]
+        ]}]
     })
 }
 
@@ -89,8 +88,8 @@ fn actionable_validation_failures() {
         ),
         (
             "/agents/0/skillIds",
-            serde_json::json!(["missing"]),
-            "skillIds: unknown reference",
+            serde_json::json!(["bad id"]),
+            "skillIds: invalid ID",
         ),
         (
             "/pipelines/0/steps/0/agentId",
@@ -128,7 +127,7 @@ fn actionable_validation_failures() {
         let error = parse_config(&value.to_string()).unwrap_err();
         assert!(error.contains(message), "{error}");
     }
-    for collection in ["agents", "pipelines", "skills"] {
+    for collection in ["agents", "pipelines"] {
         let mut value = example();
         let items = value[collection].as_array_mut().unwrap();
         items.push(items[0].clone());

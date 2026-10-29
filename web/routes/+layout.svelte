@@ -9,6 +9,7 @@ import {
 	History,
 	Settings2,
 	Workflow,
+	Sparkles,
 } from "@lucide/svelte";
 import Button from "../components/Button.svelte";
 import StatusMessage from "../components/StatusMessage.svelte";
@@ -20,6 +21,7 @@ const navigation = [
 	{ href: "/runs", label: "Runs", icon: History },
 	{ href: "/agents", label: "Agents", icon: Boxes },
 	{ href: "/pipelines", label: "Pipelines", icon: Workflow },
+	{ href: "/skills", label: "Skills", icon: Sparkles },
 ];
 </script>
 

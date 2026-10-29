@@ -1,3 +1,4 @@
+use baton_core::ports::skills::SkillRepository;
 use baton_core::{
     domain::pipeline::RunTraceEntry,
     domain::{
@@ -10,7 +11,7 @@ use std::{path::Path, sync::Arc};
 
 /// Dispatch strictly by the agent's configured runtime. Never fall back.
 pub struct ConfiguredRuntime {
-    config: ProjectConfig,
+    skills: Vec<baton_core::domain::project::Skill>,
     fake: super::FakeRuntime,
     decision: Option<AgentDecision>,
     trace: Vec<RunTraceEntry>,
@@ -19,12 +20,12 @@ pub struct ConfiguredRuntime {
 }
 impl ConfiguredRuntime {
     pub fn new(
-        config: ProjectConfig,
         credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
         auth_root: std::path::PathBuf,
+        skills: Vec<baton_core::domain::project::Skill>,
     ) -> Self {
         Self {
-            config,
+            skills,
             fake: super::FakeRuntime::default(),
             decision: None,
             trace: Vec::new(),
@@ -35,6 +36,7 @@ impl ConfiguredRuntime {
 }
 #[derive(Clone)]
 pub struct ConfiguredRuntimeFactory {
+    pub project_dir: std::path::PathBuf,
     pub credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     pub auth_root: std::path::PathBuf,
 }
@@ -53,10 +55,12 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
         {
             return Err("Selected pipeline does not exist".into());
         }
+        let skills =
+            crate::skills::FilesystemSkillRepository::new(self.project_dir.clone()).list()?;
         Ok(Box::new(ConfiguredRuntime::new(
-            config.clone(),
             self.credentials.clone(),
             self.auth_root.clone(),
+            skills,
         )))
     }
 }
@@ -84,6 +88,8 @@ impl AgentRuntime for ConfiguredRuntime {
     ) -> Result<String, String> {
         self.decision = None;
         self.trace.clear();
+        let resolved = baton_core::features::skills::resolve(agent, &self.skills)?;
+        let agent = &resolved;
         match agent.runtime_kind {
             RuntimeKind::Rig => {
                 let runtime_credential = if let Some(id) = agent.credential_id.as_deref() {
@@ -100,7 +106,7 @@ impl AgentRuntime for ConfiguredRuntime {
                 let (output, decision, trace) = super::rig::RigRuntime::execute(
                     directory,
                     agent,
-                    &self.config.skills,
+                    &self.skills,
                     input,
                     super::rig::RigAgentContext {
                         agent,

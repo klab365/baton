@@ -8,4 +8,5 @@ pub mod pipeline_engine;
 pub mod pipelines;
 pub mod project_config;
 pub mod runs;
+pub mod skills;
 pub mod tasks;

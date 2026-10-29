@@ -11,7 +11,6 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     pub agents: Vec<Agent>,
     pub pipelines: Vec<Pipeline>,
-    pub skills: Vec<Skill>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -71,7 +70,7 @@ pub struct Transition {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Skill {
     pub id: String,
-    pub name: String,
+    pub description: String,
     pub instructions: String,
 }
 
@@ -95,7 +94,6 @@ impl From<domain::ProjectConfig> for ProjectConfig {
             schema_version: value.schema_version,
             agents: value.agents.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
-            skills: value.skills.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -106,7 +104,6 @@ impl From<ProjectConfig> for domain::ProjectConfig {
             schema_version: value.schema_version,
             agents: value.agents.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
-            skills: value.skills.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -235,7 +232,7 @@ impl From<domain::Skill> for Skill {
     fn from(value: domain::Skill) -> Self {
         Self {
             id: value.id,
-            name: value.name,
+            description: value.description,
             instructions: value.instructions,
         }
     }
@@ -245,7 +242,7 @@ impl From<Skill> for domain::Skill {
     fn from(value: Skill) -> Self {
         Self {
             id: value.id,
-            name: value.name,
+            description: value.description,
             instructions: value.instructions,
         }
     }
