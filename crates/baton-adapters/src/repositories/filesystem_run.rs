@@ -8,6 +8,41 @@ use baton_core::{
 };
 use std::{fs, io::Write, path::PathBuf};
 
+// Keep the runtime and HTTP representation as strings while storing JSON transcripts
+// structurally. Plain text and legacy string contents remain unchanged.
+fn serialize_run(run: &PipelineRun) -> Result<Vec<u8>, serde_json::Error> {
+    let mut value = serde_json::to_value(run)?;
+    if let Some(trace) = value.get_mut("trace").and_then(|v| v.as_array_mut()) {
+        for entry in trace {
+            if let Some(content) = entry.get_mut("content")
+                && let Some(text) = content.as_str()
+                && let Ok(transcript) = serde_json::from_str::<serde_json::Value>(text)
+                && (transcript.is_array() || transcript.is_object())
+            {
+                *content = serde_json::json!({ "json": transcript });
+            }
+        }
+    }
+    serde_json::to_vec_pretty(&value)
+}
+
+fn deserialize_run(bytes: &[u8]) -> Result<PipelineRun, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes)?;
+    if let Some(trace) = value.get_mut("trace").and_then(|v| v.as_array_mut()) {
+        for entry in trace {
+            if let Some(content) = entry.get_mut("content")
+                && let Some(object) = content.as_object()
+                && object.len() == 1
+                && let Some(transcript) = object.get("json")
+                && (transcript.is_array() || transcript.is_object())
+            {
+                *content = serde_json::Value::String(serde_json::to_string_pretty(transcript)?);
+            }
+        }
+    }
+    serde_json::from_value(value)
+}
+
 pub struct FilesystemRunRepository(pub PathBuf);
 impl FilesystemRunRepository {
     fn path(&self, id: &str) -> Result<PathBuf, String> {
@@ -30,7 +65,7 @@ impl FilesystemRunRepository {
             .open(&temporary)
             .map_err(|e| e.to_string())?;
         let result = (|| {
-            file.write_all(&serde_json::to_vec_pretty(run).map_err(|e| e.to_string())?)
+            file.write_all(&serialize_run(run).map_err(|e| e.to_string())?)
                 .and_then(|()| file.sync_all())
                 .map_err(|e| e.to_string())?;
             if create {
@@ -63,7 +98,7 @@ impl FilesystemRunRepository {
             let path = entry.map_err(|e| e.to_string())?.path();
             if path.extension().and_then(|x| x.to_str()) == Some("json") {
                 let mut run: PipelineRun =
-                    serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
+                    deserialize_run(&fs::read(&path).map_err(|e| e.to_string())?)
                         .map_err(|e| e.to_string())?;
                 let legacy = path.with_file_name(format!("{}.events.jsonl", run.id));
                 if let Ok(contents) = fs::read_to_string(&legacy) {
@@ -133,7 +168,7 @@ impl RunRepository for FilesystemRunRepository {
     fn save(&self, run: &PipelineRun) -> Result<(), String> {
         let _lock = self.repository_lock();
         if let Ok(existing) = fs::read(self.path(&run.id)?)
-            && let Ok(existing) = serde_json::from_slice::<PipelineRun>(&existing)
+            && let Ok(existing) = deserialize_run(&existing)
             && existing.status == Status::Cancelled
             && run.status != Status::Cancelled
         {
@@ -146,14 +181,14 @@ impl RunRepository for FilesystemRunRepository {
     }
     fn load(&self, id: &str) -> Result<PipelineRun, String> {
         let _lock = self.repository_lock();
-        serde_json::from_slice(&fs::read(self.path(id)?).map_err(|e| e.to_string())?)
+        deserialize_run(&fs::read(self.path(id)?).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())
     }
     fn publish(&self, event: &RunEvent) -> Result<(), String> {
         let _lock = self.repository_lock();
         let path = self.path(&event.run_id)?;
         let mut run: PipelineRun =
-            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+            deserialize_run(&fs::read(path).map_err(|error| error.to_string())?)
                 .map_err(|error| error.to_string())?;
         if run.events.last() != Some(event) {
             run.events.push(event.clone());
@@ -166,6 +201,48 @@ impl RunRepository for FilesystemRunRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_files_are_structured_and_legacy_contents_remain_readable() {
+        use baton_core::domain::pipeline::RunTraceEntry;
+
+        let directory = tempfile::tempdir().unwrap();
+        let repository = FilesystemRunRepository(directory.path().to_path_buf());
+        let legacy = serde_json::json!({
+            "id": "run-1", "pipelineId": "pipeline", "task": "task",
+            "startedAt": "2026-01-01T00:00:00Z", "endedAt": null,
+            "durationMs": null, "status": "succeeded", "steps": [],
+            "trace": [
+                {"occurredAt": "now", "kind": "runtimeTranscript", "content": "[{\"role\":\"assistant\"}]"},
+                {"occurredAt": "now", "kind": "text", "content": "not JSON"}
+            ]
+        });
+        let run = deserialize_run(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+        repository.create(&run).unwrap();
+        let path = directory.path().join(".baton/runs/run-1.json");
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored["trace"][0]["content"]["json"][0]["role"],
+            "assistant"
+        );
+        assert_eq!(stored["trace"][1]["content"], "not JSON");
+        let loaded = repository.load("run-1").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&loaded.trace[0].content).unwrap(),
+            serde_json::json!([{"role": "assistant"}])
+        );
+        assert_eq!(
+            loaded.trace[1],
+            RunTraceEntry {
+                occurred_at: "now".into(),
+                kind: "text".into(),
+                content: "not JSON".into()
+            }
+        );
+        assert_eq!(repository.list().unwrap(), vec![loaded.clone()]);
+        repository.save(&loaded).unwrap();
+        assert_eq!(repository.load("run-1").unwrap(), loaded);
+    }
 
     #[test]
     fn run_action_lease_excludes_duplicate_actions_and_releases_on_drop() {
