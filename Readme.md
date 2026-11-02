@@ -1,62 +1,62 @@
 # Baton
 
-Baton orchestrates specialized AI agents through configurable pipelines. The application uses a Rust backend and a SvelteKit web UI.
+Baton orchestrates AI agents through configurable pipelines. Like a relay baton, it passes work and context from one step to the next, coordinating agents and human decisions along the way. It combines a Rust API and CLI with a SvelteKit interface for configuring agents, managing tasks and reviewing runs. Baton controls the workflow; agent runtimes execute individual steps.
 
-## Architecture
+## Install the CLI
 
-```text
-SvelteKit UI (web/)
-      │ HTTP / JSON
-      ▼
-Axum API + CLI (crates/baton-server, crates/baton-cli)
-      │ inbound adapters
-      ▼
-Application use cases and domain (crates/baton-core)
-      │ outbound ports
-      ▼
-Filesystem configuration (.baton/config.json)
+On macOS or glibc-based Linux (x86-64 or ARM64), install the latest GitHub Release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/klab365/baton/main/install.sh | sh
 ```
 
-The Rust workspace is organized as a modular monolith. The web UI is a separate client; it does not own project persistence or domain rules. Pipeline orchestration is implemented through a replaceable `AgentRuntime` port. Each agent directly selects its provider/model and reusable local credential. The deterministic fake runtime is available for offline tests. Setup, breaking migration, and security boundaries are documented in [docs/orchestration.md](docs/orchestration.md).
+The script installs `baton` to `~/.local/bin`; make sure that directory is on your `PATH`. Set `BATON_INSTALL_DIR` to change the destination or `BATON_VERSION` to select a release, for example:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/klab365/baton/main/install.sh | BATON_VERSION=0.1.0 sh
+```
+
+You can instead download an archive from [GitHub Releases](https://github.com/klab365/baton/releases) and manage the binary with your preferred tooling, including mise. Linux builds target glibc, not musl. The release binary includes the API and web UI; Node and Bun are not required at runtime.
+
+## Get started
+
+In a Git project, start the installed API:
+
+```sh
+cd /path/to/project
+baton
+```
+
+On first launch Baton creates `.baton/` and offers to initialize configuration in an interactive terminal. Open <http://127.0.0.1:5173> for the embedded UI. `BATON_PORT` changes the port. Configure credentials and agents, create a pipeline, then create and start a task. The `fake` runtime is available for offline testing. Agent execution requires Git; real model execution also requires a compatible provider credential.
+
+A worktree is **not a sandbox**: agents may run commands with the permissions of the Baton process. Use a container, VM or dedicated OS user for stronger isolation. Task prompts and run data are local and can be sensitive.
 
 ## Development
 
-Install dependencies and run the API and UI in the demo project:
-
-```bash
+```sh
 mise install
-bun install
+bun install --frozen-lockfile
 mise run dev
 ```
 
-The Axum API listens on `127.0.0.1:5173`; Vite serves the UI at `127.0.0.1:5174`. The demo project configuration is versioned at `examples/demo/.baton/config.json`. See [runtime orchestration](docs/orchestration.md) for agent runtime setup and the isolated artifact-writing/review pipeline.
+This starts the API and Vite development UI using `examples/demo`. The API is on port 5173 and Vite on port 5174, proxying `/api` to the backend. To build a standalone binary from source, run `bun run build` followed by `BATON_WEB_DIR="$PWD/build" cargo build --release -p baton-cli`. Without `BATON_WEB_DIR`, Rust builds show a placeholder instead of the embedded UI. To run checks:
 
-## Checks
-
-```bash
+```sh
 mise run check-format
 mise run lint
 mise run check
 mise run test
+mise run test-embedded-web
 mise run build
 ```
 
-## Run against another project
+## Documentation
 
-Start the backend for a project directory:
+- [Architecture and request lifecycle](docs/architecture.md)
+- [Project configuration](docs/project-configuration.md)
+- [Pipelines](docs/pipelines.md) and [workflow transitions](docs/workflow-transitions.md)
+- [Tasks](docs/tasks.md) and [runtime orchestration](docs/orchestration.md)
+- [Skills](docs/skills.md) and [provider credentials](docs/local-provider-storage.md)
+- [Release process](docs/releases.md)
 
-```bash
-BATON_PROJECT_DIR=/path/to/project cargo run -p baton-server
-```
-
-Then start the UI in another terminal:
-
-```bash
-bun run dev -- --port 5174
-```
-
-The first UI setup action creates `.baton/config.json` through the backend API. The project name is derived from the directory name.
-
-## Current status
-
-The backend and UI support project configuration, agents with direct provider/model and credential selection, pipelines, tasks, isolated runs, local credential management, and human decisions. Remote execution targets are not implemented.
+Baton currently runs agents locally; remote execution targets are not implemented.

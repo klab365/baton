@@ -57,6 +57,13 @@ run = "bun run check"
 description = "Run Rust workspace tests"
 run = "cargo test --workspace"
 
+[tasks.test-embedded-web]
+description = "Build the web UI and test it embedded in the Rust server"
+run = [
+  "bun run build",
+  'BATON_WEB_DIR="$PWD/build" cargo test --locked -p baton-server --lib serves_embedded_web_build -- --ignored',
+]
+
 [tasks.build-rust]
 description = "Build the Rust workspace"
 run = "cargo build --workspace"
