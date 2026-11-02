@@ -1,149 +1,170 @@
 {
-	"schemaVersion": 7,
-	"agents": [
-		{
-			"id": "writer",
-			"systemPrompt": "Implement the requested changes directly in the isolated project worktree. First inspect the relevant files, then make focused edits with built-in tools and verify them.",
-			"runtimeKind": "rig",
-			"model": {
-				"provider": "chatgpt",
-				"model": "gpt-6-luna"
-			},
-			"credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
-			"skillIds": ["ponytail"]
-		},
-		{
-			"id": "reviewer",
-			"systemPrompt": "Independently inspect the writer's changed project files using built-in tools. Review correctness and tests. Never approve without inspecting the changes. When finished, call the report_outcome tool exactly once with approved or revise_build and a concise review summary, then respond naturally. Do not encode pipeline decisions as JSON.",
-			"runtimeKind": "rig",
-			"model": {
-				"provider": "ollama",
-				"model": "deepseek-v4-pro:0813"
-			},
-			"credentialId": "9f95fb10-3d9c-4d18-9fd3-eb8ce098d1e7",
-			"skillIds": []
-		},
-		{
-			"id": "commit-agent",
-			"systemPrompt": "After the reviewer approves, inspect the task context and git diff in the current worktree. Identify intended task changes, including relevant untracked files; exclude .baton-rig session data and unrelated files. Stage only those task files, run git diff --cached --check, then create one Conventional Commit with an accurate type and summary (feat, fix, docs, refactor, chore, etc.). Never amend or rewrite existing commits. Do not modify source files. After a successful commit, call report_outcome exactly once with completed and a summary containing the commit subject and short hash, then respond naturally. Do not encode pipeline decisions as JSON.",
-			"runtimeKind": "rig",
-			"model": {
-				"provider": "chatgpt",
-				"model": "gpt-5.6-luna"
-			},
-			"credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
-			"skillIds": []
-		}
-	],
-	"pipelines": [
-		{
-			"id": "draft",
-			"name": "Draft and review",
-			"steps": [
-				{
-					"id": "write",
-					"name": "Write",
-					"agentId": "writer",
-					"human": false,
-					"transitions": []
-				},
-				{
-					"id": "review",
-					"name": "Review",
-					"agentId": "reviewer",
-					"human": false,
-					"transitions": [
-						{
-							"outcome": "approved",
-							"to": "commit-message"
-						},
-						{
-							"outcome": "revise_build",
-							"to": "write"
-						},
-						{
-							"outcome": "revise_plan",
-							"to": "write"
-						},
-						{
-							"outcome": "blocked",
-							"to": "human-decision"
-						}
-					]
-				},
-				{
-					"id": "commit-message",
-					"name": "Create commit",
-					"agentId": "commit-agent",
-					"human": false,
-					"transitions": [
-						{
-							"outcome": "completed",
-							"to": "human-decision"
-						}
-					]
-				},
-				{
-					"id": "human-decision",
-					"name": "Human approval",
-					"agentId": "",
-					"human": true,
-					"transitions": [
-						{
-							"outcome": "approved",
-							"to": null
-						},
-						{
-							"outcome": "rejected",
-							"to": "write"
-						},
-						{
-							"outcome": "responded",
-							"to": "write"
-						}
-					]
-				}
-			]
-		},
-		{
-			"id": "42008d6c-a0c9-490d-ac00-1fd22c6024ca",
-			"name": "Test2",
-			"steps": [
-				{
-					"id": "0d23694e-24db-47ee-8963-e1d7e2890483",
-					"name": "Writer",
-					"agentId": "writer",
-					"human": false,
-					"transitions": []
-				},
-				{
-					"id": "7e1f760e-1e59-42e5-a5f1-049e9c4642d3",
-					"name": "Human Review",
-					"agentId": "",
-					"human": true,
-					"transitions": [
-						{
-							"outcome": "approved",
-							"to": "7a1fee67-db8b-4fda-b2ca-9b87548a1975"
-						},
-						{
-							"outcome": "rejected",
-							"to": null
-						},
-						{
-							"outcome": "responded",
-							"to": "0d23694e-24db-47ee-8963-e1d7e2890483"
-						}
-					]
-				},
-				{
-					"id": "7a1fee67-db8b-4fda-b2ca-9b87548a1975",
-					"name": "pr-creation",
-					"agentId": "writer",
-					"human": false,
-					"transitions": []
-				}
-			]
-		}
-	]
+  "schemaVersion": 7,
+  "agents": [
+    {
+      "id": "factory-planner",
+      "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. If a critical ambiguity prevents safe progress, state it clearly in the handoff; do not invent requirements.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-6-luna"
+      },
+      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "skillIds": [
+        "concise-planning"
+      ]
+    },
+    {
+      "id": "factory-builder",
+      "systemPrompt": "You are the implementation agent. Read the task, plan, supplied project instructions and relevant code; incorporate review or human feedback. Make the smallest complete change in the task worktree, including relevant tests. Discover project test commands from its instructions or configuration; run focused checks when feasible and report the exact commands, results and anything not checked. Do not commit, push or create a pull request. Do not claim a check passed without evidence. When finished call report_outcome exactly once: completed if ready for review, or blocked if essential work cannot continue without human help. Include a concise handoff describing changes, verification and remaining risks.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-6-luna"
+      },
+      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "skillIds": [
+        "ponytail",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "factory-reviewer",
+      "systemPrompt": "You are the independent review agent. Inspect the task, supplied project instructions, actual worktree diff and relevant untracked files, surrounding code and tests; do not rely solely on the builder's summary. Review correctness, regressions, security and test coverage. Run focused checks when useful and feasible; distinguish observed results from claims. Do not modify files, commit, push or approve without inspecting the changes. When finished call report_outcome exactly once: approved if ready for human review, revise_build for actionable implementation defects, revise_plan if the approach needs reconsideration, or blocked if essential review cannot continue without human help. Give a concise handoff with findings, file locations, verification and residual risks.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "ollama",
+        "model": "deepseek-v4-pro:0813"
+      },
+      "credentialId": "9f95fb10-3d9c-4d18-9fd3-eb8ce098d1e7",
+      "skillIds": [
+        "code-review-excellence",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "factory-committer",
+      "systemPrompt": "You are the commit agent. After human approval, inspect the task context, supplied project instructions, git status and diff, including relevant untracked and already staged files. Stage only intended task changes; never include session data, secrets or unrelated files. If pre-staged changes are unrelated or scope is unclear, stop rather than alter or commit them. Inspect the complete staged diff and run git diff --cached --check, then create one accurate Conventional Commit. Do not modify source files, amend, rewrite history, push or create a pull request. When finished call report_outcome exactly once: completed only after a successful commit, with its subject and short hash, or blocked if human intervention is needed. Report failures honestly.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-5.6-luna"
+      },
+      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "skillIds": [
+        "verification-before-completion"
+      ]
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "software-factory",
+      "name": "Software Factory",
+      "steps": [
+        {
+          "id": "plan",
+          "name": "Analyze and plan",
+          "agentId": "factory-planner",
+          "human": false,
+          "transitions": []
+        },
+        {
+          "id": "build",
+          "name": "Implement and verify",
+          "agentId": "factory-builder",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": "review"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "name": "Independent review",
+          "agentId": "factory-reviewer",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "approved",
+              "to": "approval"
+            },
+            {
+              "outcome": "revise_build",
+              "to": "build"
+            },
+            {
+              "outcome": "revise_plan",
+              "to": "plan"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "approval",
+          "name": "Human approval",
+          "agentId": "",
+          "human": true,
+          "transitions": [
+            {
+              "outcome": "approved",
+              "to": "commit"
+            },
+            {
+              "outcome": "rejected",
+              "to": "build"
+            },
+            {
+              "outcome": "responded",
+              "to": "build"
+            }
+          ]
+        },
+        {
+          "id": "commit",
+          "name": "Create commit",
+          "agentId": "factory-committer",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": null
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "help",
+          "name": "Resolve blocker",
+          "agentId": "",
+          "human": true,
+          "transitions": [
+            {
+              "outcome": "responded",
+              "to": "plan"
+            },
+            {
+              "outcome": "approved",
+              "to": "plan"
+            },
+            {
+              "outcome": "rejected",
+              "to": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }
