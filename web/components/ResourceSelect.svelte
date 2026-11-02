@@ -14,6 +14,7 @@ let {
 	name,
 	required = false,
 	disabled = false,
+	showId = true,
 	onValueChange,
 }: {
 	id: string;
@@ -27,6 +28,7 @@ let {
 	name?: string;
 	required?: boolean;
 	disabled?: boolean;
+	showId?: boolean;
 	onValueChange?: (value: string) => void;
 } = $props();
 const Icon = $derived(Box);
@@ -51,7 +53,7 @@ const groupLabel = $derived(
 				<Select.Item value={item.id} label={item.name ?? item.id}>
 					{#if kind !== "agent"}<Icon size={15} />{/if}
 					<span>{item.name ?? item.id}</span>
-					{#if kind !== "pipeline" && item.name && item.name !== item.id}<small>{item.id}</small>{/if}
+					{#if showId && kind !== "pipeline" && item.name && item.name !== item.id}<small>{item.id}</small>{/if}
 				</Select.Item>
 			{/each}
 		</Select.Group>

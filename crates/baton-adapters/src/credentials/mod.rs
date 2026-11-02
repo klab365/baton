@@ -61,10 +61,6 @@ impl CredentialTypeCatalog for LocalCredentialTypeCatalog {
             LocalCredentialType::OllamaApiKey,
             LocalCredentialType::OpenaiApiKey,
             LocalCredentialType::ChatgptSession,
-            LocalCredentialType::GithubPat,
-            LocalCredentialType::GithubCopilotSession,
-            LocalCredentialType::AzureDevopsPat,
-            LocalCredentialType::SonarToken,
         ]
         .into_iter()
         .map(|kind| CredentialTypeDescriptor {
@@ -340,6 +336,16 @@ fn write_private(path: &Path, contents: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
     use baton_core::ports::credentials::CredentialTypeCatalog;
+
+    #[test]
+    fn catalog_only_lists_supported_provider_credentials() {
+        let ids: Vec<_> = LocalCredentialTypeCatalog
+            .list()
+            .into_iter()
+            .map(|descriptor| descriptor.id.0)
+            .collect();
+        assert_eq!(ids, ["ollama_api_key", "openai_api_key", "chatgpt_session"]);
+    }
 
     #[test]
     fn catalog_exposes_ollama_base_url_as_non_secret_configuration() {
