@@ -1,0 +1,7 @@
+# Releases
+
+Pushes to `main` run `.github/workflows/cd.yml`. Release-plz uses Git tags, not crates.io, to track versions. With no matching tag, the first run can create a Git tag and GitHub Release for the current workspace version (initially `0.1.0`). For subsequent changes, release-plz maintains a release PR based on conventional commits; merging it triggers the next release. The workspace crates are not published to crates.io. Four native runner jobs build the static web UI, embed it in the `baton` binary and upload `baton-<target>.tar.gz` assets for macOS and glibc Linux on x86-64 and ARM64. Assets are uploaded after the release is created, so they may not be available immediately.
+
+In repository settings, allow GitHub Actions to create and approve pull requests and grant the workflow the permissions declared in `cd.yml`. Events created with `GITHUB_TOKEN` generally do not trigger other workflows; in particular, check whether the release PR runs the required CI in your repository. If not, use an appropriately scoped GitHub App installation token in the workflow or run the checks manually before merging. Branch protection and any required approvals still apply.
+
+If an asset build or upload fails, run the **Release** workflow manually with the existing tag, such as `v0.1.0`. It checks out that tag and replaces the four assets. The installer downloads the latest published release by default; `BATON_VERSION` pins a tag. The installer and release archives contain the CLI, API and embedded web UI; no Node or Bun runtime is required.

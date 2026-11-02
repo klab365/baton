@@ -1,6 +1,7 @@
 <script lang="ts">
 import "../app.css";
 import { page } from "$app/state";
+import { invalidateAll } from "$app/navigation";
 import {
 	Activity,
 	Boxes,
@@ -15,6 +16,28 @@ import Button from "../components/Button.svelte";
 import StatusMessage from "../components/StatusMessage.svelte";
 
 let { data, children } = $props();
+let setupError = $state("");
+let settingUp = $state(false);
+
+async function initializeProject() {
+	settingUp = true;
+	setupError = "";
+	try {
+		const response = await fetch("/api/project/initialize", { method: "POST" });
+		if (!response.ok) {
+			setupError =
+				response.status === 409
+					? "A project configuration already exists."
+					: "Project setup failed.";
+			return;
+		}
+		await invalidateAll();
+	} catch {
+		setupError = "Could not connect to the Baton backend.";
+	} finally {
+		settingUp = false;
+	}
+}
 const navigation = [
 	{ href: "/", label: "Overview", icon: Activity },
 	{ href: "/tasks", label: "Task board", icon: CheckSquare },
@@ -37,7 +60,8 @@ const navigation = [
 		<p class="lead">This project does not have a Baton configuration yet.</p>
 		<dl><dt>Project directory</dt><dd>{data.project.directory}</dd></dl>
 		<p class="muted">Setup creates a minimal versioned configuration at <code>.baton/config.json</code>.</p>
-		<form method="POST" action="/?/initialize"><Button type="submit">Set up project</Button></form>
+		{#if setupError}<StatusMessage tone="error">{setupError}</StatusMessage>{/if}
+		<Button onclick={initializeProject} disabled={settingUp}>{settingUp ? "Setting up…" : "Set up project"}</Button>
 	</main>
 {:else if data.project.status === "invalid"}
 	<main class="setup">
