@@ -10,6 +10,10 @@ The embedded runtime is `rig`. `fake` is a deterministic offline runtime intende
 
 Schema-v6 runtime profiles are migrated to direct agent settings on read. A profile shared by multiple agents is copied to each of them and then removed from the v7 configuration.
 
+## Project instructions
+
+For each Rig agent step, Baton reads `AGENTS.md` from the root of the task worktree, if present, and adds it to the system prompt after the agent prompt and before assigned skills. The file is read again on each attempt, so it is not frozen in the run configuration snapshot. It must be a regular UTF-8 file of at most 64 KiB; symlinks, unreadable files and invalid or oversized content fail the step. Nested and parent-directory instruction files are not loaded automatically. The fake runtime does not load instructions. Only use this feature with trusted project repositories: project instructions are supplied to the model, and a worktree is not a security sandbox.
+
 ## Execution boundaries
 
 Each task owns one worktree at `<absolute Git common directory>/baton-worktrees/<task-id>` on branch `baton/task-<task-id>`. Its sequential runs reuse that workspace; different tasks have independent worktrees and may run in parallel. Legacy run-owned worktrees are promoted when an older task is started again. Completion or deletion of the task explicitly cleans up its worktree. Exclusive reservations and ownership receipts prevent unsafe reuse. Runtime adapters must use that workspace as their working directory and never change the process-global current directory.

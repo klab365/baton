@@ -5,9 +5,7 @@ Skills are stored in `.agents/skills/<id>/SKILL.md` and versioned with the proje
 instruction bodies. Global skill directories are not searched.
 
 Use **Skills** in the sidebar to create, edit, import, or delete a skill. The skill ID is also its display name. The optional multiline description is stored
-in YAML block-scalar form (`description: |`) in `SKILL.md` frontmatter. GitHub import currently downloads only
-`SKILL.md`, not supporting files. It does not yet pin commits or implement updates
-and rollback; these remain outside this storage migration.
+in YAML block-scalar form (`description: |`) in `SKILL.md` frontmatter. GitHub import downloads the skill folder, including supporting files. Use a GitHub folder URL with a commit SHA to select a specific revision; automatic updates and rollback are not implemented.
 
 On loading a project, the filesystem adapter migrates an existing inline `skills`
 list to files under `.agents/skills/` before removing the list from `config.json`. Existing directories
