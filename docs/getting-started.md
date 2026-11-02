@@ -19,7 +19,6 @@ In **Settings**, add credentials for the providers you intend to use. Secrets st
 ## 2. Import skills
 
 In **Skills → Import skill**, paste each GitHub folder URL and import it. These URLs pin the reviewed source to a specific commit:
-
 - [`concise-planning`](https://github.com/sickn33/agentic-awesome-skills/tree/b4bd5a153dd1e0a66789b6c971f731cdcf492a46/skills/concise-planning)
 - [`code-review-excellence`](https://github.com/sickn33/agentic-awesome-skills/tree/b4bd5a153dd1e0a66789b6c971f731cdcf492a46/skills/code-review-excellence)
 - [`verification-before-completion`](https://github.com/obra/superpowers/tree/2ce8aa15d05bd57213e6f746f953aafb7ded7a8b/skills/verification-before-completion)
@@ -32,12 +31,12 @@ Review third-party instructions before using them. Skills are instructions, not 
 
 In **Agents → Create agent**, create these agents. For each one, select Rig, a compatible credential and a model available to you. Copy the corresponding `systemPrompt` from the [example configuration](../examples/demo/.baton/config.json), adapting it to your project. Assign the skills below:
 
-| Agent ID | Responsibility | Skills |
-| --- | --- | --- |
-| `factory-planner` | Inspect the task and provide a focused plan | `concise-planning` |
-| `factory-builder` | Implement changes and run relevant checks | `verification-before-completion`; optionally `ponytail` |
-| `factory-reviewer` | Independently review the worktree changes | `code-review-excellence`, `verification-before-completion` |
-| `factory-committer` | Create a scoped Conventional Commit after approval | `verification-before-completion` |
+| Agent ID            | Responsibility                                     | Skills                                                     |
+| ------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
+| `factory-planner`   | Inspect the task and provide a focused plan        | `concise-planning`                                         |
+| `factory-builder`   | Implement changes and run relevant checks          | `verification-before-completion`; optionally `ponytail`    |
+| `factory-reviewer`  | Independently review the worktree changes          | `code-review-excellence`, `verification-before-completion` |
+| `factory-committer` | Create a scoped Conventional Commit after approval | `verification-before-completion`                           |
 
 The builder discovers project checks and reports the commands and results. This is agent-driven, not a deterministic test gate; a reviewer should verify important claims.
 
@@ -45,14 +44,14 @@ The builder discovers project checks and reports the commands and results. This 
 
 In **Pipelines → Create pipeline**, add the steps in this order, then configure their transitions. The first step is the entry point; `End` below means a transition with no destination.
 
-| Step ID | Agent or human | Transitions |
-| --- | --- | --- |
-| `plan` | `factory-planner` | None: continues sequentially to `build` |
-| `build` | `factory-builder` | `completed` → `review`; `blocked` → `help` |
-| `review` | `factory-reviewer` | `approved` → `approval`; `revise_build` → `build`; `revise_plan` → `plan`; `blocked` → `help` |
-| `approval` | Human | `approved` → `commit`; `rejected` or `responded` → `build` |
-| `commit` | `factory-committer` | `completed` → End; `blocked` → `help` |
-| `help` | Human | `responded` or `approved` → `plan`; `rejected` → End |
+| Step ID    | Agent or human      | Transitions                                                                                   |
+| ---------- | ------------------- | --------------------------------------------------------------------------------------------- |
+| `plan`     | `factory-planner`   | None: continues sequentially to `build`                                                       |
+| `build`    | `factory-builder`   | `completed` → `review`; `blocked` → `help`                                                    |
+| `review`   | `factory-reviewer`  | `approved` → `approval`; `revise_build` → `build`; `revise_plan` → `plan`; `blocked` → `help` |
+| `approval` | Human               | `approved` → `commit`; `rejected` or `responded` → `build`                                    |
+| `commit`   | `factory-committer` | `completed` → End; `blocked` → `help`                                                         |
+| `help`     | Human               | `responded` or `approved` → `plan`; `rejected` → End                                          |
 
 Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/config.json). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff, but its sequential step cannot itself route to human help.
 

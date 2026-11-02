@@ -30,7 +30,7 @@ fn migrates_only_exact_legacy_marker() {
 }
 
 #[test]
-fn demo_commit_agent_pipeline_is_valid_and_commits_before_human_approval() {
+fn demo_factory_pipeline_requires_human_approval_before_commit() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/demo/.baton/config.json");
     let source = std::fs::read_to_string(path).unwrap();
@@ -38,15 +38,28 @@ fn demo_commit_agent_pipeline_is_valid_and_commits_before_human_approval() {
     let pipeline = config
         .pipelines
         .iter()
-        .find(|pipeline| pipeline.id == "draft")
+        .find(|pipeline| pipeline.id == "software-factory")
         .unwrap();
     let commit = pipeline
         .steps
         .iter()
-        .find(|step| step.id == "commit-message")
+        .find(|step| step.id == "commit")
         .unwrap();
-    assert_eq!(commit.agent_id, "commit-agent");
-    assert_eq!(commit.transitions[0].to.as_deref(), Some("human-decision"));
+    assert_eq!(commit.agent_id, "factory-committer");
+    assert!(commit.transitions.iter().any(|transition| {
+        transition.outcome == baton_core::domain::project::Outcome::Completed
+            && transition.to.is_none()
+    }));
+    let approval = pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == "approval")
+        .unwrap();
+    assert!(approval.human);
+    assert!(approval.transitions.iter().any(|transition| {
+        transition.outcome == baton_core::domain::project::Outcome::Approved
+            && transition.to.as_deref() == Some("commit")
+    }));
     let review = pipeline
         .steps
         .iter()
@@ -54,7 +67,7 @@ fn demo_commit_agent_pipeline_is_valid_and_commits_before_human_approval() {
         .unwrap();
     assert!(review.transitions.iter().any(|transition| {
         transition.outcome == baton_core::domain::project::Outcome::Approved
-            && transition.to.as_deref() == Some("commit-message")
+            && transition.to.as_deref() == Some("approval")
     }));
 }
 

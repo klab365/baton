@@ -4,7 +4,7 @@ Baton orchestrates AI agents through configurable pipelines. Like a relay baton,
 
 ![Example workflow: plan, build, review and human decision](docs/assets/software-factory.gif)
 
-*An example workflow; pipeline steps and transitions are configurable.*
+_An example workflow; pipeline steps and transitions are configurable._
 
 ## Install the CLI
 

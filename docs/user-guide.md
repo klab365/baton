@@ -1,7 +1,6 @@
 # Baton user guide
 
 Baton coordinates local AI agents through configurable pipelines. You create agents and optional reusable skills, arrange them into a pipeline, and start tasks against that pipeline. Baton manages run state, transitions, human decisions and Git worktrees; the selected runtime executes agent steps.
-
 - [Get started](#get-started)
 - [Credentials and models](#credentials-and-models)
 - [Agents and project instructions](#agents-and-project-instructions)
@@ -36,7 +35,6 @@ Baton stores secret material in a local credential vault, not `.baton/config.jso
 ## Agents and project instructions
 
 In **Agents → Create agent**, set an ID, system prompt, runtime and any assigned skills. For a Rig agent, select a compatible credential and provider model. Edit or delete agents from the same page. A referenced agent cannot be deleted until pipelines using it are updated.
-
 - **Rig** executes the agent with tools, including workspace file operations and shell commands. The system prompt should define its role, boundaries and expected handoff. An individual Rig step currently times out after 600 seconds.
 - **Fake** is a deterministic offline runtime for tests; it does not contact a model and is not a substitute for real agent behavior.
 - Provider/model and credential configuration belong to the **agent**, not the pipeline step. Avoid embedding secrets in prompts.
@@ -89,14 +87,14 @@ After a backend restart, a previously waiting run remains available for a human 
 
 ## Files, configuration and security
 
-| Location | Purpose |
-| --- | --- |
-| `.baton/config.json` | Versioned project configuration: agents and pipelines; credential IDs, not secret values |
-| `.baton/tasks/` | Task data, including descriptions |
-| `.baton/runs/` | Run state, snapshots, handoffs, events and available traces |
-| `.agents/skills/` | Project-owned skill instructions and supporting files |
-| `AGENTS.md` | Optional root-level Rig project instructions in the worktree |
-| Local credential vault | Secret material, outside project configuration |
+| Location               | Purpose                                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------------- |
+| `.baton/config.json`   | Versioned project configuration: agents and pipelines; credential IDs, not secret values |
+| `.baton/tasks/`        | Task data, including descriptions                                                        |
+| `.baton/runs/`         | Run state, snapshots, handoffs, events and available traces                              |
+| `.agents/skills/`      | Project-owned skill instructions and supporting files                                    |
+| `AGENTS.md`            | Optional root-level Rig project instructions in the worktree                             |
+| Local credential vault | Secret material, outside project configuration                                           |
 
 Baton creates `.baton/.gitignore` for task and run directories if missing; it does not replace an existing one. Ensure your own ignore rules protect private task and run data. Project configuration is validated and uses revision checks to reject stale edits. See [project configuration](project-configuration.md) for migrations and storage details.
 
