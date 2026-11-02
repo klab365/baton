@@ -1,9 +1,27 @@
+[package]
+name = "baton-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+include = ["crates/baton-cli/src/**", "web/**", "static/**", "package.json", "bun.lock", "svelte.config.js", "vite.config.ts", "tsconfig.json", "biome.json"]
+
+[[bin]]
+name = "baton"
+path = "crates/baton-cli/src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+baton-core = { path = "crates/baton-core" }
+baton-adapters = { path = "crates/baton-adapters" }
+serde_json.workspace = true
+baton-server = { path = "crates/baton-server" }
+tokio.workspace = true
+
 [workspace]
 resolver = "2"
 members = [
   "crates/baton-core",
   "crates/baton-server",
-  "crates/baton-cli",
   "crates/baton-adapters",
 ]
 

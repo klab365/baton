@@ -3,21 +3,11 @@ publish = false
 git_only = true
 git_release_enable = false
 git_tag_enable = false
+git_tag_name = "v{{ version }}"
 
 [[package]]
 name = "baton-cli"
 git_release_enable = true
 git_tag_enable = true
 git_tag_name = "v{{ version }}"
-
-[[package]]
-name = "baton-core"
-release = false
-
-[[package]]
-name = "baton-adapters"
-release = false
-
-[[package]]
-name = "baton-server"
-release = false
+changelog_include = ["baton-core", "baton-adapters", "baton-server"]
