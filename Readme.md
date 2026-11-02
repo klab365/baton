@@ -2,6 +2,10 @@
 
 Baton orchestrates AI agents through configurable pipelines. Like a relay baton, it passes work and context from one step to the next, coordinating agents and human decisions along the way. It combines a Rust API and CLI with a SvelteKit interface for configuring agents, managing tasks and reviewing runs. Baton controls the workflow; agent runtimes execute individual steps.
 
+![Example workflow: plan, build, review and human decision](docs/assets/software-factory.gif)
+
+*An example workflow; pipeline steps and transitions are configurable.*
+
 ## Install the CLI
 
 On macOS or glibc-based Linux (x86-64 or ARM64), install the latest GitHub Release:
