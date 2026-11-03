@@ -92,7 +92,7 @@ pub async fn mutate(
             }) {
                 return Err(AgentError::Conflict(format!(
                     "Agent {id:?} is used by pipeline {:?}, step {:?}; remove or change that step before deleting the agent",
-                    pipeline.name, step.name
+                    pipeline.id, step.name
                 )));
             }
             snapshot.config.agents.remove(index);

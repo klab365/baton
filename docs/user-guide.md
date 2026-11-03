@@ -49,7 +49,7 @@ Assign skills to an agent in the agent editor. Baton appends assigned `SKILL.md`
 
 ## Pipelines and routing
 
-In **Pipelines → Create pipeline**, give the pipeline a name and add agent or human-wait steps. Create agents first: a pipeline cannot be built without them. The first listed step starts the run. Only one step executes at a time; a pipeline can loop, but does not execute parallel branches.
+In **Pipelines → Create pipeline**, give the pipeline an ID (also used as its display name) and add agent or human-wait steps. Create agents first: a pipeline cannot be built without them. The first listed step starts the run. Only one step executes at a time; a pipeline can loop, but does not execute parallel branches.
 
 ### Sequential steps
 

@@ -61,7 +61,7 @@ fn tasks_validate_inputs_without_storing_project_configuration() {
     );
     assert_eq!(task.status, TaskStatus::Draft);
     let mut changed = config;
-    changed.pipelines[0].name = "Changed".into();
+    changed.pipelines[0].steps[0].name = "Changed".into();
     task.update(input(&pipeline), changed, "2025-01-02T00:00:00.000Z".into())
         .unwrap();
     let serialized = serde_json::to_value(&task).unwrap();

@@ -60,7 +60,7 @@ async function remove() {
 	<DetailPanel title="Task state">
 		<dl class="task-facts">
 			<div><dt>Status</dt><dd><StatusBadge status={data.task.status} /></dd></div>
-			<div><dt>Pipeline</dt><dd>{selectedPipeline?.name ?? "Unavailable pipeline"}<span class="task-pipeline-id">{data.task.pipelineId}</span></dd></div>
+			<div><dt>Pipeline</dt><dd>{selectedPipeline?.id ?? `Unavailable pipeline (${data.task.pipelineId})`}</dd></div>
 			<div><dt>Created</dt><dd>{new Date(data.task.createdAt).toLocaleString()}</dd></div>
 			<div><dt>Last updated</dt><dd>{new Date(data.task.updatedAt).toLocaleString()}</dd></div>
 		</dl>

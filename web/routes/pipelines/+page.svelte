@@ -45,9 +45,7 @@ let expandedStepIds = $state<Set<string>>(new Set());
 const config = $derived(data.configuration as PipelineConfiguration | null);
 function open(pipeline?: Pipeline) {
 	if (!config) return;
-	draft = pipeline
-		? structuredClone(pipeline)
-		: { id: crypto.randomUUID(), name: "", steps: [] };
+	draft = pipeline ? structuredClone(pipeline) : { id: "", steps: [] };
 	expandedStepIds = new Set();
 	revision = config.revision;
 	editing = Boolean(pipeline);
@@ -128,7 +126,7 @@ async function save(remove = false) {
    {/if}
    <div class="pipeline-list">
    {#each config.pipelines as pipeline (pipeline.id)}
-    <button class:selected={draft?.id === pipeline.id} class="pipeline-item" onclick={() => open(pipeline)}><span class="pipeline-item-icon"><Box size={18} /></span><span><strong>{pipeline.name}</strong><small>{pipeline.steps.length} {pipeline.steps.length === 1 ? "step" : "steps"}</small></span><ChevronRight size={17} /></button>
+    <button class:selected={draft?.id === pipeline.id} class="pipeline-item" onclick={() => open(pipeline)}><span class="pipeline-item-icon"><Box size={18} /></span><span><strong>{pipeline.id}</strong><small>{pipeline.steps.length} {pipeline.steps.length === 1 ? "step" : "steps"}</small></span><ChevronRight size={17} /></button>
    {:else}<div class="empty-library"><Box size={24} /><strong>No pipelines yet</strong><span>Create your first ordered agent handoff.</span></div>{/each}
    </div>
   </aside>
@@ -137,7 +135,7 @@ async function save(remove = false) {
     <div class="editor-placeholder"><div class="placeholder-icon"><Box size={28} /></div><h2>Select a pipeline to edit</h2><p>Choose a pipeline from the library, or create a new one.</p></div>
    {:else}
     <form onsubmit={(event) => { event.preventDefault(); save(); }}>
-     <div class="editor-toolbar"><div class="editor-title-fields"><span class="eyebrow">{editing ? "Editing pipeline" : "New pipeline"}</span><Field label="Pipeline name" for="pipeline-name" required>{#snippet children({ describedBy })}<input id="pipeline-name" value={draft?.name ?? ""} oninput={(event) => { if (draft) draft.name = event.currentTarget.value; }} required aria-describedby={describedBy} disabled={busy} placeholder="e.g. Product delivery" />{/snippet}</Field></div><div class="toolbar-actions"><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button><Button type="submit" loading={busy} disabled={!draft.steps.length || !config.agents.length}>Save changes</Button></div></div>
+     <div class="editor-toolbar"><div class="editor-title-fields"><span class="eyebrow">{editing ? "Editing pipeline" : "New pipeline"}</span><Field label="Pipeline ID" for="pipeline-name" required>{#snippet children({ describedBy })}<input id="pipeline-name" value={draft?.id ?? ""} oninput={(event) => { if (draft) draft.id = event.currentTarget.value; }} required aria-describedby={describedBy} disabled={busy || editing} placeholder="e.g. product-delivery" />{/snippet}</Field></div><div class="toolbar-actions"><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button><Button type="submit" loading={busy} disabled={!draft.steps.length || !config.agents.length}>Save changes</Button></div></div>
      <div class="flow-caption"><span>Task input</span><span>Each step hands its result to the next</span><span>Final output</span></div>
      <ol class="step-flow" aria-label="Ordered pipeline steps">
       {#each draft.steps as step, index (step.id)}

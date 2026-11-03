@@ -67,7 +67,7 @@ async fn agents_can_be_configured_directly_and_unreferenced_agents_deleted() {
     let snapshot = agents::list(&repository).await.unwrap();
     assert!(
         matches!(agents::mutate(&repository, &snapshot.revision, Mutation::Delete("writer".into())).await,
-        Err(AgentError::Conflict(message)) if message.contains("Draft and review") && message.contains("Write"))
+        Err(AgentError::Conflict(message)) if message.contains("draft") && message.contains("Write"))
     );
     agents::mutate(
         &repository,

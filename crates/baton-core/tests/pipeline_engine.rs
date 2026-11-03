@@ -46,7 +46,7 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
     pipeline.id = "new-chain".into();
 
     let mut invalid = pipeline.clone();
-    invalid.name = " ".into();
+    invalid.id = " ".into();
     assert!(matches!(
         pipelines::mutate(&repository, &snapshot.revision, Mutation::Create(invalid)).await,
         Err(PipelineError::Validation(_))
@@ -82,7 +82,6 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
     ));
 
     let snapshot = pipelines::list(&repository).await.unwrap();
-    pipeline.name = "Updated chain".into();
     pipeline.steps.reverse();
     pipelines::mutate(
         &repository,

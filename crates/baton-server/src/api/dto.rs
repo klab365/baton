@@ -28,7 +28,6 @@ pub struct Agent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Pipeline {
     pub id: String,
-    pub name: String,
     pub steps: Vec<PipelineStep>,
 }
 
@@ -139,7 +138,6 @@ impl From<domain::Pipeline> for Pipeline {
     fn from(value: domain::Pipeline) -> Self {
         Self {
             id: value.id,
-            name: value.name,
             steps: value.steps.into_iter().map(Into::into).collect(),
         }
     }
@@ -149,7 +147,6 @@ impl From<Pipeline> for domain::Pipeline {
     fn from(value: Pipeline) -> Self {
         Self {
             id: value.id,
-            name: value.name,
             steps: value.steps.into_iter().map(Into::into).collect(),
         }
     }

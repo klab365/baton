@@ -49,7 +49,7 @@ async fn pipeline_routes_return_http_contracts() {
     let mut pipeline = config.pipelines[0].clone();
     pipeline.id = "new-chain".into();
     let mut invalid = pipeline.clone();
-    invalid.name = " ".into();
+    invalid.id = " ".into();
     let response = app
         .clone()
         .oneshot(
@@ -64,7 +64,6 @@ async fn pipeline_routes_return_http_contracts() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    pipeline.name = "New chain".into();
     let response = app
         .clone()
         .oneshot(
@@ -91,7 +90,8 @@ async fn pipeline_routes_return_http_contracts() {
     assert_eq!(response.status(), StatusCode::OK);
     let detail = json(response).await;
     let updated_revision = detail["revision"].as_str().unwrap();
-    assert_eq!(detail["pipeline"]["name"], "New chain");
+    assert_eq!(detail["pipeline"]["id"], "new-chain");
+    assert!(detail["pipeline"].get("name").is_none());
 
     let response = app
         .clone()

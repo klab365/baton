@@ -10,15 +10,30 @@ pub struct ProjectConfig {
     pub pipelines: Vec<Pipeline>,
 }
 
-macro_rules! dto {
-    ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        pub struct $name { $(pub $field: $ty),* }
-    };
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pipeline {
+    pub id: String,
+    pub steps: Vec<PipelineStep>,
 }
 
-dto!(Pipeline { id: String, name: String, steps: Vec<PipelineStep> });
+impl<'de> Deserialize<'de> for Pipeline {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct CompatiblePipeline {
+            id: String,
+            steps: Vec<PipelineStep>,
+            #[serde(default, rename = "name")]
+            _legacy_name: Option<serde::de::IgnoredAny>,
+        }
+        let value = CompatiblePipeline::deserialize(deserializer)?;
+        Ok(Self {
+            id: value.id,
+            steps: value.steps,
+        })
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Agent {
@@ -114,7 +129,6 @@ impl ProjectConfig {
         }
         for pipeline in &self.pipelines {
             let path = format!("pipelines[{}]", pipeline.id);
-            nonempty(&format!("{path}.name"), &pipeline.name)?;
             if pipeline.steps.is_empty() {
                 return Err(format!("{path}.steps must contain at least one step"));
             }

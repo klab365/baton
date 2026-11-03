@@ -101,7 +101,7 @@ async fn agent_routes_accept_direct_runtime_configuration_and_enforce_pipeline_r
         json(response).await["error"]
             .as_str()
             .unwrap()
-            .contains("Draft and review")
+            .contains("draft")
     );
 
     let response = app
