@@ -35,6 +35,8 @@ On first launch Baton creates `.baton/` and initializes the project configuratio
 
 A worktree is **not a sandbox**: agents may run commands with the permissions of the Baton process. Use a container, VM or dedicated OS user for stronger isolation. Task prompts and run data are local and can be sensitive.
 
+Agents can be configured with an explicit allowed tool list in the Agents UI. An omitted list preserves the default tools; an empty list disables all tools. Steps with transitions require `report_outcome`. Disabling `write` and `edit` does not prevent changes if `shell` is enabled: shell commands can modify files and access resources outside the worktree.
+
 ## Development
 
 ```sh

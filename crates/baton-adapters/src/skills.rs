@@ -224,7 +224,8 @@ mod tests {
                     runtime_kind: Default::default(),
                     model: None,
                     credential_id: None,
-                    skill_ids: vec!["style".into()]
+                    skill_ids: vec!["style".into()],
+                    allowed_tools: None
                 },
                 &repo.list().unwrap()
             )

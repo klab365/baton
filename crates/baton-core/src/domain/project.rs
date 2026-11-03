@@ -48,6 +48,27 @@ pub struct Agent {
     #[serde(default)]
     pub credential_id: Option<String>,
     pub skill_ids: Vec<String>,
+    /// None preserves the legacy default; Some([]) disables all tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+}
+
+impl Agent {
+    pub const TOOLS: &'static [&'static str] = &[
+        "read",
+        "list",
+        "search",
+        "shell",
+        "write",
+        "edit",
+        "report_outcome",
+    ];
+
+    pub fn allows_tool(&self, tool: &str) -> bool {
+        self.allowed_tools
+            .as_ref()
+            .is_none_or(|tools| tools.iter().any(|name| name == tool))
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -141,6 +162,14 @@ impl ProjectConfig {
                 return Err(format!("Agent {:?} has an invalid credential ID", agent.id));
             }
             ids("agent.skillIds", agent.skill_ids.iter().map(String::as_str))?;
+            if let Some(tools) = &agent.allowed_tools {
+                ids("agent.allowedTools", tools.iter().map(String::as_str))?;
+                for tool in tools {
+                    if !Agent::TOOLS.contains(&tool.as_str()) {
+                        return Err(format!("Agent {:?} has unknown tool {tool:?}", agent.id));
+                    }
+                }
+            }
         }
         for pipeline in &self.pipelines {
             let path = format!("pipelines[{}]", pipeline.id);
@@ -160,6 +189,18 @@ impl ProjectConfig {
                     }
                 } else {
                     reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
+                    if !step.transitions.is_empty()
+                        && self
+                            .agents
+                            .iter()
+                            .find(|agent| agent.id == step.agent_id)
+                            .is_some_and(|agent| !agent.allows_tool("report_outcome"))
+                    {
+                        return Err(format!(
+                            "{step_path}: agent {:?} must allow report_outcome for steps with transitions",
+                            step.agent_id
+                        ));
+                    }
                 }
                 let mut outcomes = Vec::new();
                 for transition in &step.transitions {
@@ -385,6 +426,47 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
 #[cfg(test)]
 mod project_identity_tests {
     use super::parse_config;
+
+    #[test]
+    fn tool_configuration_preserves_defaults_and_validates_transitions() {
+        let agent = r#"{"id":"planner","systemPrompt":"plan","skillIds":[]}"#;
+        let parsed: super::Agent = serde_json::from_str(agent).unwrap();
+        assert!(parsed.allowed_tools.is_none());
+        assert!(parsed.allows_tool("write"));
+        assert!(
+            !serde_json::to_string(&parsed)
+                .unwrap()
+                .contains("allowedTools")
+        );
+
+        let explicit = agent.replace("\"skillIds\":[]", "\"skillIds\":[],\"allowedTools\":[]");
+        let parsed: super::Agent = serde_json::from_str(&explicit).unwrap();
+        assert!(!parsed.allows_tool("write"));
+        assert_eq!(
+            serde_json::from_str::<super::Agent>(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+            parsed
+        );
+        let pipeline = r#"[{"id":"p","steps":[{"id":"s","name":"Step","agentId":"planner","transitions":[{"outcome":"completed","to":null}]}]}]"#;
+        let config =
+            format!(r#"{{"schemaVersion":7,"agents":[{explicit}],"pipelines":{pipeline}}}"#);
+        assert!(
+            parse_config(&config)
+                .unwrap_err()
+                .contains("report_outcome")
+        );
+        assert!(
+            parse_config(&config.replace(
+                "\"allowedTools\":[]",
+                "\"allowedTools\":[\"report_outcome\"]"
+            ))
+            .is_ok()
+        );
+        assert!(parse_config(&config.replace(pipeline, "[]")).is_ok());
+        assert!(
+            parse_config(&config.replace("\"allowedTools\":[]", "\"allowedTools\":[\"unknown\"]"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn accepts_legacy_configs_and_preserves_valid_project_ids() {

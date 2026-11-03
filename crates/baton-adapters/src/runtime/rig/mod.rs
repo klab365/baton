@@ -1,6 +1,8 @@
 //! Rig-backed implementation of the core agent execution port.
 mod plugins;
+mod request_trace;
 mod tools;
+mod wire_trace;
 
 use self::{
     plugins::{Completed, StepPlugin},
@@ -132,6 +134,7 @@ impl RigRuntime {
             )
         })?;
         let spec = ModelSpec::new(provider, &model_config.model).with_tools(true);
+        let wire_traces = Arc::new(Mutex::new(Vec::new()));
         // Ollama's direct Rig client reads its distinct OLLAMA_API_BASE_URL setting;
         // the generic registry dialect otherwise falls back to localhost.
         let handler = if is_copilot_provider(&model_config.provider) {
@@ -156,7 +159,9 @@ impl RigRuntime {
             let signed_in = rig::client::signed_in::SignedInModel::new(
                 spec,
                 authenticator,
-                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default()),
+                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default())
+                    .with_middleware(wire_trace::CopilotSystemString)
+                    .with_middleware(wire_trace::WireTrace(wire_traces.clone())),
             )
             .map_err(|_| "GitHub Copilot model configuration is invalid")?;
             ErasedHandler::new(signed_in)
@@ -240,9 +245,10 @@ impl RigRuntime {
             };
             ErasedHandler::new(ModelAdapter::new(baton_agent.id.clone(), model))
         };
+        let request_traces = Arc::new(Mutex::new(Vec::new()));
         let connection = Connection {
             spec: Arc::new(spec),
-            handler: Handler(handler),
+            handler: Handler(handler.layered(request_trace::RequestTrace(request_traces.clone()))),
         };
 
         // Resume the same agent session for later pipeline attempts in this task worktree.
@@ -267,42 +273,62 @@ impl RigRuntime {
                 StepPlugin,
             ));
         let decision = Arc::new(Mutex::new(None));
-        app.add_tool(rig_tools::Read {
-            workspace: workspace.clone(),
-            base: Some(root.clone()),
-            confine: true,
-            seen: Default::default(),
-        })
-        .add_tool(rig_tools::List {
-            workspace: workspace.clone(),
-            base: Some(root.clone()),
-            confine: true,
-        })
-        .add_tool(rig_tools::Search {
-            workspace: workspace.clone(),
-            base: Some(root.clone()),
-            confine: true,
-        })
-        .add_tool(rig_tools::Shell {
-            workspace: workspace.clone(),
-            launcher: Launcher::default().in_dir(root.clone()),
-            confine: true,
-            max_timeout: 600,
-            ..Default::default()
-        })
-        .add_tool(rig_tools::Write {
-            workspace: workspace.clone(),
-            base: Some(root.clone()),
-            confine: true,
-            seen: Default::default(),
-        })
-        .add_tool(rig_tools::Edit {
-            workspace: workspace.clone(),
-            base: Some(root.clone()),
-            confine: true,
-            seen: Default::default(),
-        });
-        if !allowed_outcomes.is_empty() {
+        let mut registered_tools = Vec::new();
+        if baton_agent.allows_tool("read") {
+            registered_tools.push("read");
+            app.add_tool(rig_tools::Read {
+                workspace: workspace.clone(),
+                base: Some(root.clone()),
+                confine: true,
+                seen: Default::default(),
+            });
+        }
+        if baton_agent.allows_tool("list") {
+            registered_tools.push("list");
+            app.add_tool(rig_tools::List {
+                workspace: workspace.clone(),
+                base: Some(root.clone()),
+                confine: true,
+            });
+        }
+        if baton_agent.allows_tool("search") {
+            registered_tools.push("search");
+            app.add_tool(rig_tools::Search {
+                workspace: workspace.clone(),
+                base: Some(root.clone()),
+                confine: true,
+            });
+        }
+        if baton_agent.allows_tool("shell") {
+            registered_tools.push("shell");
+            app.add_tool(rig_tools::Shell {
+                workspace: workspace.clone(),
+                launcher: Launcher::default().in_dir(root.clone()),
+                confine: true,
+                max_timeout: 600,
+                ..Default::default()
+            });
+        }
+        if baton_agent.allows_tool("write") {
+            registered_tools.push("write");
+            app.add_tool(rig_tools::Write {
+                workspace: workspace.clone(),
+                base: Some(root.clone()),
+                confine: true,
+                seen: Default::default(),
+            });
+        }
+        if baton_agent.allows_tool("edit") {
+            registered_tools.push("edit");
+            app.add_tool(rig_tools::Edit {
+                workspace: workspace.clone(),
+                base: Some(root.clone()),
+                confine: true,
+                seen: Default::default(),
+            });
+        }
+        if !allowed_outcomes.is_empty() && baton_agent.allows_tool("report_outcome") {
+            registered_tools.push("report_outcome");
             app.add_tool(ReportOutcome::new(
                 allowed_outcomes.to_vec(),
                 decision.clone(),
@@ -338,6 +364,17 @@ impl RigRuntime {
                 "\n\nThis pipeline step requires a control decision. When your work is complete, call the report_outcome tool exactly once with one of these outcomes: {allowed}. Provide a concise summary there; then answer naturally. Do not encode the decision as JSON in your final answer."
             ));
         }
+        let setup_trace = RunTraceEntry {
+            occurred_at: baton_core::features::pipeline_engine::utc_now(),
+            kind: "runtimeSetup".into(),
+            content: serde_json::json!({
+                "agentId": baton_agent.id,
+                "systemPrompt": preamble,
+                "registeredTools": registered_tools,
+                "allowedOutcomes": allowed_outcomes.iter().map(outcome_name).collect::<Vec<_>>(),
+            })
+            .to_string(),
+        };
         let entity = app
             .world_mut()
             .spawn((
@@ -373,7 +410,7 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
-                let transcript = app
+                let mut transcript: Vec<RunTraceEntry> = app
                     .world()
                     .get::<Conversation>(entity)
                     .and_then(|conversation| serde_json::to_string_pretty(&conversation.0).ok())
@@ -384,13 +421,31 @@ impl RigRuntime {
                     })
                     .into_iter()
                     .collect();
+                let requests = request_traces
+                    .lock()
+                    .map_err(|_| "Runtime request trace is unavailable".to_owned())?;
+                let mut trace = vec![setup_trace];
+                trace.extend(requests.iter().map(|content| RunTraceEntry {
+                    occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                    kind: "runtimeRequest".into(),
+                    content: content.clone(),
+                }));
+                let wire = wire_traces
+                    .lock()
+                    .map_err(|_| "Runtime wire trace is unavailable".to_owned())?;
+                trace.extend(wire.iter().map(|content| RunTraceEntry {
+                    occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                    kind: "runtimeWireRequest".into(),
+                    content: content.clone(),
+                }));
+                trace.append(&mut transcript);
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
                 let decision = decision
                     .lock()
                     .map_err(|_| "Pipeline outcome state is unavailable".to_owned())?
                     .take();
-                return Ok((answer, decision, transcript));
+                return Ok((answer, decision, trace));
             }
             if cancelled() {
                 app.world_mut()

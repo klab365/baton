@@ -2,6 +2,7 @@
 import { invalidateAll } from "$app/navigation";
 import Plus from "@lucide/svelte/icons/plus";
 import Trash2 from "@lucide/svelte/icons/trash-2";
+import AssignedResources from "../../components/AssignedResources.svelte";
 import Button from "../../components/Button.svelte";
 import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
 import EmptyState from "../../components/EmptyState.svelte";
@@ -9,6 +10,16 @@ import Field from "../../components/Field.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
+
+const tools = [
+	"read",
+	"list",
+	"search",
+	"shell",
+	"write",
+	"edit",
+	"report_outcome",
+];
 
 type Credential = {
 	id: string;
@@ -52,6 +63,7 @@ function open(agent?: Agent) {
 	draft = agent
 		? {
 				...structuredClone(agent),
+				allowedTools: agent.allowedTools ?? [...tools],
 				model: agent.model ?? { provider: "", model: "" },
 			}
 		: {
@@ -61,6 +73,7 @@ function open(agent?: Agent) {
 				model: { provider: "openai", model: "" },
 				credentialId: null,
 				skillIds: [],
+				allowedTools: [],
 			};
 	revision = config.revision;
 	editing = Boolean(agent);
@@ -106,13 +119,6 @@ async function selectCredential(credentialId: string) {
 	draft.model = { provider: type?.provider ?? "", model: "" };
 	if (credentialId) await loadModels(credentialId);
 	else models = [];
-}
-function addSkill() {
-	if (!draft || !config) return;
-	const id = config.skills.find(
-		(skill) => !draft!.skillIds.includes(skill.id),
-	)?.id;
-	if (id) draft.skillIds = [...draft.skillIds, id];
 }
 async function save(remove = false) {
 	if (!draft) return;
@@ -174,7 +180,13 @@ async function save(remove = false) {
 					</div></section>
 					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="System prompt" for="agent-prompt" required hint="Define this agent’s role, scope, and response style.">{#snippet children({ describedBy })}<textarea id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field>
 					</section>
-					<section class="references form-section" aria-labelledby="agent-skills-heading"><header class="skills-header"><div><span class="eyebrow">Capabilities</span><h3 id="agent-skills-heading">Skills</h3></div><Button variant="secondary" disabled={busy || !config.skills.some((skill) => !(draft?.skillIds.includes(skill.id) ?? false))} onclick={addSkill}><Plus size={16} /> Add skill</Button></header>{#if draft!.skillIds.length}<ol class="assigned-skills">{#each draft!.skillIds as skillId, index}<li><Field label="Skill" for={`agent-skill-${index}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-skill-${index}`} value={skillId} items={config.skills.filter((skill) => skill.id === skillId || !draft!.skillIds.includes(skill.id)).map((skill) => ({ id: skill.id, name: skill.id }))} placeholder="Select a skill" label="Available skills" {describedBy} {invalid} disabled={busy} onValueChange={(id) => { if (draft) draft.skillIds = draft.skillIds.map((item, itemIndex) => itemIndex === index ? id : item); }} />{/snippet}</Field><button type="button" class="remove-skill" aria-label={`Remove ${skillId}`} disabled={busy} onclick={() => { if (draft) draft.skillIds = draft.skillIds.filter((_, itemIndex) => itemIndex !== index); }}><Trash2 size={15} /></button></li>{/each}</ol>{:else}<p class="muted">No skills assigned. Add skills to give this agent reusable guidance.</p>{/if}</section>
+					<section class="references form-section" aria-label="Tools">
+						<AssignedResources id="agent-add-tool" title="Tools" label="Assigned tools" addLabel="Add tool" emptyMessage="No tools assigned." items={tools.map((id) => ({ id }))} selected={draft.allowedTools ?? []} disabled={busy} onChange={(selected) => { if (draft) draft.allowedTools = selected; }} />
+						<p class="muted">Shell commands can modify files even without write or edit. A worktree is not a sandbox. Steps with transitions require report_outcome.</p>
+					</section>
+					<section class="references form-section" aria-label="Skills">
+						<AssignedResources id="agent-add-skill" title="Skills" label="Assigned skills" addLabel="Add skill" emptyMessage="No skills assigned." items={config.skills} selected={draft.skillIds} disabled={busy} onChange={(selected) => { if (draft) draft.skillIds = selected; }} />
+					</section>
 					{#if editing}<div class="delete-row"><Button variant="danger" disabled={busy} onclick={() => deleting = true}><Trash2 size={16} /> Delete agent</Button></div>{/if}
 				</form>
 				<ConfirmationDialog bind:open={deleting} title="Delete agent?" loading={busy} onconfirm={() => save(true)}>This cannot be undone. Agents used by a pipeline cannot be deleted until the pipeline step is changed or removed.</ConfirmationDialog>
@@ -184,5 +196,5 @@ async function save(remove = false) {
 {/if}
 
 <style>
-	.agents-layout { display:grid; grid-template-columns:15rem minmax(0,1fr); min-height:calc(100vh - 12rem); border:1px solid #303137; border-radius:.7rem; background:#1b1c20; overflow:hidden; box-shadow:0 12px 30px #0002; }.agent-list { padding:1rem; background:#16171b; border-right:1px solid #303137; }.list-heading { display:flex; justify-content:space-between; margin-bottom:.8rem; }.list-heading span { background:#28344f; border-radius:999px; padding:.1rem .45rem; color:#aac2ff; font-size:.8rem; }.agent-item { display:flex; gap:.65rem; width:100%; padding:.7rem; border:1px solid transparent; border-radius:.5rem; background:transparent; text-align:left; color:#dedee2; cursor:pointer; }.agent-item:hover,.agent-item.selected { border-color:#3c4a68; background:#242a38; }.agent-item span { min-width:0; }.agent-item strong,.agent-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.agent-item small { color:#92939b; font-size:.75rem; }.agent-editor { padding:1.5rem; }.editor-header { display:flex; align-items:start; justify-content:space-between; gap:1rem; margin-bottom:1.5rem; }.editor-header h2 { margin:.2rem 0 0; }.form-section { margin-top:1.5rem; padding-top:1.25rem; border-top:1px solid #303137; }.editor-header + .form-section { margin-top:0; }.form-section > header { margin-bottom:1rem; }.form-section h3 { margin:.15rem 0 0; color:#e8e8eb; font-size:.95rem; }.form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }.agent-id-field,.credential-field { grid-column:1/-1; }.form-grid :global(.field) { display:grid; grid-template-rows:auto 2.6rem auto; margin:0; }.form-grid :global(.field-hint) { margin:.3rem 0; }.references .muted { font-size:.85rem; }.skills-header { display:flex; align-items:end; justify-content:space-between; gap:1rem; }.skills-header :global(.button) { flex:none; }.assigned-skills { display:grid; gap:.65rem; padding:0; margin:0; list-style:none; }.assigned-skills li { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:.7rem; padding:.8rem; border:1px solid #393a42; border-radius:.6rem; background:#191a1e; }.assigned-skills :global(.field) { margin:0; }.remove-skill { display:grid; place-items:center; width:2rem; height:2rem; border:0; border-radius:.4rem; background:transparent; color:#e3858b; cursor:pointer; }.remove-skill:hover:not(:disabled) { color:#ffadb2; background:#3a2024; }.delete-row { display:flex; justify-content:flex-end; margin-top:1.5rem; padding-top:1rem; border-top:1px solid #303137; } @media (max-width:720px) { .agents-layout { min-height:0; } .agents-layout,.form-grid { grid-template-columns:1fr; }.form-grid :global(.field) { grid-template-rows:auto auto auto; }.agent-list { border-right:0; border-bottom:1px solid #303137; }.editor-header { flex-direction:column; } }
+	.agents-layout { display:grid; grid-template-columns:15rem minmax(0,1fr); min-height:calc(100vh - 12rem); border:1px solid #303137; border-radius:.7rem; background:#1b1c20; overflow:hidden; box-shadow:0 12px 30px #0002; }.agent-list { padding:1rem; background:#16171b; border-right:1px solid #303137; }.list-heading { display:flex; justify-content:space-between; margin-bottom:.8rem; }.list-heading span { background:#28344f; border-radius:999px; padding:.1rem .45rem; color:#aac2ff; font-size:.8rem; }.agent-item { display:flex; gap:.65rem; width:100%; padding:.7rem; border:1px solid transparent; border-radius:.5rem; background:transparent; text-align:left; color:#dedee2; cursor:pointer; }.agent-item:hover,.agent-item.selected { border-color:#3c4a68; background:#242a38; }.agent-item span { min-width:0; }.agent-item strong,.agent-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.agent-item small { color:#92939b; font-size:.75rem; }.agent-editor { padding:1.5rem; }.editor-header { display:flex; align-items:start; justify-content:space-between; gap:1rem; margin-bottom:1.5rem; }.editor-header h2 { margin:.2rem 0 0; }.form-section { margin-top:1.5rem; padding-top:1.25rem; border-top:1px solid #303137; }.editor-header + .form-section { margin-top:0; }.form-section > header { margin-bottom:1rem; }.form-section h3 { margin:.15rem 0 0; color:#e8e8eb; font-size:.95rem; }.form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }.agent-id-field,.credential-field { grid-column:1/-1; }.form-grid :global(.field) { display:grid; grid-template-rows:auto 2.6rem auto; margin:0; }.form-grid :global(.field-hint) { margin:.3rem 0; }.references .muted { font-size:.85rem; }.delete-row { display:flex; justify-content:flex-end; margin-top:1.5rem; padding-top:1rem; border-top:1px solid #303137; } @media (max-width:720px) { .agents-layout { min-height:0; } .agents-layout,.form-grid { grid-template-columns:1fr; }.form-grid :global(.field) { grid-template-rows:auto auto auto; }.agent-list { border-right:0; border-bottom:1px solid #303137; }.editor-header { flex-direction:column; } }
 </style>
