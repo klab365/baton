@@ -48,6 +48,10 @@ async fn load_project_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if matches!(env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("baton {}", baton_server::VERSION);
+        return Ok(());
+    }
     if matches!(
         env::args().nth(1).as_deref(),
         Some("task-done" | "task-delete")

@@ -11,6 +11,9 @@ use axum::{
     response::IntoResponse,
 };
 
+/// Version shared by the CLI and the running web server.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
 
 async fn web_fallback(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
@@ -150,6 +153,10 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .route(
+            "/api/version",
+            axum::routing::get(|| async { Json(serde_json::json!({ "version": VERSION })) }),
+        )
         .merge(routes::project::router())
         .merge(routes::agents::router())
         .merge(routes::skills::router())

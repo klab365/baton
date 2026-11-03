@@ -55,7 +55,7 @@ const navigation = [
 
 {#if data.project.status === "missing"}
 	<main class="setup">
-		<p class="eyebrow">Set up Baton</p>
+		<p class="eyebrow">Set up Baton{data.version ? ` · v${data.version}` : ""}</p>
 		<h1>{data.project.name}</h1>
 		<p class="lead">This project does not have a Baton configuration yet.</p>
 		<dl><dt>Project directory</dt><dd>{data.project.directory}</dd></dl>
@@ -65,7 +65,7 @@ const navigation = [
 	</main>
 {:else if data.project.status === "invalid"}
 	<main class="setup">
-		<p class="eyebrow">Configuration error</p>
+		<p class="eyebrow">Configuration error{data.version ? ` · Baton v${data.version}` : ""}</p>
 		<h1>Could not open this Baton project</h1>
 		<StatusMessage tone="error" title="Configuration needs attention">{data.project.message}</StatusMessage>
 		<p class="muted">The existing configuration has not been changed.</p>
@@ -82,10 +82,10 @@ const navigation = [
 					</a>
 				{/each}
 			</nav>
-			<div class="sidebar-bottom"><a href="/settings" aria-current={page.url.pathname.startsWith("/settings") ? "page" : undefined}><Settings2 size={17} /><span>Settings</span></a><div class="sidebar-footnote">AI workflow orchestration</div></div>
+			<div class="sidebar-bottom"><a href="/settings" aria-current={page.url.pathname.startsWith("/settings") ? "page" : undefined}><Settings2 size={17} /><span>Settings</span></a><div class="sidebar-footnote">AI workflow orchestration{data.version ? ` · v${data.version}` : ""}</div></div>
 		</aside>
 		<div class="workspace">
-			<header class="mobile-header"><a class="brand" href="/"><span class="brand-mark"><GitBranch size={18} /></span>Baton</a><span class="mobile-project-name" title={data.project.name}>{data.project.name}</span></header>
+			<header class="mobile-header"><a class="brand" href="/"><span class="brand-mark"><GitBranch size={18} /></span>Baton</a><span class="mobile-project-name" title={data.project.name}>{data.project.name}{data.version ? ` · v${data.version}` : ""}</span></header>
 			<main id="main-content" class="page-content">{@render children()}</main>
 		</div>
 	</div>
