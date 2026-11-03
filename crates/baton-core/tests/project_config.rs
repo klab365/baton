@@ -13,6 +13,24 @@ fn example() -> serde_json::Value {
 }
 
 #[test]
+fn legacy_pipeline_names_are_accepted_but_not_serialized() {
+    use baton_core::domain::project::Pipeline;
+
+    let legacy = serde_json::json!({"id":"stable-id", "name":"Old display name", "steps":[]});
+    let pipeline: Pipeline = serde_json::from_value(legacy).unwrap();
+    assert_eq!(pipeline.id, "stable-id");
+    let saved = serde_json::to_value(&pipeline).unwrap();
+    assert_eq!(saved, serde_json::json!({"id":"stable-id", "steps":[]}));
+    assert_eq!(serde_json::from_value::<Pipeline>(saved).unwrap(), pipeline);
+    assert!(
+        serde_json::from_value::<Pipeline>(serde_json::json!({
+            "id":"stable-id", "steps":[], "unexpected":true
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn migrates_only_exact_legacy_marker() {
     assert_eq!(
         parse_config(r#"{"schemaVersion":1}"#).unwrap(),

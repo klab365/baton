@@ -59,7 +59,6 @@
   "pipelines": [
     {
       "id": "software-factory",
-      "name": "Software Factory",
       "steps": [
         {
           "id": "plan",

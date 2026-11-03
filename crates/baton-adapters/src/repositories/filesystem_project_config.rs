@@ -345,7 +345,6 @@ mod tests {
         use baton_core::domain::project::{Pipeline, PipelineStep};
         Pipeline {
             id: "main".into(),
-            name: "Main".into(),
             steps: vec![PipelineStep {
                 human: false,
                 transitions: vec![],

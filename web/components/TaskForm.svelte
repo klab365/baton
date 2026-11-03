@@ -11,7 +11,7 @@ let {
 	pipelines,
 	task,
 }: {
-	pipelines: Pick<Pipeline, "id" | "name">[];
+	pipelines: Pick<Pipeline, "id">[];
 	task?: {
 		id: string;
 		title: string;
@@ -72,7 +72,7 @@ async function save(event: SubmitEvent) {
 			{#snippet children({ describedBy, invalid })}<MultilineInput id="description" name="description" bind:value={description} rows={6} placeholder="What needs to be done? Include background or constraints…" {describedBy} {invalid} />{/snippet}
 		</Field>
 		<Field label="Pipeline" for="pipeline" hint="The selected pipeline is captured with this task." required>
-			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}
+			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines.map((pipeline) => ({ id: pipeline.id, name: pipeline.id }))} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}
 		</Field>
 		{#if !pipelines.length}<StatusMessage tone="warning" title="No pipelines available">Add a pipeline to <code>.baton/config.json</code> before creating a task.</StatusMessage>{/if}
 	</div>
