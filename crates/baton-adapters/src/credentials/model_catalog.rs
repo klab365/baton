@@ -38,7 +38,7 @@ impl CredentialModelCatalog for RigCredentialModelCatalog {
         let provider = match credential.credential_type.0.as_str() {
             "openai_api_key" => "openai",
             "chatgpt_session" => "chatgpt",
-            "github_copilot_session" => "github-copilot",
+            "github_copilot_session" => "copilot",
             _ => return Err("This credential type does not provide models".into()),
         };
         let catalog = Catalog::builtin();
@@ -57,5 +57,29 @@ impl CredentialModelCatalog for RigCredentialModelCatalog {
         }
         let _ = provider_id;
         Ok(models)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baton_core::domain::credentials::{CredentialStatus, CredentialType};
+
+    #[tokio::test]
+    async fn copilot_models_use_rigs_canonical_catalog_provider() {
+        let credential = Credential {
+            id: "copilot".into(),
+            name: "Copilot".into(),
+            credential_type: CredentialType::new("github_copilot_session").unwrap(),
+            configuration: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+            status: CredentialStatus::MissingSecret,
+        };
+        let models = RigCredentialModelCatalog
+            .list_models(&credential, None)
+            .await
+            .unwrap();
+        assert!(!models.is_empty());
     }
 }

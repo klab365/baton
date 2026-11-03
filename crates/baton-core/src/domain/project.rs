@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectConfig {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub agents: Vec<Agent>,
     pub pipelines: Vec<Pipeline>,
 }
@@ -94,6 +96,7 @@ pub struct Skill {
 impl ProjectConfig {
     pub const CURRENT: Self = Self {
         schema_version: 7,
+        project_id: None,
         agents: Vec::new(),
         pipelines: Vec::new(),
     };
@@ -104,6 +107,18 @@ impl ProjectConfig {
                 "Unsupported schemaVersion {}; expected 7",
                 self.schema_version
             ));
+        }
+        if let Some(id) = &self.project_id
+            && (id.len() != 36
+                || !id.bytes().enumerate().all(|(index, byte)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_hexdigit()
+                    }
+                }))
+        {
+            return Err("projectId must be a UUID".into());
         }
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
         let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
@@ -365,4 +380,23 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
         .map_err(|error| format!("Invalid project configuration: {error}"))?;
     config.validate()?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod project_identity_tests {
+    use super::parse_config;
+
+    #[test]
+    fn accepts_legacy_configs_and_preserves_valid_project_ids() {
+        let legacy = r#"{"schemaVersion":7,"agents":[],"pipelines":[]}"#;
+        assert!(parse_config(legacy).unwrap().project_id.is_none());
+        let with_id = r#"{"schemaVersion":7,"projectId":"018f0000-0000-7000-8000-000000000001","agents":[],"pipelines":[]}"#;
+        let parsed = parse_config(with_id).unwrap();
+        assert_eq!(
+            parse_config(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+            parsed
+        );
+        let invalid = with_id.replace("018f0000-0000-7000-8000-000000000001", "../unsafe");
+        assert!(parse_config(&invalid).is_err());
+    }
 }

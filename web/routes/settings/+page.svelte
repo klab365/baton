@@ -44,6 +44,33 @@ let busy = $state(false);
 let showForm = $state(false);
 let credentialToDelete = $state<Credential | null>(null);
 let deleteDialogOpen = $state(false);
+let connectionResult = $state<Record<string, { ok: boolean; message: string }>>(
+	{},
+);
+let testingCredentialId = $state("");
+async function testConnection(id: string) {
+	testingCredentialId = id;
+	try {
+		const response = await fetch(
+			`/api/credentials/${encodeURIComponent(id)}/test-connection`,
+			{ method: "POST" },
+		);
+		const body = await response.json();
+		connectionResult[id] = {
+			ok: response.ok,
+			message: response.ok
+				? body.message
+				: (body.error ?? "Connection test failed"),
+		};
+	} catch {
+		connectionResult[id] = {
+			ok: false,
+			message: "Could not reach the Baton server.",
+		};
+	} finally {
+		testingCredentialId = "";
+	}
+}
 async function load() {
 	busy = true;
 	try {
@@ -63,20 +90,37 @@ async function load() {
 		busy = false;
 	}
 }
+function closeCredentialForm() {
+	clearTimeout(authTimer);
+	authCredentialId = "";
+	authStatus = null;
+	credentialName = "";
+	credentialSecret = "";
+	credentialConfiguration = {};
+	error = "";
+	showForm = false;
+}
 async function pollAuthentication() {
-	if (!authCredentialId) return;
+	const id = authCredentialId;
+	if (!id) return;
 	try {
 		const response = await fetch(
-			`/api/credentials/${encodeURIComponent(authCredentialId)}/authentication`,
+			`/api/credentials/${encodeURIComponent(id)}/authentication`,
 		);
 		if (!response.ok) throw new Error("Could not read authentication status");
-		authStatus = await response.json();
+		const status = await response.json();
+		if (id !== authCredentialId) return;
+		authStatus = status;
 		if (authStatus?.status === "available") await load();
 		else if (["pending", "not_started"].includes(authStatus?.status ?? ""))
 			authTimer = setTimeout(pollAuthentication, 2000);
 	} catch (cause) {
-		error =
-			cause instanceof Error ? cause.message : "Authentication status failed";
+		if (id !== authCredentialId) return;
+		authStatus = {
+			status: "failed",
+			message:
+				cause instanceof Error ? cause.message : "Authentication status failed",
+		};
 	}
 }
 async function startAuthentication() {
@@ -84,32 +128,38 @@ async function startAuthentication() {
 	error = "";
 	if (authStatus?.status !== "failed" || !authCredentialId)
 		authCredentialId = crypto.randomUUID();
+	const id = authCredentialId;
 	authStatus = { status: "starting" };
 	try {
 		const response = await fetch(
-			`/api/credentials/${encodeURIComponent(authCredentialId)}/authenticate`,
+			`/api/credentials/${encodeURIComponent(id)}/authenticate`,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name: credentialName.trim() }),
+				body: JSON.stringify({ name: credentialName.trim(), credentialType }),
 			},
 		);
 		if (!response.ok)
 			throw new Error(
 				(await response.json()).error ?? "Could not start authentication",
 			);
-		authStatus = await response.json();
-		credentialName = "";
+		const status = await response.json();
+		if (id !== authCredentialId) return;
+		authStatus = status;
 		await load();
-		if (authStatus?.status === "pending")
+		if (id === authCredentialId && authStatus?.status === "pending")
 			authTimer = setTimeout(pollAuthentication, 1500);
 	} catch (cause) {
-		error = cause instanceof Error ? cause.message : "Authentication failed";
+		if (id !== authCredentialId) return;
+		authStatus = {
+			status: "failed",
+			message: cause instanceof Error ? cause.message : "Authentication failed",
+		};
 	}
 }
 async function saveCredential() {
 	if (!credentialName.trim() || !credentialType || !credentialSecret) return;
-	await mutate(
+	const saved = await mutate(
 		`/api/credentials/${encodeURIComponent(crypto.randomUUID())}`,
 		"PUT",
 		{
@@ -119,18 +169,18 @@ async function saveCredential() {
 			secret: credentialSecret,
 		},
 	);
-	credentialName = "";
-	credentialSecret = "";
-	credentialConfiguration = {};
+	if (saved) closeCredentialForm();
 }
 async function deleteCredential(credential: Credential) {
-	await mutate(
+	const deleted = await mutate(
 		`/api/credentials/${encodeURIComponent(credential.id)}`,
 		"DELETE",
 		{},
 	);
-	credentialToDelete = null;
-	deleteDialogOpen = false;
+	if (deleted) {
+		credentialToDelete = null;
+		deleteDialogOpen = false;
+	}
 }
 async function mutate(url: string, method: string, body: unknown) {
 	busy = true;
@@ -146,8 +196,10 @@ async function mutate(url: string, method: string, body: unknown) {
 				(await response.json()).error ?? "Could not update credential",
 			);
 		await load();
+		return true;
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : "Credential update failed";
+		return false;
 	} finally {
 		busy = false;
 	}
@@ -165,7 +217,30 @@ onMount(() => {
 	<div class="dialog-backdrop" role="presentation">
 		<div class="dialog credential-dialog" role="dialog" aria-modal="true" aria-labelledby="add-credential-title">
 			<header class="dialog-header"><span class="dialog-icon credential-dialog-icon" aria-hidden="true"><KeyRound size={19} /></span><div><span class="eyebrow">Provider access</span><h2 id="add-credential-title">Add credential</h2></div></header>
-			<div class="dialog-content"><p class="credential-description">Connect a provider for use by your agents. Secrets remain stored locally.</p>{#if error}<p role="alert" class="error">{error}</p>{/if}<div class="credential-builder">
+			<div class="dialog-content">{#if error}<p role="alert" class="error">{error}</p>{/if}
+			{#if authStatus}
+				<div class="device-auth" aria-live="polite">
+					{#if authStatus.status === "available"}
+						<h3>Account connected</h3>
+						<p>Your account is ready to use with your agents.</p>
+					{:else if authStatus.status === "failed"}
+						<h3>Could not connect account</h3>
+						<p role="alert">{authStatus.message ?? "Authentication failed. Please try again."}</p>
+					{:else}
+						<h3>Complete sign-in</h3>
+						{#if authStatus.verificationUri && authStatus.userCode}
+							<p>Open the sign-in page and enter this one-time code:</p>
+							<strong class="device-code">{authStatus.userCode}</strong>
+							<p><a href={authStatus.verificationUri} target="_blank" rel="noopener noreferrer">Open sign-in page ↗</a></p>
+							<p>Waiting for authorization. You can return here after signing in.</p>
+						{:else}
+							<p>Preparing your sign-in code. This may take a moment.</p>
+						{/if}
+						<p class="device-hint">Closing this dialog does not cancel the sign-in request.</p>
+					{/if}
+				</div>
+			{:else}
+			<p class="credential-description">Connect a provider for use by your agents. Secrets remain stored locally.</p><div class="credential-builder">
 			<label for="credential-type">Credential type</label>
 			<ResourceSelect id="credential-type" bind:value={credentialType} items={credentialTypes.map((type) => ({ id: type.id, name: type.label }))} placeholder="Select a credential type" label="Credential types" showId={false} disabled={busy} onValueChange={() => credentialConfiguration = {}} />
 			{#each credentialTypes.find((type) => type.id === credentialType)?.configurationFields ?? [] as field}
@@ -174,18 +249,20 @@ onMount(() => {
 			{/each}
 			<label for="credential-name">Name</label>
 			<input id="credential-name" bind:value={credentialName} placeholder="e.g. Personal OpenAI" disabled={busy} />
-			{#if credentialTypes.find((type) => type.id === credentialType)?.authentication === "device_code"}
-				{#if authStatus}<p role="status">{authStatus.message ?? authStatus.status}{#if authStatus.verificationUri}<br /><a href={authStatus.verificationUri} target="_blank" rel="noreferrer">Open sign-in page</a>{/if}{#if authStatus.userCode}<br /><strong>Code: {authStatus.userCode}</strong>{/if}</p>{/if}
-			{:else}
+			{#if credentialTypes.find((type) => type.id === credentialType)?.authentication !== "device_code"}
 				<label for="credential-secret">Secret</label>
 				<input id="credential-secret" type="password" bind:value={credentialSecret} autocomplete="off" disabled={busy} />
 			{/if}
-			</div></div>
+			</div>{/if}</div>
 			<div class="dialog-actions">
-				<Button variant="quiet" disabled={busy} onclick={() => (showForm = false)}>Cancel</Button>
-				{#if credentialTypes.find((type) => type.id === credentialType)?.authentication === "device_code"}
-					<Button disabled={busy || !credentialName.trim() || authStatus?.status === "pending"} onclick={startAuthentication}>Connect account</Button>
+				{#if authStatus}
+					<Button variant="quiet" disabled={busy} onclick={closeCredentialForm}>{authStatus.status === "available" ? "Done" : "Close"}</Button>
+					{#if authStatus.status === "failed"}<Button disabled={busy} onclick={startAuthentication}>Try again</Button>{/if}
+				{:else if credentialTypes.find((type) => type.id === credentialType)?.authentication === "device_code"}
+					<Button variant="quiet" disabled={busy} onclick={closeCredentialForm}>Cancel</Button>
+					<Button disabled={busy || !credentialName.trim()} onclick={startAuthentication}>Connect account</Button>
 				{:else}
+					<Button variant="quiet" disabled={busy} onclick={closeCredentialForm}>Cancel</Button>
 					<Button disabled={busy || !credentialName.trim() || !credentialType || !credentialSecret} onclick={saveCredential}>Save credential</Button>
 				{/if}
 			</div>
@@ -196,7 +273,7 @@ onMount(() => {
 	<header><div class="credential-heading"><h2 id="saved-credentials">Credentials</h2><span>{credentials.length}</span></div><div class="credential-section-actions"><Button disabled={busy} onclick={() => (showForm = true)}><Plus size={16} /> Add credential</Button></div></header>
 	<div class="credential-list">
 		{#each credentials as credential (credential.id)}
-			<article class="credential-card"><div><strong>{credential.name}</strong><code>{credential.credentialType}</code><span class="credential-status">{credential.status.replaceAll("_", " ")}</span></div><Button variant="danger" disabled={busy} onclick={() => { credentialToDelete = credential; deleteDialogOpen = true; }}>Delete</Button></article>
+			<article class="credential-card"><div><strong>{credential.name}</strong><code>{credential.credentialType}</code><span class="credential-status">{credential.status.replaceAll("_", " ")}</span>{#if connectionResult[credential.id]}<span role={connectionResult[credential.id].ok ? "status" : "alert"}>{connectionResult[credential.id].message}</span>{/if}</div>{#if credentialTypes.find((type) => type.id === credential.credentialType)?.supportsTest}<Button disabled={busy || !!testingCredentialId} onclick={() => testConnection(credential.id)}>{testingCredentialId === credential.id ? "Testing…" : "Test connection"}</Button>{/if}<Button variant="danger" disabled={busy} onclick={() => { credentialToDelete = credential; deleteDialogOpen = true; }}>Delete</Button></article>
 		{:else}<p class="empty-hint">No provider credentials yet. Add one to connect an agent.</p>{/each}
 	</div>
 </section>
@@ -205,6 +282,10 @@ onMount(() => {
 <style>
 	.credential-dialog-icon { color:var(--link); background:var(--surface-raised); }
 	.credential-description { margin:0 0 1rem; }
+	.device-auth h3 { margin:0 0 .75rem; color:var(--text); }
+	.device-auth p { color:var(--text-muted); }
+	.device-code { display:inline-block; padding:.7rem 1rem; border:1px solid var(--border); border-radius:.5rem; background:var(--surface-raised); color:var(--text); font-size:1.4rem; letter-spacing:.12em; }
+	.device-hint { font-size:.8rem; }
 	.credential-builder { display:grid; gap:.45rem; }
 	.credential-builder label { margin-top:.35rem; color:var(--text); font-size:.86rem; font-weight:650; }
 	.credential-list { display:grid; gap:.65rem; }

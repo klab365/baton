@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{self, IsTerminal, Write},
+    io::{self, Write},
     path::PathBuf,
 };
 
@@ -21,15 +21,6 @@ fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
         Err(error) => return Err(error.into()),
     }
     Ok(was_missing)
-}
-
-fn confirm_project_initialization() -> anyhow::Result<bool> {
-    print!("Initialize this Baton project now? [Y/n] ");
-    io::stdout().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    let answer = answer.trim();
-    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 async fn load_project_config(
@@ -62,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
             anyhow::bail!("Usage: baton <task-done|task-delete> <project-directory> <task-id>");
         }
         let project = PathBuf::from(&args[2]).canonicalize()?;
+        let _project_lock = baton_server::lock_project_process(&project)?;
         let tasks = baton_adapters::repositories::filesystem_task::FilesystemTaskRepository(
             project.clone(),
         );
@@ -103,9 +95,10 @@ async fn main() -> anyhow::Result<()> {
         if args.len() != 2 {
             anyhow::bail!("Usage: baton cleanup <project-directory> <run-id>");
         }
-        let repository = baton_adapters::repositories::filesystem_run::FilesystemRunRepository(
-            PathBuf::from(&args[0]).canonicalize()?,
-        );
+        let project = PathBuf::from(&args[0]).canonicalize()?;
+        let _project_lock = baton_server::lock_project_process(&project)?;
+        let repository =
+            baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project);
         let mut run = repository.load(&args[1]).map_err(anyhow::Error::msg)?;
         if matches!(
             run.status,
@@ -136,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
             anyhow::bail!("Usage: baton run <project-directory> <pipeline-id> <task-prompt>");
         }
         let project = PathBuf::from(&args[0]).canonicalize()?;
+        let _project_lock = baton_server::lock_project_process(&project)?;
         let config = load_project_config(&project).await?;
         let id = format!(
             "{}-{}",
@@ -148,11 +142,11 @@ async fn main() -> anyhow::Result<()> {
             &baton_adapters::skills::FilesystemSkillRepository::new(project.clone()),
         )
         .map_err(anyhow::Error::msg)?;
+        let credential_store =
+            baton_adapters::credentials::FilesystemCredentialRepository::for_project(&project)
+                .map_err(anyhow::Error::msg)?;
         let repository =
             baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project);
-        let credential_store =
-            baton_adapters::credentials::FilesystemCredentialRepository::for_local_user()
-                .map_err(anyhow::Error::msg)?;
         let auth_root = credential_store.root_path().to_path_buf();
         let credentials: std::sync::Arc<dyn baton_core::ports::credentials::CredentialRepository> =
             std::sync::Arc::new(credential_store);
@@ -184,26 +178,11 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5173);
-    let first_bootstrap = bootstrap_project(&project_dir)?;
-    if first_bootstrap && io::stdin().is_terminal() && confirm_project_initialization()? {
-        use baton_core::ports::project_config::ProjectConfigRepository;
-        let repository = baton_adapters::repositories::filesystem_project_config::FilesystemProjectConfigRepository::new(project_dir.clone());
-        match repository.load().await.map_err(anyhow::Error::msg)? {
-            baton_core::domain::project::ConfigState::Missing => {
-                baton_core::features::project_config::initialize_project(&repository)
-                    .await
-                    .map_err(anyhow::Error::msg)?;
-                println!("Baton project initialized.");
-            }
-            baton_core::domain::project::ConfigState::Ready(_) => {
-                println!("Baton project configuration already exists.")
-            }
-            baton_core::domain::project::ConfigState::Invalid(message) => anyhow::bail!(message),
-        }
-    }
+    let project_lock = baton_server::lock_project_process(&project_dir)?;
+    bootstrap_project(&project_dir)?;
     println!("Baton is starting for {}", project_dir.display());
     println!("Web interface: http://{host}:{port}");
-    baton_server::serve(project_dir, host, port).await
+    baton_server::serve_with_project_lock(project_dir, host, port, project_lock).await
 }
 
 #[cfg(test)]

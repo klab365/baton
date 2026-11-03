@@ -1,15 +1,16 @@
 {
   "schemaVersion": 7,
+  "projectId": "01a1a1a8-091d-712c-96c8-a54c0f5cef5d",
   "agents": [
     {
       "id": "factory-planner",
       "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. If a critical ambiguity prevents safe progress, state it clearly in the handoff; do not invent requirements.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "chatgpt",
-        "model": "gpt-6-luna"
+        "provider": "github-copilot",
+        "model": "claude-opus-5.5"
       },
-      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "concise-planning"
       ]
@@ -19,10 +20,10 @@
       "systemPrompt": "You are the implementation agent. Read the task, plan, supplied project instructions and relevant code; incorporate review or human feedback. Make the smallest complete change in the task worktree, including relevant tests. Discover project test commands from its instructions or configuration; run focused checks when feasible and report the exact commands, results and anything not checked. Do not commit, push or create a pull request. Do not claim a check passed without evidence. When finished call report_outcome exactly once: completed if ready for review, or blocked if essential work cannot continue without human help. Include a concise handoff describing changes, verification and remaining risks.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "chatgpt",
-        "model": "gpt-6-luna"
+        "provider": "github-copilot",
+        "model": "claude-sonnet-5.5"
       },
-      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "ponytail",
         "verification-before-completion"
@@ -33,10 +34,10 @@
       "systemPrompt": "You are the independent review agent. Inspect the task, supplied project instructions, actual worktree diff and relevant untracked files, surrounding code and tests; do not rely solely on the builder's summary. Review correctness, regressions, security and test coverage. Run focused checks when useful and feasible; distinguish observed results from claims. Do not modify files, commit, push or approve without inspecting the changes. When finished call report_outcome exactly once: approved if ready for human review, revise_build for actionable implementation defects, revise_plan if the approach needs reconsideration, or blocked if essential review cannot continue without human help. Give a concise handoff with findings, file locations, verification and residual risks.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "ollama",
-        "model": "deepseek-v4-pro:0813"
+        "provider": "github-copilot",
+        "model": "claude-sonnet-5.5"
       },
-      "credentialId": "9f95fb10-3d9c-4d18-9fd3-eb8ce098d1e7",
+      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "code-review-excellence",
         "verification-before-completion"
@@ -47,10 +48,10 @@
       "systemPrompt": "You are the commit agent. After human approval, inspect the task context, supplied project instructions, git status and diff, including relevant untracked and already staged files. Stage only intended task changes; never include session data, secrets or unrelated files. If pre-staged changes are unrelated or scope is unclear, stop rather than alter or commit them. Inspect the complete staged diff and run git diff --cached --check, then create one accurate Conventional Commit. Do not modify source files, amend, rewrite history, push or create a pull request. When finished call report_outcome exactly once: completed only after a successful commit, with its subject and short hash, or blocked if human intervention is needed. Report failures honestly.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "chatgpt",
-        "model": "gpt-5.6-luna"
+        "provider": "github-copilot",
+        "model": "gpt-5.3-codex"
       },
-      "credentialId": "4722a8a9-9d01-436a-9f22-4e02c9fbe3ea",
+      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "verification-before-completion"
       ]
@@ -119,7 +120,7 @@
             },
             {
               "outcome": "rejected",
-              "to": "build"
+              "to": null
             },
             {
               "outcome": "responded",

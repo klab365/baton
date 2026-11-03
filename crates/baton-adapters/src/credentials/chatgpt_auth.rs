@@ -124,12 +124,15 @@ impl ChatGptAuthManager {
         flows.get(id)?.state.lock().ok().map(|state| state.clone())
     }
 
-    pub fn cancel(&self, id: &str) {
-        if let Ok(mut flows) = self.flows.lock()
-            && let Some(flow) = flows.remove(id)
-        {
+    pub async fn cancel(&self, id: &str) {
+        let flow = self
+            .flows
+            .lock()
+            .ok()
+            .and_then(|mut flows| flows.remove(id));
+        if let Some(flow) = flow {
             flow.task.abort();
+            let _ = flow.task.await;
         }
-        let _ = std::fs::remove_dir_all(self.root.join("auth").join(id));
     }
 }

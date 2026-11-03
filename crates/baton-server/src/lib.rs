@@ -67,7 +67,8 @@ async fn web_fallback(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
 use baton_adapters::{
     credentials::{
         FilesystemCredentialRepository, LocalCredentialTypeCatalog,
-        chatgpt_auth::ChatGptAuthManager, model_catalog::RigCredentialModelCatalog,
+        chatgpt_auth::ChatGptAuthManager, connection_test::LocalConnectionTester,
+        copilot_auth::CopilotAuthManager, model_catalog::RigCredentialModelCatalog,
     },
     repositories::{
         filesystem_project_config::FilesystemProjectConfigRepository,
@@ -88,6 +89,8 @@ pub struct AppState {
     project_dir: Arc<PathBuf>,
     mediator: Arc<mediator::ServerMediator>,
     pub(crate) chatgpt_auth: ChatGptAuthManager,
+    pub(crate) copilot_auth: CopilotAuthManager,
+    pub(crate) credential_operations: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -98,16 +101,21 @@ impl AppState {
         // Convert it deterministically to a durable terminal record before serving requests.
         let _ = runs.recover_interrupted();
         let repository: Arc<dyn ProjectConfigRepository> = Arc::new(repository);
-        let credential_store = FilesystemCredentialRepository::for_local_user()
+        let credential_store = FilesystemCredentialRepository::for_project(&project_dir)
             .expect("local credential storage path must be available");
         let auth_root = credential_store.root_path().to_path_buf();
         let chatgpt_auth = ChatGptAuthManager::new(auth_root.clone());
+        let copilot_auth = CopilotAuthManager::new(auth_root.clone());
         let credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository> =
             Arc::new(credential_store);
         let credential_types: Arc<dyn baton_core::ports::credentials::CredentialTypeCatalog> =
             Arc::new(LocalCredentialTypeCatalog);
         let credential_models: Arc<dyn baton_core::ports::credentials::CredentialModelCatalog> =
             Arc::new(RigCredentialModelCatalog);
+        let credential_tests = Arc::new(LocalConnectionTester {
+            copilot: copilot_auth.clone(),
+            auth_root: auth_root.clone(),
+        });
         let task_repository: Arc<dyn TaskRepository> =
             Arc::new(FilesystemTaskRepository(project_dir.clone()));
         let run_repository: Arc<dyn RunRepository> =
@@ -138,6 +146,7 @@ impl AppState {
             credentials,
             credential_types,
             credential_models,
+            credential_tests,
             task_resources,
             run_resources,
             skills,
@@ -147,6 +156,8 @@ impl AppState {
             project_dir: Arc::new(project_dir),
             mediator,
             chatgpt_auth,
+            copilot_auth,
+            credential_operations: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
@@ -168,7 +179,72 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Holds an OS-level lock until dropped. The lock file must never be removed while in use.
+pub struct ProjectProcessLock {
+    _project: std::fs::File,
+    _identity: std::fs::File,
+}
+
+pub fn lock_project_process(project_dir: &std::path::Path) -> anyhow::Result<ProjectProcessLock> {
+    let project = project_dir.canonicalize()?;
+    if !project.is_dir() {
+        anyhow::bail!("Project path is not a directory: {}", project.display());
+    }
+    let lock_directory = project.join(".baton").join("runs");
+    std::fs::create_dir_all(&lock_directory)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(lock_directory.join("process.lock"))?;
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!(
+            "Another Baton process is already using project {}",
+            project.display()
+        ),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+    }
+    let id =
+        baton_adapters::repositories::filesystem_project_config::ensure_project_identity(&project)
+            .map_err(anyhow::Error::msg)?;
+    let base = match std::env::var_os("BATON_CREDENTIAL_DIR") {
+        Some(base) => PathBuf::from(base),
+        None => PathBuf::from(
+            std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is not set"))?,
+        )
+        .join(".local/share/baton/credentials"),
+    };
+    let locks = base.join("project-locks");
+    std::fs::create_dir_all(&locks)?;
+    let identity = options.open(locks.join(format!("{id}.lock")))?;
+    match identity.try_lock() {
+        Ok(()) => Ok(ProjectProcessLock {
+            _project: file,
+            _identity: identity,
+        }),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            anyhow::bail!("Another Baton process is already using this project identity")
+        }
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
 pub async fn serve(project_dir: PathBuf, host: &str, port: u16) -> anyhow::Result<()> {
+    let project_lock = lock_project_process(&project_dir)?;
+    serve_with_project_lock(project_dir, host, port, project_lock).await
+}
+
+/// Serve a project for which the caller already holds the process lock.
+pub async fn serve_with_project_lock(
+    project_dir: PathBuf,
+    host: &str,
+    port: u16,
+    _project_lock: ProjectProcessLock,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     axum::serve(listener, router(AppState::new(project_dir)))
         .with_graceful_shutdown(async {
@@ -211,6 +287,85 @@ mod web_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[test]
+    fn project_process_lock_blocks_same_project_and_releases_on_drop() {
+        let project = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let first = lock_project_process(project.path()).unwrap();
+        assert!(lock_project_process(project.path().join(".").as_path()).is_err());
+        let _other = lock_project_process(other.path()).unwrap();
+        drop(first);
+        assert!(lock_project_process(project.path()).is_ok());
+    }
+
+    #[test]
+    fn cloned_project_identity_shares_process_lock() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let lock = lock_project_process(first.path()).unwrap();
+        std::fs::create_dir_all(second.path().join(".baton")).unwrap();
+        std::fs::copy(
+            first.path().join(".baton/config.json"),
+            second.path().join(".baton/config.json"),
+        )
+        .unwrap();
+        assert!(lock_project_process(second.path()).is_err());
+        drop(lock);
+        assert!(lock_project_process(second.path()).is_ok());
+    }
+
+    #[test]
+    fn project_lock_is_released_after_process_crash() {
+        const CHILD_PROJECT: &str = "BATON_TEST_LOCK_CHILD_PROJECT";
+        if let Some(project) = std::env::var_os(CHILD_PROJECT) {
+            let project = std::path::PathBuf::from(project);
+            let _lock = lock_project_process(&project).unwrap();
+            std::fs::write(project.join("lock-ready"), b"ready").unwrap();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let project = tempfile::tempdir().unwrap();
+        let mut child = ChildGuard(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "web_tests::project_lock_is_released_after_process_crash",
+                ])
+                .env(CHILD_PROJECT, project.path())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !project.path().join("lock-ready").is_file() {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "child exited before acquiring lock"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not acquire lock in time"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(lock_project_process(project.path()).is_err());
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(project.path().join(".baton/runs/process.lock").is_file());
+        assert!(lock_project_process(project.path()).is_ok());
+    }
 
     #[tokio::test]
     #[ignore = "requires a web build embedded via BATON_WEB_DIR"]

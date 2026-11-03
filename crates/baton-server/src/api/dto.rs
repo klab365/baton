@@ -9,6 +9,9 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectConfig {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project_id: Option<String>,
     pub agents: Vec<Agent>,
     pub pipelines: Vec<Pipeline>,
 }
@@ -92,6 +95,7 @@ impl From<domain::ProjectConfig> for ProjectConfig {
     fn from(value: domain::ProjectConfig) -> Self {
         Self {
             schema_version: value.schema_version,
+            project_id: value.project_id,
             agents: value.agents.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
         }
@@ -102,6 +106,7 @@ impl From<ProjectConfig> for domain::ProjectConfig {
     fn from(value: ProjectConfig) -> Self {
         Self {
             schema_version: value.schema_version,
+            project_id: value.project_id,
             agents: value.agents.into_iter().map(Into::into).collect(),
             pipelines: value.pipelines.into_iter().map(Into::into).collect(),
         }
