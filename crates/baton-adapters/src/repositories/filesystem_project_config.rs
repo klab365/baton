@@ -144,6 +144,66 @@ impl ProjectConfigRepository for FilesystemProjectConfigRepository {
     }
 }
 
+/// Persist a project identity before opening its vault. Call while holding the project bootstrap lock.
+pub fn ensure_project_identity(project_dir: &Path) -> Result<String, String> {
+    let baton_dir = project_dir.join(".baton");
+    fs::create_dir_all(&baton_dir).map_err(|_| "Could not create project directory")?;
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(baton_dir.join(".gitignore"))
+    {
+        Ok(mut file) => file
+            .write_all(b"runs/\ntasks/\n")
+            .map_err(|_| "Could not write project gitignore")?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err("Could not create project gitignore".into()),
+    }
+    let path = baton_dir.join("config.json");
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err("Could not read project configuration".into()),
+    };
+    let mut value = match contents.as_deref() {
+        Some(contents) => serde_json::from_str::<serde_json::Value>(contents)
+            .map_err(|_| "Invalid project configuration")?,
+        None => serde_json::to_value(ProjectConfig::CURRENT).map_err(|error| error.to_string())?,
+    };
+    let mut validation_value = value.clone();
+    if let Some(object) = validation_value.as_object_mut() {
+        object.remove("skills");
+    }
+    let config = parse_config(&validation_value.to_string())?;
+    if let Some(id) = &config.project_id {
+        return Ok(id.to_ascii_lowercase());
+    }
+    let legacy_identity = project_dir.join(".baton/runs/credential-project-id");
+    let id = match fs::read_to_string(legacy_identity) {
+        Ok(value) => uuid::Uuid::parse_str(value.trim())
+            .map_err(|_| "Existing local project identity is invalid")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => uuid::Uuid::now_v7(),
+        Err(_) => return Err("Could not read existing local project identity".into()),
+    };
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+    {
+        value = serde_json::to_value(config).map_err(|error| error.to_string())?;
+    }
+    value
+        .as_object_mut()
+        .ok_or("Invalid project configuration")?
+        .insert(
+            "projectId".into(),
+            serde_json::Value::String(id.to_string()),
+        );
+    let serialized = serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())?;
+    persist(&path, contents.as_deref(), &serialized)?;
+    Ok(id.to_string())
+}
+
 struct RemoveOnDrop(PathBuf);
 impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
@@ -237,6 +297,25 @@ mod tests {
             ConfigState::Ready(snapshot) => snapshot,
             state => panic!("Expected ready, got {state:?}"),
         }
+    }
+
+    #[test]
+    fn bootstrap_migrates_legacy_identity_without_losing_configuration() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.0.join(".baton/runs")).unwrap();
+        let id = "018f0000-0000-7000-8000-000000000001";
+        fs::write(fixture.0.join(".baton/runs/credential-project-id"), id).unwrap();
+        fs::write(
+            fixture.0.join(".baton/config.json"),
+            r#"{"schemaVersion":7,"agents":[],"pipelines":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(ensure_project_identity(&fixture.0).unwrap(), id);
+        let config =
+            parse_config(&fs::read_to_string(fixture.0.join(".baton/config.json")).unwrap())
+                .unwrap();
+        assert_eq!(config.project_id.as_deref(), Some(id));
+        assert_eq!(ensure_project_identity(&fixture.0).unwrap(), id);
     }
 
     #[tokio::test]

@@ -2,4 +2,4 @@
 import type { Agent } from "./Agent";
 import type { Pipeline } from "./Pipeline";
 
-export type ProjectConfig = { schemaVersion: number, agents: Array<Agent>, pipelines: Array<Pipeline>, };
+export type ProjectConfig = { schemaVersion: number, projectId?: string, agents: Array<Agent>, pipelines: Array<Pipeline>, };

@@ -32,6 +32,7 @@ pub fn new(
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     credential_types: Arc<dyn baton_core::ports::credentials::CredentialTypeCatalog>,
     credential_models: Arc<dyn baton_core::ports::credentials::CredentialModelCatalog>,
+    credential_tests: Arc<dyn baton_core::ports::credentials::CredentialConnectionTester>,
     task_resources: TaskFeatureResources,
     run_resources: RunFeatureResources,
     skills: Arc<dyn baton_core::ports::skills::SkillRepository>,
@@ -44,8 +45,9 @@ pub fn new(
         .credential_repository(CredentialRepositoryResource(
             credentials,
             credential_types,
-            repository.clone(),
+            run_resources.runs.clone(),
             credential_models,
+            credential_tests,
         ))
         .task_resources(task_resources)
         .run_resources(run_resources)

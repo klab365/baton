@@ -7,9 +7,8 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn version_endpoint_reports_workspace_version() {
-    let app = router(AppState::new(
-        std::env::temp_dir().join("baton-version-test-nonexistent"),
-    ));
+    let directory = tempfile::tempdir().unwrap();
+    let app = router(AppState::new(directory.path().to_path_buf()));
     let response = app
         .oneshot(Request::get("/api/version").body(Body::empty()).unwrap())
         .await

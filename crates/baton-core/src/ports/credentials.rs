@@ -45,15 +45,37 @@ pub trait CredentialModelCatalog: Send + Sync {
     ) -> Result<Vec<ModelDescriptor>, String>;
 }
 
+/// Tests a selected local credential without exposing its secret to callers.
+#[async_trait]
+pub trait CredentialConnectionTester: Send + Sync {
+    async fn test_connection(
+        &self,
+        credential: &Credential,
+        secret: Option<&str>,
+    ) -> Result<(), String>;
+}
+
 /// Describes credential integrations supported by the composed adapters.
 pub trait CredentialTypeCatalog: Send + Sync {
     fn list(&self) -> Vec<CredentialTypeDescriptor>;
     fn get(&self, id: &CredentialType) -> Option<CredentialTypeDescriptor>;
 }
 
+/// A lease held for a run or a credential mutation.
+pub trait CredentialLease: Send {}
+
 /// Stores local credential metadata and secret material outside project configuration.
 #[async_trait]
 pub trait CredentialRepository: Send + Sync {
+    fn acquire_run_leases(
+        &self,
+        _ids: &[String],
+    ) -> Result<Option<Box<dyn CredentialLease>>, String> {
+        Ok(None)
+    }
+    fn acquire_delete_lease(&self, _id: &str) -> Result<Option<Box<dyn CredentialLease>>, String> {
+        Ok(None)
+    }
     async fn list(&self) -> Result<Vec<Credential>, String>;
     async fn get(&self, id: &str) -> Result<Option<Credential>, String>;
     async fn save(&self, credential: &Credential, secret: Option<&str>) -> Result<(), String>;

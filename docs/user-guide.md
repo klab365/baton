@@ -30,7 +30,7 @@ In **Settings → Add credential**, select a credential type, give it a name and
 
 Credentials can be reused by multiple agents. The agent editor loads available models based on the selected credential. Deleting a credential leaves agents referencing it unable to start new runs until another available credential is assigned.
 
-Baton stores secret material in a local credential vault, not `.baton/config.json`. The default directory is `~/.local/share/baton/credentials`; `BATON_CREDENTIAL_DIR` overrides it. Protect this directory and do not commit it. See [provider credentials](local-provider-storage.md).
+Baton stores secret material in a project-specific local credential vault, not `.baton/config.json`. The default base directory is `~/.local/share/baton/credentials`; `BATON_CREDENTIAL_DIR` overrides it. Protect this directory and do not commit it. See [provider credentials](local-provider-storage.md).
 
 ## Agents and project instructions
 

@@ -66,6 +66,30 @@ fn project_instructions(root: &Path) -> Result<Option<String>, String> {
         .map_err(|error| format!("Worktree AGENTS.md must be UTF-8: {error}"))
 }
 
+fn copilot_session_directory<'a>(
+    credential: Option<&(baton_core::domain::credentials::Credential, Option<String>)>,
+    directory: Option<&'a Path>,
+) -> Result<&'a Path, String> {
+    use baton_core::domain::credentials::CredentialStatus;
+    let (metadata, _) =
+        credential.ok_or("GitHub Copilot requires a configured session credential")?;
+    if metadata.credential_type.0 != "github_copilot_session" {
+        return Err("GitHub Copilot requires a github_copilot_session credential".into());
+    }
+    if metadata.status != CredentialStatus::Available {
+        return Err("GitHub Copilot session is unavailable; delete the credential, connect the account again, and reassign the agent".into());
+    }
+    let directory = directory.ok_or("GitHub Copilot requires a credential reference")?;
+    if !directory.join(".session").is_file() {
+        return Err("GitHub Copilot session is missing; delete the credential, connect the account again, and reassign the agent".into());
+    }
+    Ok(directory)
+}
+
+fn is_copilot_provider(provider: &str) -> bool {
+    matches!(provider, "github-copilot" | "copilot")
+}
+
 pub struct RigRuntime;
 
 pub struct RigAgentContext<'a> {
@@ -96,7 +120,12 @@ impl RigRuntime {
             .canonicalize()
             .map_err(|e| format!("Resolve worktree: {e}"))?;
         let instructions = project_instructions(&root)?;
-        let provider = ProviderId::catalog(&model_config.provider).ok_or_else(|| {
+        let provider_name = if is_copilot_provider(&model_config.provider) {
+            "copilot"
+        } else {
+            &model_config.provider
+        };
+        let provider = ProviderId::catalog(provider_name).ok_or_else(|| {
             format!(
                 "Rig does not recognize provider {:?}",
                 model_config.provider
@@ -105,7 +134,33 @@ impl RigRuntime {
         let spec = ModelSpec::new(provider, &model_config.model).with_tools(true);
         // Ollama's direct Rig client reads its distinct OLLAMA_API_BASE_URL setting;
         // the generic registry dialect otherwise falls back to localhost.
-        let handler = if model_config.provider == "chatgpt" {
+        let handler = if is_copilot_provider(&model_config.provider) {
+            use rig::providers::copilot::auth::{
+                AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
+            };
+            let directory = copilot_session_directory(
+                runtime_credential.as_ref(),
+                agent_context.auth_store_dir.as_deref(),
+            )?;
+            let spec = Catalog::builtin()
+                .resolve(&format!("copilot/{}", model_config.model))
+                .map_err(|_| "GitHub Copilot model is not available")?
+                .spec
+                .clone();
+            let authenticator = Authenticator::new(
+                AuthSource::OAuth,
+                FileTokenStore::new(directory),
+                DeviceCodeHandler::default(),
+                false,
+            );
+            let signed_in = rig::client::signed_in::SignedInModel::new(
+                spec,
+                authenticator,
+                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default()),
+            )
+            .map_err(|_| "GitHub Copilot model configuration is invalid")?;
+            ErasedHandler::new(signed_in)
+        } else if model_config.provider == "chatgpt" {
             use rig::providers::chatgpt::auth::{
                 AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
             };
@@ -351,6 +406,49 @@ impl RigRuntime {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+#[cfg(test)]
+mod copilot_credential_tests {
+    use super::{copilot_session_directory, is_copilot_provider};
+
+    #[test]
+    fn copilot_aliases_use_the_explicit_session_path() {
+        assert!(is_copilot_provider("github-copilot"));
+        assert!(is_copilot_provider("copilot"));
+        assert!(!is_copilot_provider("openai"));
+    }
+    use baton_core::domain::credentials::{Credential, CredentialStatus, CredentialType};
+
+    #[test]
+    fn requires_selected_available_copilot_session_and_its_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut credential = Credential {
+            id: "selected".into(),
+            name: "Copilot".into(),
+            credential_type: CredentialType::new("github_copilot_session").unwrap(),
+            configuration: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+            status: CredentialStatus::Available,
+        };
+        assert!(copilot_session_directory(None, Some(dir.path())).is_err());
+        assert!(copilot_session_directory(Some(&(credential.clone(), None)), None).is_err());
+        assert!(
+            copilot_session_directory(Some(&(credential.clone(), None)), Some(dir.path())).is_err()
+        );
+        std::fs::write(dir.path().join(".session"), "").unwrap();
+        assert!(
+            copilot_session_directory(Some(&(credential.clone(), None)), Some(dir.path())).is_ok()
+        );
+        credential.status = CredentialStatus::Unavailable;
+        assert!(
+            copilot_session_directory(Some(&(credential.clone(), None)), Some(dir.path())).is_err()
+        );
+        credential.status = CredentialStatus::Available;
+        credential.credential_type = CredentialType::new("openai_api_key").unwrap();
+        assert!(copilot_session_directory(Some(&(credential, None)), Some(dir.path())).is_err());
     }
 }
 

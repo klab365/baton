@@ -8,7 +8,7 @@ use baton_core::{
     domain::credentials::{Credential, CredentialStatus, CredentialType},
     features::credentials::{
         CredentialError, DeleteCredential, GetCredential, ListCredentialModels,
-        ListCredentialTypes, ListCredentials, SaveCredential,
+        ListCredentialTypes, ListCredentials, SaveCredential, TestCredentialConnection,
     },
 };
 use serde::Deserialize;
@@ -63,6 +63,7 @@ async fn save(
     Path(id): Path<String>,
     Json(body): Json<Save>,
 ) -> Result<Json<Credential>, ApiError> {
+    let _guard = state.credential_operations.lock().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -98,16 +99,32 @@ async fn save(
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct Authenticate {
     name: String,
+    #[serde(default = "default_session_type")]
+    credential_type: String,
+}
+fn default_session_type() -> String {
+    "chatgpt_session".into()
 }
 async fn authenticate(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<Authenticate>,
-) -> Result<Json<baton_adapters::credentials::chatgpt_auth::ChatGptAuthStatus>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _guard = state.credential_operations.lock().await;
+    if !matches!(
+        body.credential_type.as_str(),
+        "chatgpt_session" | "github_copilot_session"
+    ) {
+        return Err(ApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: "Unsupported device authentication type".into(),
+        });
+    }
     if let Ok(existing) = state.mediator.send(GetCredential { id: id.clone() }).await
-        && existing.credential_type.0 != "chatgpt_session"
+        && existing.credential_type.0 != body.credential_type
     {
         return Err(ApiError {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -121,7 +138,7 @@ async fn authenticate(
     let credential = Credential {
         id: id.clone(),
         name: body.name,
-        credential_type: CredentialType::new("chatgpt_session").unwrap(),
+        credential_type: CredentialType::new(body.credential_type.clone()).unwrap(),
         configuration: Default::default(),
         created_at: now,
         updated_at: now,
@@ -134,10 +151,19 @@ async fn authenticate(
             secret: None,
         })
         .await?;
-    let status = state.chatgpt_auth.start(id).map_err(|_| ApiError {
-        status: StatusCode::CONFLICT,
-        message: "Could not start ChatGPT authentication".into(),
-    })?;
+    let status = if body.credential_type == "github_copilot_session" {
+        serde_json::to_value(state.copilot_auth.start(id).map_err(|_| ApiError {
+            status: StatusCode::CONFLICT,
+            message: "Could not start GitHub Copilot authentication".into(),
+        })?)
+        .unwrap()
+    } else {
+        serde_json::to_value(state.chatgpt_auth.start(id).map_err(|_| ApiError {
+            status: StatusCode::CONFLICT,
+            message: "Could not start ChatGPT authentication".into(),
+        })?)
+        .unwrap()
+    };
     Ok(Json(status))
 }
 async fn authentication_status(
@@ -148,6 +174,13 @@ async fn authentication_status(
         .mediator
         .send(GetCredential { id: id.clone() })
         .await?;
+    if credential.credential_type.0 == "github_copilot_session" {
+        return Ok(Json(state.copilot_auth.status(&id).map(|s| serde_json::to_value(s).unwrap()).unwrap_or_else(|| serde_json::json!({
+            "status": if credential.status == CredentialStatus::Available { "available" } else { "not_started" },
+            "verificationUri": null, "userCode": null,
+            "message": if credential.status == CredentialStatus::Available { None } else { Some("Connect GitHub Copilot in Settings.") }
+        }))));
+    }
     if credential.credential_type.0 != "chatgpt_session" {
         return Err(ApiError {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -170,15 +203,25 @@ async fn authentication_status(
     });
     Ok(Json(serde_json::to_value(status).unwrap()))
 }
+async fn test_connection(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _guard = state.credential_operations.lock().await;
+    state.mediator.send(TestCredentialConnection { id }).await?;
+    Ok(Json(
+        serde_json::json!({"message": "Connection successful."}),
+    ))
+}
+
 async fn remove(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .mediator
-        .send(DeleteCredential { id: id.clone() })
-        .await?;
-    state.chatgpt_auth.cancel(&id);
+    let _guard = state.credential_operations.lock().await;
+    state.copilot_auth.cancel(&id).await;
+    state.chatgpt_auth.cancel(&id).await;
+    state.mediator.send(DeleteCredential { id }).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 pub fn router() -> Router<AppState> {
@@ -190,6 +233,10 @@ pub fn router() -> Router<AppState> {
             get(inspect).put(save).delete(remove),
         )
         .route("/api/credentials/{id}/models", get(list_models))
+        .route(
+            "/api/credentials/{id}/test-connection",
+            axum::routing::post(test_connection),
+        )
         .route(
             "/api/credentials/{id}/authenticate",
             axum::routing::post(authenticate),

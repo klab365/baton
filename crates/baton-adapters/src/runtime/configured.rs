@@ -17,6 +17,7 @@ pub struct ConfiguredRuntime {
     trace: Vec<RunTraceEntry>,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     auth_root: std::path::PathBuf,
+    _credential_leases: Option<Box<dyn baton_core::ports::credentials::CredentialLease>>,
 }
 impl ConfiguredRuntime {
     pub fn new(
@@ -31,6 +32,7 @@ impl ConfiguredRuntime {
             trace: Vec::new(),
             credentials,
             auth_root,
+            _credential_leases: None,
         }
     }
 }
@@ -48,20 +50,30 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
         pipeline_id: &str,
     ) -> Result<Box<dyn AgentRuntime>, String> {
         config.validate()?;
-        if !config
+        let pipeline = config
             .pipelines
             .iter()
-            .any(|pipeline| pipeline.id == pipeline_id)
-        {
-            return Err("Selected pipeline does not exist".into());
-        }
+            .find(|pipeline| pipeline.id == pipeline_id)
+            .ok_or("Selected pipeline does not exist")?;
+        let ids = pipeline
+            .steps
+            .iter()
+            .filter(|step| !step.human)
+            .filter_map(|step| {
+                config
+                    .agents
+                    .iter()
+                    .find(|agent| agent.id == step.agent_id)
+                    .and_then(|agent| agent.credential_id.clone())
+            })
+            .collect::<Vec<_>>();
+        let leases = self.credentials.acquire_run_leases(&ids)?;
         let skills =
             crate::skills::FilesystemSkillRepository::new(self.project_dir.clone()).list()?;
-        Ok(Box::new(ConfiguredRuntime::new(
-            self.credentials.clone(),
-            self.auth_root.clone(),
-            skills,
-        )))
+        let mut runtime =
+            ConfiguredRuntime::new(self.credentials.clone(), self.auth_root.clone(), skills);
+        runtime._credential_leases = leases;
+        Ok(Box::new(runtime))
     }
 }
 
@@ -93,13 +105,11 @@ impl AgentRuntime for ConfiguredRuntime {
         match agent.runtime_kind {
             RuntimeKind::Rig => {
                 let runtime_credential = if let Some(id) = agent.credential_id.as_deref() {
-                    self.credentials
-                        .get_sync(id)?
-                        .map(|metadata| {
-                            let secret = self.credentials.secret_sync(id)?;
-                            Ok::<_, String>((metadata, secret))
-                        })
-                        .transpose()?
+                    let metadata = self.credentials.get_sync(id)?.ok_or_else(|| {
+                        format!("Credential {id:?} was deleted or is unavailable; select another credential for this agent")
+                    })?;
+                    let secret = self.credentials.secret_sync(id)?;
+                    Some((metadata, secret))
                 } else {
                     None
                 };
@@ -133,5 +143,35 @@ impl AgentRuntime for ConfiguredRuntime {
     }
     fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         std::mem::take(&mut self.trace)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credentials::FilesystemCredentialRepository;
+    use baton_core::ports::credentials::CredentialRepository;
+
+    #[test]
+    fn pipeline_runtime_holds_and_releases_credential_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let factory = ConfiguredRuntimeFactory {
+            project_dir: root.path().into(),
+            credentials: repository.clone(),
+            auth_root: root.path().join("vault"),
+        };
+        let config = baton_core::domain::project::parse_config(r#"{
+            "schemaVersion": 7,
+            "agents": [{"id":"agent","systemPrompt":"test","credentialId":"selected","skillIds":[]}],
+            "pipelines": [{"id":"pipeline","steps":[{"id":"step","name":"Step","agentId":"agent"}]}]
+        }"#).unwrap();
+        let runtime = factory.create(&config, "pipeline").unwrap();
+        assert!(repository.acquire_delete_lease("selected").is_err());
+        assert!(repository.acquire_delete_lease("other").is_ok());
+        drop(runtime);
+        assert!(repository.acquire_delete_lease("selected").is_ok());
     }
 }

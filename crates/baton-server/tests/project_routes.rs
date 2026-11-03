@@ -23,6 +23,7 @@ async fn json(response: axum::response::Response) -> serde_json::Value {
 #[tokio::test]
 async fn project_routes_dispatch_commands_and_return_api_dtos() {
     let directory = fixture();
+    std::fs::create_dir_all(&directory).unwrap();
     let app = router(AppState::new(directory.clone()));
 
     let response = app
