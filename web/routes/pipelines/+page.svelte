@@ -45,9 +45,7 @@ let expandedStepIds = $state<Set<string>>(new Set());
 const config = $derived(data.configuration as PipelineConfiguration | null);
 function open(pipeline?: Pipeline) {
 	if (!config) return;
-	draft = pipeline
-		? structuredClone(pipeline)
-		: { id: "", steps: [] };
+	draft = pipeline ? structuredClone(pipeline) : { id: "", steps: [] };
 	expandedStepIds = new Set();
 	revision = config.revision;
 	editing = Boolean(pipeline);
