@@ -25,6 +25,9 @@ pub struct Agent {
     pub model: Option<RuntimeModel>,
     pub credential_id: Option<String>,
     pub skill_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -116,6 +119,7 @@ impl From<ProjectConfig> for domain::ProjectConfig {
 impl From<domain::Agent> for Agent {
     fn from(value: domain::Agent) -> Self {
         Self {
+            allowed_tools: value.allowed_tools,
             id: value.id,
             system_prompt: value.system_prompt,
             runtime_kind: value.runtime_kind.into(),
@@ -129,6 +133,7 @@ impl From<domain::Agent> for Agent {
 impl From<Agent> for domain::Agent {
     fn from(value: Agent) -> Self {
         Self {
+            allowed_tools: value.allowed_tools,
             id: value.id,
             system_prompt: value.system_prompt,
             runtime_kind: value.runtime_kind.into(),

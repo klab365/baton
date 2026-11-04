@@ -417,6 +417,7 @@ mod tests {
             }),
             credential_id: None,
             skill_ids: vec![],
+            allowed_tools: None,
         }
     }
 

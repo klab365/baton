@@ -8,11 +8,17 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "github-copilot",
-        "model": "claude-opus-5.5"
+        "model": "gpt-5.3-codex"
       },
       "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "concise-planning"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "report_outcome"
       ]
     },
     {
@@ -27,6 +33,15 @@
       "skillIds": [
         "ponytail",
         "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "write",
+        "edit",
+        "report_outcome"
       ]
     },
     {
@@ -41,6 +56,13 @@
       "skillIds": [
         "code-review-excellence",
         "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "report_outcome"
       ]
     },
     {
@@ -54,6 +76,13 @@
       "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
       "skillIds": [
         "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "report_outcome"
       ]
     }
   ],
