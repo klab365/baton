@@ -267,6 +267,90 @@ fn pending(step: &PipelineStep) -> StepRun {
     }
 }
 
+fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
+    let previous_output = run.handoff.as_deref().unwrap_or(&run.task);
+    if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task {
+        return run.task.clone();
+    }
+    let mut input = format!(
+        "Original task:\n{}\n\nPrevious step output and handoff:\n{}",
+        run.task, previous_output
+    );
+    let mut history = Vec::new();
+    let mut attempts: Vec<_> = run.steps.iter().collect();
+    attempts.sort_by_key(|attempt| attempt.attempt);
+    for attempt in attempts {
+        if !pipeline
+            .steps
+            .iter()
+            .any(|step| step.human && step.id == attempt.step_id)
+        {
+            continue;
+        }
+        let (Some(response), Some(outcome)) = (&attempt.output, &attempt.outcome) else {
+            continue;
+        };
+        history.push(format!(
+            "\n- {} ({outcome:?}): {}",
+            attempt.step_id, response
+        ));
+    }
+    if !history.is_empty() {
+        input.push_str("\n\nEarlier human responses:");
+        for entry in &history {
+            input.push_str(entry);
+        }
+    }
+    input
+}
+
+fn repeated_blocker(
+    run: &PipelineRun,
+    pipeline: &crate::domain::project::Pipeline,
+    index: usize,
+    output: &str,
+) -> bool {
+    let normalize = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let current = normalize(output);
+    if current.is_empty() {
+        return false;
+    }
+    let mut human_responded = false;
+    let current_attempt = run.steps[index].attempt;
+    let mut attempts: Vec<_> = run
+        .steps
+        .iter()
+        .filter(|attempt| attempt.attempt > 0 && attempt.attempt < current_attempt)
+        .collect();
+    attempts.sort_by_key(|attempt| std::cmp::Reverse(attempt.attempt));
+    for attempt in attempts {
+        if pipeline
+            .steps
+            .iter()
+            .any(|step| step.human && step.id == attempt.step_id)
+            && attempt.outcome == Some(Outcome::Responded)
+        {
+            human_responded = true;
+        }
+        if human_responded
+            && attempt.step_id == run.steps[index].step_id
+            && attempt.outcome == Some(Outcome::Blocked)
+            && attempt
+                .output
+                .as_deref()
+                .is_some_and(|previous| normalize(previous) == current)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn execute_graph(
     config: &ProjectConfig,
     mut run: PipelineRun,
@@ -288,16 +372,7 @@ pub(crate) fn execute_graph(
             .iter()
             .find(|s| Some(&s.id) == run.current_step.as_ref())
             .ok_or("Unknown current step")?;
-        let previous_output = run.handoff.clone().unwrap_or_else(|| run.task.clone());
-        let input = if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task
-        {
-            run.task.clone()
-        } else {
-            format!(
-                "Original task:\n{}\n\nPrevious step output and handoff:\n{}",
-                run.task, previous_output
-            )
-        };
+        let input = step_input(&run, pipeline);
         let index = if let Some(i) = run
             .steps
             .iter()
@@ -357,10 +432,8 @@ pub(crate) fn execute_graph(
             runtime,
             cancelled: &cancelled,
         };
-        let result = if input.len() > MAX_HANDOFF_BYTES {
-            Err("Agent input exceeds 16384 bytes".into())
-        } else {
-            guarded.execute_pipeline_step(
+        let result = guarded
+            .execute_pipeline_step(
                 &run.worktree
                     .as_ref()
                     .ok_or("Missing isolated worktree")?
@@ -370,28 +443,27 @@ pub(crate) fn execute_graph(
                 &allowed_outcomes,
                 &cancelled,
             )
-        }
-        .and_then(|output| {
-            if output.len() > MAX_HANDOFF_BYTES {
-                return Err("Agent output exceeds 16384 bytes".into());
-            }
-            if allowed_outcomes.is_empty() {
-                Ok((Outcome::Completed, output))
-            } else {
-                let decision = guarded.take_decision().ok_or_else(|| {
-                    "Agent completed without reporting a pipeline outcome".to_owned()
-                })?;
-                if !allowed_outcomes.contains(&decision.outcome) {
-                    return Err(
-                        "Agent reported an outcome not allowed by this pipeline step".into(),
-                    );
+            .and_then(|output| {
+                if output.len() > MAX_HANDOFF_BYTES {
+                    return Err("Agent output exceeds 16384 bytes".into());
                 }
-                if decision.summary.len() > MAX_HANDOFF_BYTES {
-                    return Err("Pipeline outcome summary exceeds 16384 bytes".into());
+                if allowed_outcomes.is_empty() {
+                    Ok((Outcome::Completed, output))
+                } else {
+                    let decision = guarded.take_decision().ok_or_else(|| {
+                        "Agent completed without reporting a pipeline outcome".to_owned()
+                    })?;
+                    if !allowed_outcomes.contains(&decision.outcome) {
+                        return Err(
+                            "Agent reported an outcome not allowed by this pipeline step".into(),
+                        );
+                    }
+                    if decision.summary.len() > MAX_HANDOFF_BYTES {
+                        return Err("Pipeline outcome summary exceeds 16384 bytes".into());
+                    }
+                    Ok((decision.outcome, decision.summary))
                 }
-                Ok((decision.outcome, decision.summary))
-            }
-        });
+            });
         run.trace.extend(runtime.take_trace());
         for message in runtime.take_events() {
             run.events.push(RunEvent {
@@ -406,11 +478,23 @@ pub(crate) fn execute_graph(
         }
         match result {
             Ok((outcome, output)) => {
+                let repeated =
+                    outcome == Outcome::Blocked && repeated_blocker(&run, pipeline, index, &output);
                 run.handoff = Some(output.clone());
                 run.steps[index].output = Some(output);
                 run.steps[index].outcome = Some(outcome.clone());
                 run.steps[index].status = Status::Succeeded;
                 route(&mut run, pipeline, index, outcome)?;
+                if repeated {
+                    publish(
+                        repository,
+                        &mut run,
+                        Some(format!(
+                            "Step {} repeated an identical blocker after a human response",
+                            step.id
+                        )),
+                    )?;
+                }
             }
             Err(error) => {
                 run.steps[index].status = Status::Failed;
@@ -427,4 +511,76 @@ pub(crate) fn execute_graph(
     finish_run(&mut run, clock);
     publish(repository, &mut run, Some("Run stopped".into()))?;
     Ok(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_only_repeated_blockers_after_human_response() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let mut pipeline = config.pipelines[0].clone();
+        let mut human = pipeline.steps[0].clone();
+        human.id = "help".into();
+        human.human = true;
+        pipeline.steps.push(human.clone());
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "run", "pipelineId": pipeline.id, "task": "task", "startedAt": "now",
+            "endedAt": null, "durationMs": null, "status": "running", "steps": []
+        }))
+        .unwrap();
+        let mut blocked = pending(&pipeline.steps[0]);
+        blocked.attempt = 1;
+        blocked.outcome = Some(Outcome::Blocked);
+        blocked.output = Some("Which backends?".into());
+        let mut response = pending(&human);
+        response.attempt = 2;
+        response.outcome = Some(Outcome::Responded);
+        response.output = Some("All three".into());
+        let mut current = pending(&pipeline.steps[0]);
+        current.attempt = 3;
+        run.steps = vec![response, blocked, current];
+        assert!(repeated_blocker(&run, &pipeline, 2, " which   BACKENDS? "));
+        assert!(!repeated_blocker(&run, &pipeline, 2, "What timer API?"));
+        run.steps[0].outcome = Some(Outcome::Rejected);
+        assert!(!repeated_blocker(&run, &pipeline, 2, "Which backends?"));
+    }
+
+    #[test]
+    fn human_decisions_survive_intermediate_agent_handoffs_without_truncation() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let mut pipeline = config.pipelines[0].clone();
+        let mut human = pipeline.steps[0].clone();
+        human.id = "help".into();
+        human.human = true;
+        pipeline.steps.push(human.clone());
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "run", "pipelineId": pipeline.id, "task": "implement timers",
+            "startedAt": "now", "endedAt": null, "durationMs": null,
+            "status": "running", "steps": [], "handoff": "planner output"
+        }))
+        .unwrap();
+        let mut response = pending(&human);
+        response.status = Status::Succeeded;
+        response.attempt = 1;
+        response.output = Some("support Tokio, WASM and Embassy".into());
+        response.outcome = Some(Outcome::Responded);
+        run.steps.push(response.clone());
+        let input = step_input(&run, &pipeline);
+        assert!(input.contains("planner output"));
+        assert!(input.contains("support Tokio, WASM and Embassy"));
+        assert!(input.contains("Responded"));
+
+        response.attempt = 2;
+        response.output = Some("x".repeat(MAX_HANDOFF_BYTES));
+        run.steps.insert(0, response);
+        let input = step_input(&run, &pipeline);
+        assert!(input.len() > MAX_HANDOFF_BYTES);
+        assert!(input.contains("support Tokio, WASM and Embassy"));
+        assert!(input.contains(&"x".repeat(MAX_HANDOFF_BYTES)));
+        assert!(input.find("support Tokio").unwrap() < input.find(&"x".repeat(100)).unwrap());
+    }
 }

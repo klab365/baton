@@ -171,6 +171,102 @@ fn ordered_handoff_and_restart_safe_records() {
 }
 
 #[test]
+fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
+    use baton_core::{
+        domain::project::{Outcome, PipelineStep, Transition},
+        features::human_actions::resume_human,
+        ports::runtime::AgentDecision,
+    };
+    let fixture = Fixture::new();
+    let mut config = config();
+    let pipeline = &mut config.pipelines[0];
+    pipeline.steps[0].transitions = vec![
+        Transition {
+            outcome: Outcome::Blocked,
+            to: Some("help".into()),
+        },
+        Transition {
+            outcome: Outcome::Completed,
+            to: Some("review".into()),
+        },
+    ];
+    pipeline.steps[1].transitions = vec![Transition {
+        outcome: Outcome::Completed,
+        to: None,
+    }];
+    pipeline.steps.push(PipelineStep {
+        id: "help".into(),
+        name: "Help".into(),
+        agent_id: String::new(),
+        human: true,
+        transitions: vec![Transition {
+            outcome: Outcome::Responded,
+            to: Some("write".into()),
+        }],
+    });
+    #[derive(Default)]
+    struct Runtime {
+        calls: usize,
+        decision: Option<AgentDecision>,
+    }
+    impl AgentRuntime for Runtime {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            _: &baton_core::domain::project::Agent,
+            input: &str,
+        ) -> Result<String, String> {
+            self.calls += 1;
+            let (outcome, summary) = match self.calls {
+                1 => (Outcome::Blocked, "Which backends?"),
+                2 => {
+                    assert!(input.contains("Tokio, WASM and Embassy"));
+                    (Outcome::Completed, "Plan ready")
+                }
+                3 => {
+                    assert!(input.contains("Plan ready"));
+                    assert!(input.contains("Tokio, WASM and Embassy"));
+                    (Outcome::Completed, "Built")
+                }
+                _ => panic!("unexpected call"),
+            };
+            self.decision = Some(AgentDecision {
+                outcome,
+                summary: summary.into(),
+            });
+            Ok(summary.into())
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            self.decision.take()
+        }
+    }
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "timers",
+        "feedback",
+        &mut Runtime::default(),
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::WaitingHuman);
+    let mut runtime = Runtime {
+        calls: 1,
+        decision: None,
+    };
+    let run = resume_human(
+        "feedback",
+        Outcome::Responded,
+        "Tokio, WASM and Embassy",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(runtime.calls, 3);
+}
+
+#[test]
 fn restart_reader() {
     let Some(path) = std::env::var_os("BATON_TEST_RESTART_DIR") else {
         return;
