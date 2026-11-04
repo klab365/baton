@@ -1,4 +1,5 @@
 //! Rig-backed implementation of the core agent execution port.
+mod copilot_anthropic;
 mod plugins;
 mod request_trace;
 mod tools;
@@ -92,6 +93,13 @@ fn is_copilot_provider(provider: &str) -> bool {
     matches!(provider, "github-copilot" | "copilot")
 }
 
+fn copilot_uses_responses(spec: &ModelSpec) -> bool {
+    spec.details.provider.as_ref().is_some_and(|provider| {
+        provider.shape.as_deref() == Some("responses")
+            || (provider.shape.is_none() && provider.npm.as_deref() == Some("@ai-sdk/openai"))
+    })
+}
+
 pub struct RigRuntime;
 
 pub struct RigAgentContext<'a> {
@@ -160,15 +168,28 @@ impl RigRuntime {
                 DeviceCodeHandler::default(),
                 false,
             );
-            let signed_in = rig::client::signed_in::SignedInModel::new(
-                spec,
-                authenticator,
-                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default())
-                    .with_middleware(wire_trace::CopilotSystemString)
-                    .with_middleware(wire_trace::WireTrace(wire_traces.clone())),
-            )
-            .map_err(|_| "GitHub Copilot model configuration is invalid")?;
-            ErasedHandler::new(signed_in)
+            let responses = copilot_uses_responses(&spec);
+            if model_config.model.starts_with("claude-") || responses {
+                ErasedHandler::new(copilot_anthropic::CopilotAnthropic::new(
+                    model_config.model.clone(),
+                    responses,
+                    authenticator,
+                    wire_traces.clone(),
+                )?)
+            } else {
+                let signed_in =
+                    rig::client::signed_in::SignedInModel::new(
+                        spec,
+                        authenticator,
+                        rig::http_client::DynHttpClient::new(
+                            rig::http_client::ReqwestClient::default(),
+                        )
+                        .with_middleware(wire_trace::CopilotSystemString)
+                        .with_middleware(wire_trace::WireTrace(wire_traces.clone())),
+                    )
+                    .map_err(|_| "GitHub Copilot model configuration is invalid")?;
+                ErasedHandler::new(signed_in)
+            }
         } else if model_config.provider == "chatgpt" {
             use rig::providers::chatgpt::auth::{
                 AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
@@ -310,7 +331,6 @@ impl RigRuntime {
                 workspace: workspace.clone(),
                 launcher: Launcher::default().in_dir(root.clone()),
                 confine: true,
-                max_timeout: 600,
                 ..Default::default()
             });
         }
@@ -526,7 +546,18 @@ mod compaction_tests {
 
 #[cfg(test)]
 mod copilot_credential_tests {
-    use super::{copilot_session_directory, is_copilot_provider};
+    use super::{copilot_session_directory, copilot_uses_responses, is_copilot_provider};
+
+    #[test]
+    fn copilot_catalog_selects_responses_for_gpt_terra() {
+        let catalog = rig::catalog::Catalog::builtin();
+        assert!(copilot_uses_responses(
+            catalog.resolve("copilot/gpt-6.1-terra").unwrap().spec
+        ));
+        assert!(!copilot_uses_responses(
+            catalog.resolve("copilot/claude-sonnet-5.5").unwrap().spec
+        ));
+    }
 
     #[test]
     fn copilot_aliases_use_the_explicit_session_path() {

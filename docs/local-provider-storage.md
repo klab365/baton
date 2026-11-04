@@ -8,9 +8,11 @@ Each project has a vault under `~/.local/share/baton/credentials/projects/<proje
 
 A GitHub account with active Copilot access, a supported model, network access to GitHub and Copilot, and a browser for device authorization are required. In **Settings → Add credential**, choose **GitHub Copilot session**, enter a name, and use the displayed link and one-time code. After authorization, select the credential and an available Copilot model for the agent. **Test connection** checks the saved session; model availability can depend on account and organization policies.
 
+The model picker intersects Rig's catalog with the authenticated provider's current model list; listing requires network access and can still change with account policies. Existing agent configurations are not revalidated automatically, and the provider can reject a model at execution time.
+
 Sessions and refreshable tokens are stored in the local project vault, not the project configuration. The vault is local storage rather than an encrypted secret manager; protect the local account and backups. Worktree tools run with the same operating-system permissions and can potentially access the vault. Deleting a credential removes local session files but does not revoke GitHub authorization; revoke access in GitHub account settings when needed. If access is revoked or expires, delete the credential and connect the account again; reassign agents to the new credential. The device and model endpoints depend on GitHub's service and may change.
 
-For Copilot Chat requests, Baton temporarily serializes a single plain system text block as a string to work around observed Claude instruction-following issues. Responses API requests and complex system blocks are unchanged. See [Rig issue #3004](https://github.com/0xPlaygrounds/rig/issues/3004).
+Baton routes Copilot Claude models through Rig's Anthropic Messages adapter and uses the Responses API for models whose Rig catalog metadata specifies it. For other Copilot Chat requests, Baton temporarily serializes a single plain system text block as a string. Responses API requests and complex system blocks are unchanged. See [Rig issue #3004](https://github.com/0xPlaygrounds/rig/issues/3004).
 
 Run traces may contain complete prompts, project instructions, task input and tool results. Treat run data as sensitive local data; never place credentials in prompts or project instructions.
 

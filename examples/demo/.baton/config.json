@@ -4,13 +4,13 @@
   "agents": [
     {
       "id": "factory-planner",
-      "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. If a critical ambiguity prevents safe progress, state it clearly in the handoff; do not invent requirements.",
+      "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. Do not invent requirements. When finished call report_outcome exactly once: completed if the plan is ready for implementation, or blocked if critical information is missing. When blocked, include specific questions for the user in the handoff.",
       "runtimeKind": "rig",
       "model": {
         "provider": "github-copilot",
-        "model": "gpt-5.3-codex"
+        "model": "gpt-6.1-terra"
       },
-      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
+      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
       "skillIds": [
         "concise-planning"
       ],
@@ -27,9 +27,9 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "github-copilot",
-        "model": "claude-sonnet-5.5"
+        "model": "claude-haiku-5.5"
       },
-      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
+      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
       "skillIds": [
         "ponytail",
         "verification-before-completion"
@@ -50,9 +50,9 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "github-copilot",
-        "model": "claude-sonnet-5.5"
+        "model": "claude-opus-5"
       },
-      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
+      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
       "skillIds": [
         "code-review-excellence",
         "verification-before-completion"
@@ -70,10 +70,10 @@
       "systemPrompt": "You are the commit agent. After human approval, inspect the task context, supplied project instructions, git status and diff, including relevant untracked and already staged files. Stage only intended task changes; never include session data, secrets or unrelated files. If pre-staged changes are unrelated or scope is unclear, stop rather than alter or commit them. Inspect the complete staged diff and run git diff --cached --check, then create one accurate Conventional Commit. Do not modify source files, amend, rewrite history, push or create a pull request. When finished call report_outcome exactly once: completed only after a successful commit, with its subject and short hash, or blocked if human intervention is needed. Report failures honestly.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "github-copilot",
-        "model": "gpt-5.3-codex"
+        "provider": "chatgpt",
+        "model": "gpt-6-luna"
       },
-      "credentialId": "c80bdf28-8902-4686-877b-bd3a858f4b70",
+      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
       "skillIds": [
         "verification-before-completion"
       ],
@@ -95,7 +95,16 @@
           "name": "Analyze and plan",
           "agentId": "factory-planner",
           "human": false,
-          "transitions": []
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": "build"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
         },
         {
           "id": "build",

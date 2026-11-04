@@ -111,7 +111,9 @@ impl AppState {
         let credential_types: Arc<dyn baton_core::ports::credentials::CredentialTypeCatalog> =
             Arc::new(LocalCredentialTypeCatalog);
         let credential_models: Arc<dyn baton_core::ports::credentials::CredentialModelCatalog> =
-            Arc::new(RigCredentialModelCatalog);
+            Arc::new(RigCredentialModelCatalog {
+                auth_root: auth_root.clone(),
+            });
         let credential_tests = Arc::new(LocalConnectionTester {
             copilot: copilot_auth.clone(),
             auth_root: auth_root.clone(),
