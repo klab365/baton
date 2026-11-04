@@ -17,6 +17,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 base64 = "0.22"
 rig = { version = "=0.45.0", default-features = false, features = ["agent", "reqwest", "derive", "rustls"] }
 rig-harness = "=0.45.0"
+rig-basics = { version = "=0.45.0", default-features = false }
 bevy_ecs = "=0.20.0"
 bevy_app = "=0.20.0"
 bevy_log = "=0.20.0"

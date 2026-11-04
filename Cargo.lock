@@ -690,6 +690,7 @@ dependencies = [
  "libc",
  "reqwest 0.12.28",
  "rig",
+ "rig-basics",
  "rig-harness",
  "schemars 1.2.3",
  "serde",
@@ -6288,6 +6289,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "rig-basics"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37d0e322a3b8ad1575f87cc5ff8a0329b9bbe8a3d92b2a6f14c6664305eed17b"
+dependencies = [
+ "async-channel",
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_reflect",
+ "bevy_tasks",
+ "crossbeam-channel",
+ "rig-cassette",
+ "rig-core",
+ "rig-ecs",
+ "rig-harness",
+ "rig-memory",
+ "rig-reqwest",
+ "rig-tools",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rig-cassette"
 version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6297,6 +6323,7 @@ dependencies = [
  "futures",
  "rig-agent",
  "rig-core",
+ "rig-memory",
  "serde",
  "serde_json",
 ]
