@@ -31,7 +31,7 @@ cd /path/to/project
 baton
 ```
 
-On first launch Baton creates `.baton/` and initializes the project configuration automatically. Open <http://127.0.0.1:5173> for the embedded UI. `BATON_PORT` changes the port. Configure credentials and agents, create a pipeline, then create and start a task. Follow the [Software Factory getting started guide](docs/getting-started.md) for a complete example. The `fake` runtime is available for offline testing. Agent execution requires Git; real model execution also requires a compatible provider credential.
+On first launch Baton creates `.baton/` and initializes the project configuration automatically. Open <http://127.0.0.1:5173> for the embedded UI. `BATON_PORT` changes the starting port. If it is occupied, Baton uses the next available port and prints the address. Configure credentials and agents, create a pipeline, then create and start a task. Follow the [Software Factory getting started guide](docs/getting-started.md) for a complete example. The `fake` runtime is available for offline testing. Agent execution requires Git; real model execution also requires a compatible provider credential.
 
 A worktree is **not a sandbox**: agents may run commands with the permissions of the Baton process. Use a container, VM or dedicated OS user for stronger isolation. Task prompts and run data are local and can be sensitive.
 

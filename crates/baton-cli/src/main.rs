@@ -186,7 +186,6 @@ async fn main() -> anyhow::Result<()> {
     let project_lock = baton_server::lock_project_process(&project_dir)?;
     bootstrap_project(&project_dir)?;
     println!("Baton is starting for {}", project_dir.display());
-    println!("Web interface: http://{host}:{port}");
     baton_server::serve_with_project_lock(project_dir, host, port, project_lock).await
 }
 
