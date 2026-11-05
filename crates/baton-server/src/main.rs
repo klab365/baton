@@ -69,9 +69,5 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5173);
-    println!(
-        "Baton API listening on http://{host}:{port} for {}",
-        project_dir.display()
-    );
     baton_server::serve(project_dir, &host, port).await
 }

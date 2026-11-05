@@ -247,13 +247,26 @@ pub async fn serve_with_project_lock(
     port: u16,
     _project_lock: ProjectProcessLock,
 ) -> anyhow::Result<()> {
-    let listener = tokio::net::TcpListener::bind((host, port)).await?;
+    let listener = bind_available_port(host, port).await?;
+    println!("Web interface: http://{}", listener.local_addr()?);
     axum::serve(listener, router(AppState::new(project_dir)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
     Ok(())
+}
+
+async fn bind_available_port(host: &str, port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    let mut port = port;
+    loop {
+        match tokio::net::TcpListener::bind((host, port)).await {
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && port < u16::MAX => {
+                port += 1;
+            }
+            result => return result,
+        }
+    }
 }
 
 pub(crate) struct ApiError {
@@ -289,6 +302,19 @@ mod web_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn binding_skips_an_occupied_port() {
+        let occupied = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        if port == u16::MAX {
+            return;
+        }
+        let listener = bind_available_port("127.0.0.1", port).await.unwrap();
+        assert!(listener.local_addr().unwrap().port() > port);
+    }
 
     #[test]
     fn project_process_lock_blocks_same_project_and_releases_on_drop() {
