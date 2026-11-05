@@ -37,6 +37,20 @@ A worktree is **not a sandbox**: agents may run commands with the permissions of
 
 Agents can be configured with an explicit allowed tool list in the Agents UI. An omitted list preserves the default tools; an empty list disables all tools. Steps with transitions require `report_outcome`. Disabling `write` and `edit` does not prevent changes if `shell` is enabled: shell commands can modify files and access resources outside the worktree.
 
+## Set up with a coding agent
+
+Copy this prompt into your coding agent from the Git repository where you want to use Baton:
+
+```text
+Help me set up Baton for this repository. First read the current agent setup guide:
+https://github.com/klab365/baton/blob/main/docs/getting-started-for-agents.md
+Follow it, inspect my environment and existing configuration, and ask me before
+making changes or taking actions that need my approval. Do not overwrite existing
+configuration or ask me to paste secrets into this conversation.
+```
+
+See the [agent setup guide](docs/getting-started-for-agents.md) for what the agent will do and for links to the full documentation.
+
 ## Development
 
 ```sh
@@ -59,7 +73,7 @@ mise run build
 ## Documentation
 
 - [User guide](docs/user-guide.md) — features, workflows, CLI and troubleshooting
-- [Getting started: build a Software Factory](docs/getting-started.md) and the [example project](examples/demo/)
+- [Getting started: build a Software Factory](docs/getting-started.md), [setup for coding agents](docs/getting-started-for-agents.md), and the [example project](examples/demo/)
 - [Architecture and request lifecycle](docs/architecture.md)
 - [Project configuration](docs/project-configuration.md)
 - [Pipelines](docs/pipelines.md) and [workflow transitions](docs/workflow-transitions.md)
