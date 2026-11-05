@@ -1,0 +1,243 @@
+import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createExtension } from "./baton-subagent";
+import { runPi } from "./process";
+
+type TestTool = {
+	execute: (...args: unknown[]) => Promise<{ content: { text: string }[] }>;
+};
+
+function fixture(
+	answer: string,
+	options: { human?: boolean; code?: number; stale?: boolean } = {},
+) {
+	let tool: TestTool | undefined;
+	const calls: string[][] = [];
+	const pi = {
+		registerTool(value: TestTool) {
+			tool = value;
+		},
+		async exec(command: string, args: string[], opts: { cwd: string }) {
+			calls.push([command, ...args]);
+			expect(opts.cwd).toBe("/workspace");
+			if (command === "baton") {
+				const value =
+					args[1] === "next"
+						? {
+								status: "running",
+								revision: 2,
+								attempt: 3,
+								step: {
+									id: "review",
+									human: options.human ?? false,
+								},
+								agent: { systemPrompt: "review carefully" },
+								allowedOutcomes: ["approved", "revise_build"],
+							}
+						: {
+								task: "Original issue",
+								status: "running",
+								currentStep: "review",
+								session: { revision: options.stale ? 3 : 2 },
+								steps: [
+									{
+										stepId: "human",
+										attempt: 1,
+										outcome: "responded",
+										output: "Human decision",
+									},
+									{
+										stepId: "build",
+										attempt: 2,
+										outcome: "completed",
+										output: "Prior result",
+									},
+									{ stepId: "review", attempt: 3, output: null },
+								],
+							};
+				return { code: 0, stdout: JSON.stringify(value), stderr: "" };
+			}
+			throw new Error("Unexpected command");
+		},
+	};
+	const run: typeof runPi = async (command, args, cwd, _signal, progress) => {
+		calls.push([command, ...args]);
+		expect(cwd).toBe("/workspace");
+		const prompt = await readFile((args.at(-1) ?? "").slice(1), "utf8");
+		expect(prompt).toContain("Original issue");
+		expect(prompt).toContain("review carefully");
+		expect(prompt).toContain("Acceptance criteria");
+		expect(prompt).toContain("Human decision");
+		expect(prompt).toContain("Prior result");
+		progress("→ read");
+		if (options.code) throw new Error("Subagent failed");
+		return answer;
+	};
+	createExtension(run)(pi as unknown as ExtensionAPI);
+	const updates: string[] = [];
+	const execute = () => {
+		if (!tool) throw new Error("Tool was not registered");
+		return tool.execute(
+			"1",
+			{ runId: "abc", context: "Acceptance criteria" },
+			undefined,
+			(update: { content: { text: string }[] }) =>
+				updates.push(update.content[0].text),
+			{
+				cwd: "/workspace",
+				model: { provider: "test", id: "model" },
+				thinkingLevel: "high",
+			},
+		);
+	};
+	return { execute, calls, updates };
+}
+
+test("passes current task and instructions to child and returns a submission", async () => {
+	const f = fixture(
+		JSON.stringify({
+			outcome: "approved",
+			summary: "Reviewed",
+			evidence: ["diff"],
+		}),
+	);
+	const result = await f.execute();
+	expect(JSON.parse(result.content[0].text)).toEqual({
+		revision: 2,
+		stepId: "review",
+		attempt: 3,
+		outcome: "approved",
+		summary: "Reviewed",
+		evidence: ["diff"],
+	});
+	expect(f.calls[2]).toContain("test/model");
+	expect(f.calls[2]).toContain("baton_subagent");
+	expect(f.updates.at(-1)).toContain("→ read");
+});
+
+test("streams child tool progress and validates JSONL completion", async () => {
+	const events = [
+		{ type: "tool_execution_start", toolName: "read" },
+		{ type: "tool_execution_end", toolName: "read", isError: false },
+		{
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "result" }],
+			},
+		},
+		{ type: "agent_settled", aborted: false },
+	];
+	const progress: string[] = [];
+	const script = `for (const x of ${JSON.stringify(events)}) console.log(JSON.stringify(x))`;
+	expect(
+		await runPi(
+			process.execPath,
+			["-e", script],
+			process.cwd(),
+			undefined,
+			(x) => progress.push(x),
+		),
+	).toBe("result");
+	expect(progress).toEqual(["→ read", "✓ read"]);
+});
+
+test("rejects errored and aborted child processes", async () => {
+	const event = {
+		type: "message_end",
+		message: {
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "model failed",
+			content: [],
+		},
+	};
+	const script = `console.log(JSON.stringify(${JSON.stringify(event)})); console.log(JSON.stringify({type:'agent_settled',aborted:false}))`;
+	await expect(
+		runPi(process.execPath, ["-e", script], process.cwd(), undefined, () => {}),
+	).rejects.toThrow("model failed");
+	const controller = new AbortController();
+	const pending = runPi(
+		process.execPath,
+		["-e", "setInterval(() => {}, 1000)"],
+		process.cwd(),
+		controller.signal,
+		() => {},
+	);
+	controller.abort();
+	await expect(pending).rejects.toThrow("aborted");
+});
+
+test("rejects malformed and oversized event streams", async () => {
+	await expect(
+		runPi(
+			process.execPath,
+			["-e", "console.log('not json')"],
+			process.cwd(),
+			undefined,
+			() => {},
+		),
+	).rejects.toThrow("Invalid JSON");
+	await expect(
+		runPi(
+			process.execPath,
+			["-e", "process.stdout.write('x'.repeat(5 * 1024 * 1024))"],
+			process.cwd(),
+			undefined,
+			() => {},
+		),
+	).rejects.toThrow("output limit");
+});
+
+test("rejects human steps before spawning", async () => {
+	const f = fixture("{}", { human: true });
+	await expect(f.execute()).rejects.toThrow("not an active agent step");
+	expect(f.calls).toHaveLength(1);
+});
+
+test("rejects state changes before spawning", async () => {
+	const f = fixture("{}", { stale: true });
+	await expect(f.execute()).rejects.toThrow("state changed");
+	expect(f.calls).toHaveLength(2);
+});
+
+test("local Pi package installs the skill and registers the tool", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-pi-test-"));
+	try {
+		const env = { ...process.env, PI_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" };
+		const install = Bun.spawnSync(["pi", "install", resolve(".")], { env });
+		expect(install.exitCode).toBe(0);
+		const probe = join(dir, "probe.ts");
+		const output = join(dir, "tools.json");
+		await writeFile(
+			probe,
+			`import { writeFileSync } from "node:fs"; export default function(pi) { pi.on("session_start", () => writeFileSync(${JSON.stringify(output)}, JSON.stringify({ tools: pi.getAllTools().map(t => t.name), commands: pi.getCommands().map(c => c.name) }))); }`,
+		);
+		const run = Bun.spawnSync(
+			["pi", "-e", probe, "--mode", "rpc", "--no-session"],
+			{ env, stdin: "ignore" },
+		);
+		expect(run.exitCode).toBe(0);
+		const discovered = JSON.parse(await readFile(output, "utf8"));
+		expect(discovered.tools).toContain("baton_subagent");
+		expect(discovered.commands).toContain("skill:baton");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("rejects failed and invalid child results", async () => {
+	await expect(fixture("{}", { code: 1 }).execute()).rejects.toThrow(
+		"Subagent failed",
+	);
+	await expect(fixture("not json").execute()).rejects.toThrow("invalid JSON");
+	await expect(
+		fixture(
+			JSON.stringify({ outcome: "failed", summary: "x", evidence: ["y"] }),
+		).execute(),
+	).rejects.toThrow("invalid outcome");
+});

@@ -40,6 +40,8 @@ pub struct PipelineRun {
     pub worktree: Option<RunWorktree>,
     #[serde(default)]
     pub setup_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<crate::domain::work::WorkSession>,
     pub pipeline_id: String,
     pub task: String,
     pub started_at: String,

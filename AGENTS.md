@@ -8,7 +8,7 @@
 
 GitHub Actions runs these checks on pull requests. Run the matching `mise` tasks before opening a PR when practical:
 - Rust: `mise run check-format-rust`, `mise run lint-rust`, `mise run test`, and `mise run build-rust`.
-- Web: `mise run check-format-web`, `mise run lint-web`, `mise run check`, and `mise run build-web`.
+- Web: `mise run check-format-web`, `mise run lint-web`, `mise run check`, `mise run test-extensions`, and `mise run build-web`.
 
 # Architecture and implementation guidelines
 

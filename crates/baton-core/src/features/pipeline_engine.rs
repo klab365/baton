@@ -190,6 +190,7 @@ pub fn start_pipeline_for_task_with_worktree(
         task_id: task_context.task_id,
         worktree: None,
         setup_error: None,
+        session: None,
         pipeline_id: pipeline.id.clone(),
         task: task.into(),
         started_at: utc_now(),

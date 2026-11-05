@@ -39,7 +39,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Mise and Bun
+      - name: Set up Mise, Bun and Pi
         uses: jdx/mise-action@v2
 
       - name: Check formatting
@@ -50,6 +50,9 @@ jobs:
 
       - name: Check Svelte and TypeScript
         run: mise run check
+
+      - name: Run extension tests
+        run: mise run test-extensions
 
       - name: Build UI
         run: mise run build-web

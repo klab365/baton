@@ -709,8 +709,12 @@ dependencies = [
  "baton-adapters",
  "baton-core",
  "baton-server",
+ "medi-rs",
+ "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

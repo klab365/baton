@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 include = ["crates/baton-cli/src/**", "web/**", "static/**", "package.json", "bun.lock", "svelte.config.js", "vite.config.ts", "tsconfig.json", "biome.json"]
 
+[lib]
+path = "crates/baton-cli/src/lib.rs"
+
 [[bin]]
 name = "baton"
 path = "crates/baton-cli/src/main.rs"
@@ -14,8 +17,14 @@ anyhow.workspace = true
 baton-core = { path = "crates/baton-core" }
 baton-adapters = { path = "crates/baton-adapters" }
 serde_json.workspace = true
+serde.workspace = true
+medi-rs.workspace = true
+uuid.workspace = true
 baton-server = { path = "crates/baton-server" }
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [workspace]
 resolver = "2"
