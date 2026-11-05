@@ -1,7 +1,6 @@
 # Getting started with Baton for coding agents
 
 This guide is for a coding agent helping a user set up Baton in their repository. Read the [README](../README.md) and the relevant linked guides before acting. Ask the user which workflow they want if it is unclear:
-
 - **Managed runtime:** Baton runs agents in task worktrees, with configuration and runs managed in its UI. Follow [Get started](../README.md#get-started) and the [Software Factory guide](getting-started.md).
 - **Existing coding-agent session:** use `baton work` with a supported host and an existing worktree. Follow [Work in an existing coding-agent session](session-work.md); its skill package and the Baton binary are installed separately.
 
