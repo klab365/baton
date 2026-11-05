@@ -1,5 +1,6 @@
 [tools]
 bun = "latest"
+pi = "latest"
 rust = "stable"
 
 [env]
@@ -56,6 +57,10 @@ run = "bun run check"
 [tasks.test]
 description = "Run Rust workspace tests"
 run = "cargo test --workspace"
+
+[tasks.test-extensions]
+description = "Run extension tests"
+run = "bun test extensions/"
 
 [tasks.test-embedded-web]
 description = "Build the web UI and test it embedded in the Rust server"

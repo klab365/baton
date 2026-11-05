@@ -318,6 +318,28 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
     {
         value.as_object_mut().unwrap().remove("skills");
     }
+    // Early external-work snapshots used a per-step execution mode. Execution is
+    // now selected by the host, but those snapshots must remain resumable.
+    if let Some(pipelines) = value
+        .get_mut("pipelines")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for pipeline in pipelines {
+            if let Some(steps) = pipeline
+                .get_mut("steps")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for step in steps {
+                    if let Some(step) = step.as_object_mut()
+                        && let Some(execution) = step.remove("execution")
+                        && !matches!(execution.as_str(), Some("inline" | "subagent"))
+                    {
+                        return Err("Unknown legacy step execution mode".into());
+                    }
+                }
+            }
+        }
+    }
     // Rules were folded into the system prompt. Accept and discard the removed
     // field so existing project configurations remain loadable.
     if let Some(agents) = value

@@ -100,6 +100,10 @@ Baton creates `.baton/.gitignore` for task and run directories if missing; it do
 
 Use one backend per project directory. Restrict access to the local UI, project files, worktrees and credential vault. Neither a worktree nor prompt instructions are security boundaries.
 
+## Work in an existing coding-agent session
+
+Use `baton work` to run pipeline steps through an already-open Pi, Claude Code or Codex session in the current Git worktree. This mode preserves externally owned workspaces, persists step handoffs, and supports explicit checks and human decisions. See [session work](session-work.md) for CLI usage and skill installation.
+
 ## CLI reference
 
 ```sh

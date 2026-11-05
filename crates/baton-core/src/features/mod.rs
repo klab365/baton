@@ -10,3 +10,4 @@ pub mod project_config;
 pub mod runs;
 pub mod skills;
 pub mod tasks;
+pub mod work;

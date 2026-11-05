@@ -264,6 +264,7 @@ mod tests {
             task_id: None,
             worktree: None,
             setup_error: None,
+            session: None,
             pipeline_id: "pipeline".into(),
             task: "task".into(),
             started_at: "2026-01-01T00:00:00Z".into(),

@@ -79,7 +79,18 @@ async fn cancel_run_handler(
     resources: RunFeatureResources,
     command: CancelRun,
 ) -> Result<PipelineRun, String> {
-    let mut run = resources.runs.load(&command.id)?;
+    cancel_run(resources.runs.as_ref(), &command.id)
+}
+
+/// Shared cancellation policy for managed runs and externally executed work.
+pub(crate) fn cancel_run(repository: &dyn RunRepository, id: &str) -> Result<PipelineRun, String> {
+    let initial = repository.load(id)?;
+    let _lease = if initial.session.is_some() {
+        Some(repository.acquire_action_lease(id)?)
+    } else {
+        None
+    };
+    let mut run = repository.load(id)?;
     if !matches!(run.status, Status::Running | Status::WaitingHuman) {
         return Err("Only running or waiting runs can be cancelled".into());
     }
@@ -100,8 +111,8 @@ async fn cancel_run_handler(
         message: Some("Cancellation requested".into()),
     };
     run.events.push(event.clone());
-    resources.runs.save(&run)?;
-    resources.runs.publish(&event)?;
+    repository.save(&run)?;
+    repository.publish(&event)?;
     Ok(run)
 }
 

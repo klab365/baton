@@ -4,4 +4,5 @@ pub mod repositories;
 pub mod runtime;
 pub mod skill_downloader;
 pub mod skills;
+pub mod work;
 pub mod worktrees;
