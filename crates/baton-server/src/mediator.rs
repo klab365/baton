@@ -23,7 +23,15 @@ mediator! {
     pub struct ServerMediator {
         event_queue_capacity: 1;
         event_workers: 1;
-        modules: [project_config, agents_feature, pipelines_feature, credentials_feature, tasks_feature, runs_feature, skills_feature];
+        modules: [
+            project_config,
+            agents_feature,
+            pipelines_feature,
+            credentials_feature,
+            tasks_feature,
+            runs_feature,
+            skills_feature
+        ];
     }
 }
 

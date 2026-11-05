@@ -35,7 +35,7 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
 }
 
-fn models_url(base: &str) -> Result<reqwest::Url, String> {
+pub(super) fn models_url(base: &str) -> Result<reqwest::Url, String> {
     let mut url = reqwest::Url::parse(base).map_err(|_| "Invalid Copilot service endpoint")?;
     let host = url.host_str().unwrap_or("");
     if url.scheme() != "https"

@@ -70,7 +70,7 @@ fn summarize(body: &[u8]) -> Option<String> {
         .iter()
         .filter_map(|message| message.get("role").and_then(|role| role.as_str()))
         .collect();
-    let system_messages: Vec<_> = messages
+    let mut system_messages: Vec<_> = messages
         .iter()
         .filter(|message| {
             matches!(
@@ -78,7 +78,11 @@ fn summarize(body: &[u8]) -> Option<String> {
                 Some("system" | "developer")
             )
         })
+        .cloned()
         .collect();
+    if let Some(system) = body.get("system") {
+        system_messages.push(serde_json::json!({ "role": "system", "content": system }));
+    }
     Some(serde_json::json!({ "roles": roles, "systemMessages": system_messages }).to_string())
 }
 
@@ -125,6 +129,17 @@ mod tests {
                 .is_none()
         );
         assert!(system_string_body(b"not json").is_none());
+    }
+
+    #[test]
+    fn traces_anthropic_system_field() {
+        let summary = summarize(br#"{"system":[{"type":"text","text":"Plan only"}],"messages":[{"role":"user","content":"private task"}]}"#).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(
+            value["systemMessages"][0]["content"][0]["text"],
+            "Plan only"
+        );
+        assert!(!summary.contains("private task"));
     }
 
     #[test]
