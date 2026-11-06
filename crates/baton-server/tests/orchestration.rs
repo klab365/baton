@@ -130,7 +130,7 @@ fn ordered_handoff_and_restart_safe_records() {
             ("writer".into(), "task".into()),
             (
                 "reviewer".into(),
-                "Original task:\ntask\n\nPrevious step output and handoff:\nwriter: task".into()
+                "Original task:\ntask\n\nRun history (chronological):\n\n1. write · writer · Completed\nwriter: task".into()
             )
         ]
     );

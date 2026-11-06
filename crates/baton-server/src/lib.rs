@@ -91,6 +91,7 @@ pub struct AppState {
     pub(crate) chatgpt_auth: ChatGptAuthManager,
     pub(crate) copilot_auth: CopilotAuthManager,
     pub(crate) credential_operations: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) run_updates: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -118,10 +119,15 @@ impl AppState {
             copilot: copilot_auth.clone(),
             auth_root: auth_root.clone(),
         });
-        let task_repository: Arc<dyn TaskRepository> =
-            Arc::new(FilesystemTaskRepository(project_dir.clone()));
-        let run_repository: Arc<dyn RunRepository> =
-            Arc::new(FilesystemRunRepository(project_dir.clone()));
+        let (run_updates, _) = tokio::sync::broadcast::channel(256);
+        let task_repository: Arc<dyn TaskRepository> = Arc::new(NotifyingTaskRepository {
+            inner: FilesystemTaskRepository(project_dir.clone()),
+            updates: run_updates.clone(),
+        });
+        let run_repository: Arc<dyn RunRepository> = Arc::new(NotifyingRunRepository {
+            inner: FilesystemRunRepository(project_dir.clone()),
+            updates: run_updates.clone(),
+        });
         let runtime_factory: Arc<dyn AgentRuntimeFactory> = Arc::new(ConfiguredRuntimeFactory {
             project_dir: project_dir.clone(),
             credentials: credentials.clone(),
@@ -160,7 +166,76 @@ impl AppState {
             chatgpt_auth,
             copilot_auth,
             credential_operations: Arc::new(tokio::sync::Mutex::new(())),
+            run_updates,
         }
+    }
+}
+
+struct NotifyingTaskRepository {
+    inner: FilesystemTaskRepository,
+    updates: tokio::sync::broadcast::Sender<String>,
+}
+
+impl TaskRepository for NotifyingTaskRepository {
+    fn acquire_operation_lease(
+        &self,
+        id: &str,
+    ) -> Result<Box<dyn baton_core::ports::tasks::TaskOperationLease>, String> {
+        self.inner.acquire_operation_lease(id)
+    }
+    fn load(&self, id: &str) -> Result<baton_core::domain::tasks::Task, String> {
+        self.inner.load(id)
+    }
+    fn list(&self) -> Result<Vec<baton_core::domain::tasks::Task>, String> {
+        self.inner.list()
+    }
+    fn save(&self, task: &baton_core::domain::tasks::Task) -> Result<(), String> {
+        self.inner.save(task)?;
+        let _ = self.updates.send(format!("task:{}", task.id));
+        Ok(())
+    }
+    fn delete(&self, id: &str) -> Result<(), String> {
+        self.inner.delete(id)?;
+        let _ = self.updates.send(format!("task:{id}"));
+        Ok(())
+    }
+}
+
+struct NotifyingRunRepository {
+    inner: FilesystemRunRepository,
+    updates: tokio::sync::broadcast::Sender<String>,
+}
+
+impl RunRepository for NotifyingRunRepository {
+    fn acquire_action_lease(
+        &self,
+        id: &str,
+    ) -> Result<Box<dyn baton_core::ports::runs::RunActionLease>, String> {
+        self.inner.acquire_action_lease(id)
+    }
+    fn worktree_manager(
+        &self,
+    ) -> Result<Box<dyn baton_core::ports::worktrees::WorktreeManager>, String> {
+        self.inner.worktree_manager()
+    }
+    fn create(&self, run: &baton_core::domain::pipeline::PipelineRun) -> Result<(), String> {
+        self.inner.create(run)?;
+        let _ = self.updates.send(run.id.clone());
+        Ok(())
+    }
+    fn save(&self, run: &baton_core::domain::pipeline::PipelineRun) -> Result<(), String> {
+        self.inner.save(run)?;
+        let _ = self.updates.send(run.id.clone());
+        Ok(())
+    }
+    fn load(&self, id: &str) -> Result<baton_core::domain::pipeline::PipelineRun, String> {
+        self.inner.load(id)
+    }
+    fn list(&self) -> Result<Vec<baton_core::domain::pipeline::PipelineRun>, String> {
+        RunRepository::list(&self.inner)
+    }
+    fn publish(&self, event: &baton_core::domain::pipeline::RunEvent) -> Result<(), String> {
+        self.inner.publish(event)
     }
 }
 
@@ -302,6 +377,120 @@ mod web_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn board_stream_notifies_task_and_run_changes() {
+        use tokio_stream::StreamExt;
+        let project = tempfile::tempdir().unwrap();
+        let state = AppState::new(project.path().to_path_buf());
+        let tasks = NotifyingTaskRepository {
+            inner: FilesystemTaskRepository(project.path().to_path_buf()),
+            updates: state.run_updates.clone(),
+        };
+        let runs = NotifyingRunRepository {
+            inner: FilesystemRunRepository(project.path().to_path_buf()),
+            updates: state.run_updates.clone(),
+        };
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tasks/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        assert!(
+            String::from_utf8_lossy(&body.next().await.unwrap().unwrap())
+                .contains("data: connected")
+        );
+        let task: baton_core::domain::tasks::Task = serde_json::from_value(serde_json::json!({
+            "id": "task-1", "title": "Task", "description": "Test", "pipelineId": "p",
+            "status": "draft", "createdAt": "now", "updatedAt": "now"
+        }))
+        .unwrap();
+        tasks.save(&task).unwrap();
+        assert!(
+            String::from_utf8_lossy(
+                &tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+            )
+            .contains("data: changed")
+        );
+        let run: baton_core::domain::pipeline::PipelineRun =
+            serde_json::from_value(serde_json::json!({
+                "id": "run-1", "pipelineId": "p", "task": "task", "startedAt": "now",
+                "endedAt": null, "durationMs": null, "status": "running", "steps": []
+            }))
+            .unwrap();
+        runs.create(&run).unwrap();
+        assert!(
+            String::from_utf8_lossy(
+                &tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+            )
+            .contains("data: changed")
+        );
+        tasks.delete("task-1").unwrap();
+        assert!(
+            String::from_utf8_lossy(
+                &tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+            )
+            .contains("data: changed")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_update_stream_sends_initial_and_persisted_changes() {
+        use tokio_stream::StreamExt;
+        let project = tempfile::tempdir().unwrap();
+        let state = AppState::new(project.path().to_path_buf());
+        let repository = NotifyingRunRepository {
+            inner: FilesystemRunRepository(project.path().to_path_buf()),
+            updates: state.run_updates.clone(),
+        };
+        let mut run: baton_core::domain::pipeline::PipelineRun =
+            serde_json::from_value(serde_json::json!({
+                "id": "run-1", "pipelineId": "pipeline", "task": "task", "startedAt": "now",
+                "endedAt": null, "durationMs": null, "status": "running", "steps": []
+            }))
+            .unwrap();
+        repository.create(&run).unwrap();
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/runs/run-1/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        let initial = body.next().await.unwrap().unwrap();
+        assert!(String::from_utf8_lossy(&initial).contains("event: update"));
+        run.status = baton_core::domain::pipeline::Status::WaitingHuman;
+        repository.save(&run).unwrap();
+        let update = tokio::time::timeout(std::time::Duration::from_secs(2), body.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&update).contains("data: changed"));
+        assert_eq!(repository.load("run-1").unwrap().status, run.status);
+    }
 
     #[tokio::test]
     async fn binding_skips_an_occupied_port() {

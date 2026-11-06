@@ -390,6 +390,7 @@ impl RigRuntime {
             ));
         }
         let setup_trace = RunTraceEntry {
+            attempt: None,
             occurred_at: baton_core::features::pipeline_engine::utc_now(),
             kind: "runtimeSetup".into(),
             content: serde_json::json!({
@@ -459,6 +460,7 @@ impl RigRuntime {
                     .get::<Conversation>(entity)
                     .and_then(|conversation| serde_json::to_string_pretty(&conversation.0).ok())
                     .map(|content| RunTraceEntry {
+                        attempt: None,
                         occurred_at: baton_core::features::pipeline_engine::utc_now(),
                         kind: "runtimeTranscript".into(),
                         content,
@@ -470,6 +472,7 @@ impl RigRuntime {
                     .map_err(|_| "Runtime request trace is unavailable".to_owned())?;
                 let mut trace = vec![setup_trace];
                 trace.extend(requests.iter().map(|content| RunTraceEntry {
+                    attempt: None,
                     occurred_at: baton_core::features::pipeline_engine::utc_now(),
                     kind: "runtimeRequest".into(),
                     content: content.clone(),
@@ -478,6 +481,7 @@ impl RigRuntime {
                     .lock()
                     .map_err(|_| "Runtime wire trace is unavailable".to_owned())?;
                 trace.extend(wire.iter().map(|content| RunTraceEntry {
+                    attempt: None,
                     occurred_at: baton_core::features::pipeline_engine::utc_now(),
                     kind: "runtimeWireRequest".into(),
                     content: content.clone(),

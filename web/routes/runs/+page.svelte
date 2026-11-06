@@ -1,4 +1,6 @@
 <script lang="ts">
+import { invalidate } from "$app/navigation";
+import { onMount } from "svelte";
 import Activity from "@lucide/svelte/icons/activity";
 import CircleAlert from "@lucide/svelte/icons/circle-alert";
 import Clock3 from "@lucide/svelte/icons/clock-3";
@@ -7,6 +9,17 @@ import PageHeader from "../../components/PageHeader.svelte";
 import StatusBadge from "../../components/StatusBadge.svelte";
 
 let { data } = $props();
+onMount(() => {
+	const refresh = () => {
+		if (!document.hidden) void invalidate("/api/runs");
+	};
+	const interval = window.setInterval(refresh, 2000);
+	document.addEventListener("visibilitychange", refresh);
+	return () => {
+		window.clearInterval(interval);
+		document.removeEventListener("visibilitychange", refresh);
+	};
+});
 function statusTone(status: string) {
 	if (status === "waitingHuman") return "review";
 	if (["failed", "limitExhausted"].includes(status)) return "failed";

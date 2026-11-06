@@ -11,6 +11,7 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs", get(list))
         .route("/api/runs/{id}", get(detail))
+        .route("/api/runs/{id}/events", get(updates))
         .route("/api/runs/{id}/cancel", post(cancel))
         .route("/api/runs/{id}/actions", post(human_action))
 }
@@ -41,6 +42,34 @@ async fn detail(
             },
             message: error,
         })
+}
+
+async fn updates(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<
+    axum::response::sse::Sse<
+        impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+    >,
+    ApiError,
+> {
+    use tokio_stream::StreamExt;
+    let receiver = state.run_updates.subscribe();
+    let _ = detail(State(state), Path(id.clone())).await?;
+    let changes =
+        tokio_stream::wrappers::BroadcastStream::new(receiver).filter_map(
+            move |event| match event {
+                Ok(run_id) if run_id != id => None,
+                _ => Some(Ok(axum::response::sse::Event::default()
+                    .event("update")
+                    .data("changed"))),
+            },
+        );
+    let initial = tokio_stream::once(Ok(axum::response::sse::Event::default()
+        .event("update")
+        .data("connected")));
+    Ok(axum::response::sse::Sse::new(initial.chain(changes))
+        .keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
 async fn cancel(

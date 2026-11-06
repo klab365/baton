@@ -31,6 +31,8 @@ let busyTasks = $state<string[]>([]);
 let draggingTask = $state("");
 let error = $state("");
 let feedback = $state("");
+let connection = $state<"connecting" | "live" | "reconnecting">("connecting");
+let refreshError = $state(false);
 const latestRuns = $derived.by(() => {
 	const byTask = new Map<string, Run[]>();
 	for (const run of runs) {
@@ -102,15 +104,53 @@ $effect(() => {
 $effect(() => {
 	tasks;
 	runs;
-	if (boardLoaded) syncItems();
+	if (boardLoaded && !draggingTask) syncItems();
 });
 onMount(() => {
-	const refresh = () => {
-		if (!document.hidden)
-			void Promise.all([invalidate("/api/tasks"), invalidate("/api/runs")]);
+	let refreshing = false;
+	let pending = false;
+	let stopped = false;
+	const refresh = async () => {
+		if (document.hidden || stopped) return;
+		if (refreshing) {
+			pending = true;
+			return;
+		}
+		refreshing = true;
+		try {
+			do {
+				pending = false;
+				await Promise.all([invalidate("/api/tasks"), invalidate("/api/runs")]);
+				refreshError = false;
+			} while (pending && !stopped);
+		} catch {
+			refreshError = true;
+		} finally {
+			refreshing = false;
+		}
 	};
-	const interval = window.setInterval(refresh, 2000);
-	return () => window.clearInterval(interval);
+	const source = new EventSource("/api/tasks/events");
+	source.onopen = () => {
+		connection = "live";
+		void refresh();
+	};
+	source.onerror = () => {
+		connection = "reconnecting";
+	};
+	source.addEventListener("update", () => void refresh());
+	const interval = window.setInterval(() => {
+		if (connection !== "live" || refreshError || loadError) void refresh();
+	}, 10000);
+	const visible = () => {
+		if (!document.hidden) void refresh();
+	};
+	document.addEventListener("visibilitychange", visible);
+	return () => {
+		stopped = true;
+		source.close();
+		window.clearInterval(interval);
+		document.removeEventListener("visibilitychange", visible);
+	};
 });
 function laneItems(lane: Lane) {
 	return items.filter((item) => item.lane === lane);
@@ -230,6 +270,7 @@ const lanes: {
 	{#snippet actions()}<a class="button" href="/tasks/new"><Plus size={16} /> New task</a>{/snippet}
 </PageHeader>
 {#if error}<StatusMessage tone="error" title="Task update failed">{error}</StatusMessage>{/if}
+<p class="muted" role="status">{refreshError || loadError ? "Refresh failed · retrying" : connection === "live" ? "Live updates" : connection === "reconnecting" ? "Reconnecting · checking periodically" : "Connecting…"}</p>
 {#if loadError}<StatusMessage tone="error" title="Could not load tasks">{loadError}</StatusMessage>{/if}
 {#if !boardLoaded}
 	<div class="board board-loading" aria-label="Loading task board" aria-busy="true">
