@@ -61,11 +61,11 @@ In a step's **Routing** section, choose **Add conditional route**, select an out
 
 When an agent step has routes, Rig exposes `report_outcome` with only that step's configured outcomes. Tell the agent in its prompt when to call the tool, which outcome to use and what to include in its concise summary. Baton routes using the tool decision, not JSON in the final response. Missing or invalid decisions fail the attempt. The tool summary is the handoff to the next step. Without routes, no decision call is required.
 
-A route to **End run** ends successfully except for `failed`, `blocked` or `rejected`, which end as failed. Loops have **no automatic traversal or cost limit**: monitor runs and cancel one that is not making progress. Inputs, outputs and handoffs are limited to 16,384 UTF-8 bytes. See [workflow transitions](workflow-transitions.md).
+A route to **End run** ends successfully except for `failed`, `blocked` or `rejected`, which end as failed. Loops have **no automatic traversal or cost limit**: monitor runs and cancel one that is not making progress. The task, individual agent outputs and outcome summaries, and individual human responses are limited to 16,384 UTF-8 bytes each. The assembled step context can be larger. See [workflow transitions](workflow-transitions.md).
 
 ### Ask a person for clarification
 
-A planner can route `blocked` to a human step with its question in the outcome summary; configure the human step's `responded` route back to the planner. This is a new agent attempt, not an in-turn chat. The response becomes the next handoff; the previous question is not automatically combined with it, so include sufficient context in your response. There is currently no custom `needs_input` outcome or dedicated ask-user tool.
+A planner can route `blocked` to a human step with its question in the outcome summary; configure the human step's `responded` route back to the planner. This is a new agent attempt, not an in-turn chat. The response becomes the next handoff. The next agent also receives a chronological run history, so the earlier blocker and the response appear in sequence when the blocker fits in the history budget. There is currently no custom `needs_input` outcome or dedicated ask-user tool.
 
 ## Tasks and worktrees
 
@@ -79,7 +79,7 @@ Baton does not automatically commit, merge or push. A pipeline may configure an 
 
 ## Runs and human decisions
 
-Open **Runs** and select a run to see its status, configured steps, ordered attempts, inputs and handoffs, execution trace and events. A step can have multiple attempts when a pipeline loops. Trace availability depends on the runtime; older runs may not contain a trace. Treat run data and transcripts as potentially sensitive.
+Open **Runs** and select a run to see its status, configured steps, ordered attempts, inputs and handoffs, execution trace and events. A step can have multiple attempts when a pipeline loops. For managed-runtime runs, Baton builds each subsequent step's context from the original task and chronological run history, including human decisions and recent agent results. Agent-result entries have a shared 100 KiB budget, with newer entries preferred; older entries may be omitted. Human decisions are retained in full without an overall history limit, so the assembled context can grow. This is step history, not restoration of an agent's full conversation or tool history. Run state persists across a human pause and backend restart. Trace availability depends on the runtime; older runs may not contain a trace. Treat run data and transcripts as potentially sensitive.
 
 When a run reaches a human step, it enters `waitingHuman`. In **Action required**, read the step context, optionally enter a response and select one of the configured outcomes. The chosen outcome determines the route; the response is the next handoff. Waiting has no automatic timeout or approval. A run can be cancelled while running or waiting; cancellation is cooperative for in-flight work, and a cancelled run cannot be resumed. Its task worktree remains until the task is done or deleted.
 

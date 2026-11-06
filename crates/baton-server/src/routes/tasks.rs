@@ -19,8 +19,28 @@ use baton_core::{
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tasks", get(list).post(create))
+        .route("/api/tasks/events", get(updates))
         .route("/api/tasks/{id}", get(get_one).put(update).delete(delete))
         .route("/api/tasks/{id}/runs", get(list_runs).post(start_run))
+}
+
+async fn updates(
+    State(state): State<AppState>,
+) -> axum::response::sse::Sse<
+    impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
+    use tokio_stream::StreamExt;
+    let changes =
+        tokio_stream::wrappers::BroadcastStream::new(state.run_updates.subscribe()).map(|_| {
+            Ok(axum::response::sse::Event::default()
+                .event("update")
+                .data("changed"))
+        });
+    let initial = tokio_stream::once(Ok(axum::response::sse::Event::default()
+        .event("update")
+        .data("connected")));
+    axum::response::sse::Sse::new(initial.chain(changes))
+        .keep_alive(axum::response::sse::KeepAlive::default())
 }
 
 fn now() -> String {

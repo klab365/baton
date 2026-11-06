@@ -234,14 +234,17 @@ mod tests {
         assert_eq!(
             loaded.trace[1],
             RunTraceEntry {
+                attempt: None,
                 occurred_at: "now".into(),
                 kind: "text".into(),
                 content: "not JSON".into()
             }
         );
         assert_eq!(repository.list().unwrap(), vec![loaded.clone()]);
-        repository.save(&loaded).unwrap();
-        assert_eq!(repository.load("run-1").unwrap(), loaded);
+        let mut assigned = loaded;
+        assigned.trace[0].attempt = Some(3);
+        repository.save(&assigned).unwrap();
+        assert_eq!(repository.load("run-1").unwrap(), assigned);
     }
 
     #[test]

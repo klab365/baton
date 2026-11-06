@@ -273,32 +273,62 @@ fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) ->
     if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task {
         return run.task.clone();
     }
-    let mut input = format!(
-        "Original task:\n{}\n\nPrevious step output and handoff:\n{}",
-        run.task, previous_output
-    );
-    let mut history = Vec::new();
-    let mut attempts: Vec<_> = run.steps.iter().collect();
+    let mut input = format!("Original task:\n{}", run.task);
+    let mut attempts: Vec<_> = run.steps.iter().filter(|step| step.attempt > 0).collect();
     attempts.sort_by_key(|attempt| attempt.attempt);
-    for attempt in attempts {
-        if !pipeline
+    // Human decisions remain complete; recent agent results have a separate budget.
+    const HISTORY_BYTES: usize = 100 * 1024;
+    let mut remaining = HISTORY_BYTES;
+    let mut history = Vec::new();
+    for attempt in attempts.iter().rev() {
+        let human = pipeline
             .steps
             .iter()
-            .any(|step| step.human && step.id == attempt.step_id)
-        {
+            .any(|step| step.human && step.id == attempt.step_id);
+        if human && attempt.outcome.is_none() {
             continue;
         }
-        let (Some(response), Some(outcome)) = (&attempt.output, &attempt.outcome) else {
+        let Some(output) = attempt.output.as_deref().or(human.then_some("")) else {
             continue;
         };
-        history.push(format!(
-            "\n- {} ({outcome:?}): {}",
-            attempt.step_id, response
-        ));
+        let actor = if human { "Human" } else { &attempt.agent_id };
+        let outcome = attempt
+            .outcome
+            .as_ref()
+            .map(|outcome| format!("{outcome:?}"))
+            .unwrap_or_else(|| "Result".into());
+        let transition = attempt
+            .selected_transition
+            .as_ref()
+            .map(|transition| format!(" → {}", transition.to.as_deref().unwrap_or("end")))
+            .unwrap_or_default();
+        let text = if human && output.trim().is_empty() {
+            "No comment provided."
+        } else {
+            output
+        };
+        let entry = format!(
+            "\n\n{}. {} · {} · {}{}\n{}",
+            attempt.attempt, attempt.step_id, actor, outcome, transition, text
+        );
+        if !human {
+            if entry.len() > remaining {
+                continue;
+            }
+            remaining -= entry.len();
+        }
+        history.push(entry);
+    }
+    if attempts
+        .last()
+        .and_then(|attempt| attempt.output.as_deref())
+        != Some(previous_output)
+    {
+        input.push_str(&format!("\n\nLatest handoff:\n{previous_output}"));
     }
     if !history.is_empty() {
-        input.push_str("\n\nEarlier human responses:");
-        for entry in &history {
+        input.push_str("\n\nRun history (chronological):");
+        for entry in history.iter().rev() {
             input.push_str(entry);
         }
     }
@@ -465,7 +495,11 @@ pub(crate) fn execute_graph(
                     Ok((decision.outcome, decision.summary))
                 }
             });
-        run.trace.extend(runtime.take_trace());
+        run.trace
+            .extend(runtime.take_trace().into_iter().map(|mut entry| {
+                entry.attempt = Some(run.steps[index].attempt);
+                entry
+            }));
         for message in runtime.take_events() {
             run.events.push(RunEvent {
                 run_id: run.id.clone(),
@@ -550,6 +584,80 @@ mod tests {
     }
 
     #[test]
+    fn run_history_preserves_blocker_and_response_after_reload_and_intermediate_step() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let mut pipeline = config.pipelines[0].clone();
+        let mut human = pipeline.steps[0].clone();
+        human.id = "help".into();
+        human.human = true;
+        pipeline.steps.push(human.clone());
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "run", "pipelineId": pipeline.id, "task": "implement timers",
+            "startedAt": "now", "endedAt": null, "durationMs": null,
+            "status": "running", "steps": [], "handoff": "use embassy-time"
+        }))
+        .unwrap();
+        let mut blocked = pending(&pipeline.steps[0]);
+        blocked.attempt = 1;
+        blocked.outcome = Some(Outcome::Blocked);
+        blocked.output = Some("Which Embassy timer driver?".into());
+        let mut response = pending(&human);
+        response.attempt = 2;
+        response.outcome = Some(Outcome::Responded);
+        response.output = Some("use embassy-time".into());
+        run.steps = vec![response, blocked];
+        let reloaded: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        let planner_input = step_input(&reloaded, &pipeline);
+        assert!(planner_input.contains("Which Embassy timer driver?"));
+        assert!(planner_input.contains("use embassy-time"));
+        assert!(
+            planner_input.find("Which Embassy timer driver?").unwrap()
+                < planner_input.find("use embassy-time").unwrap()
+        );
+        assert_eq!(
+            planner_input.matches("Which Embassy timer driver?").count(),
+            1
+        );
+        assert!(!planner_input.contains("Some("));
+        let mut resumed = reloaded;
+        let mut planner = pending(&pipeline.steps[0]);
+        planner.attempt = 3;
+        planner.outcome = Some(Outcome::Completed);
+        planner.output = Some("Implement the plan".into());
+        resumed.steps.push(planner);
+        resumed.handoff = Some("Implement the plan".into());
+        let builder_input = step_input(&resumed, &pipeline);
+        assert!(builder_input.contains("Which Embassy timer driver?"));
+        assert!(builder_input.contains("use embassy-time"));
+        assert!(builder_input.contains("Implement the plan"));
+    }
+
+    #[test]
+    fn agent_history_is_bounded_and_prefers_recent_attempts() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "run", "pipelineId": pipeline.id, "task": "task",
+            "startedAt": "now", "endedAt": null, "durationMs": null,
+            "status": "running", "steps": [], "handoff": "latest"
+        }))
+        .unwrap();
+        for attempt in 1..=15 {
+            let mut step = pending(&pipeline.steps[0]);
+            step.attempt = attempt;
+            step.output = Some(format!("attempt-{attempt} {}", "x".repeat(10_000)));
+            run.steps.push(step);
+        }
+        let input = step_input(&run, pipeline);
+        assert!(input.contains("attempt-15"));
+        assert!(!input.contains("attempt-1 "));
+        assert!(input.len() < 101 * 1024);
+    }
+
+    #[test]
     fn human_decisions_survive_intermediate_agent_handoffs_without_truncation() {
         let config: ProjectConfig =
             serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
@@ -583,5 +691,12 @@ mod tests {
         assert!(input.contains("support Tokio, WASM and Embassy"));
         assert!(input.contains(&"x".repeat(MAX_HANDOFF_BYTES)));
         assert!(input.find("support Tokio").unwrap() < input.find(&"x".repeat(100)).unwrap());
+
+        let mut approval = pending(&human);
+        approval.attempt = 3;
+        approval.outcome = Some(Outcome::Approved);
+        approval.output = Some(String::new());
+        run.steps.push(approval);
+        assert!(step_input(&run, &pipeline).contains("Approved\nNo comment provided."));
     }
 }

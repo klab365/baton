@@ -80,6 +80,8 @@ pub struct RunEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RunTraceEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
     pub occurred_at: String,
     pub kind: String,
     pub content: String,

@@ -1,5 +1,6 @@
 <script lang="ts">
-import { goto } from "$app/navigation";
+import { goto, invalidate, invalidateAll } from "$app/navigation";
+import { onMount } from "svelte";
 import Button from "../../../components/Button.svelte";
 import ConfirmationDialog from "../../../components/ConfirmationDialog.svelte";
 import DetailPanel from "../../../components/DetailPanel.svelte";
@@ -11,6 +12,20 @@ let { data } = $props();
 let confirm = $state(false);
 let loading = $state(false);
 let error = $state("");
+onMount(() => {
+	const refresh = () => {
+		if (!document.hidden) {
+			const taskUrl = `/api/tasks/${encodeURIComponent(data.task.id)}`;
+			void Promise.all([invalidate(taskUrl), invalidate(`${taskUrl}/runs`)]);
+		}
+	};
+	const interval = window.setInterval(refresh, 2000);
+	document.addEventListener("visibilitychange", refresh);
+	return () => {
+		window.clearInterval(interval);
+		document.removeEventListener("visibilitychange", refresh);
+	};
+});
 let selectedPipeline = $derived(
 	data.project.config?.pipelines.find(
 		(pipeline: { id: string }) => pipeline.id === data.task.pipelineId,
@@ -25,7 +40,7 @@ async function start() {
 		});
 		if (!response.ok)
 			throw new Error((await response.json()).error ?? "Could not start task.");
-		await goto(`/tasks/${data.task.id}`, { invalidateAll: true });
+		await invalidateAll();
 	} catch (e) {
 		error = e instanceof Error ? e.message : "Could not start task.";
 	} finally {

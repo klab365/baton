@@ -102,7 +102,11 @@ dt {
 	gap: 1.5rem;
 	margin-bottom: 1.5rem;
 }
+.page-header > div:first-child {
+	min-width: 0;
+}
 .page-header h1 {
+	overflow-wrap: anywhere;
 	margin: 0 0 0.7rem;
 	color: #f0f0f2;
 }
@@ -114,6 +118,9 @@ dt {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.75rem;
+}
+.page-header > .page-actions {
+	flex-shrink: 0;
 }
 .button {
 	display: inline-flex;
