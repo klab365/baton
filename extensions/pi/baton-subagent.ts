@@ -67,7 +67,7 @@ export function createExtension(run = runPi) {
 							output: step.output,
 						}),
 					);
-				const prompt = `You are a Baton subagent in a separate session. Execute only the assigned step. Do not invoke baton work, delegate further, make human decisions, commit, or push. The workspace is shared and is not a sandbox. Follow project instructions.\n\nOriginal task:\n${status.task}\n\nRelevant context from the parent:\n${params.context}\n\nPrior completed steps and human decisions:\n${JSON.stringify(history)}\n\nCurrent work item (agent instructions, assigned skills and allowed outcomes):\n${JSON.stringify(next)}\n\nReturn ONLY a JSON object with exactly these fields: outcome (one of allowedOutcomes), summary (nonempty string), evidence (1 to 32 nonempty strings). Do not wrap it in markdown.`;
+				const prompt = `You are a Baton subagent in a separate session. Execute only the assigned step. Do not invoke baton work, delegate further, make human decisions, commit, or push. The workspace is shared and is not a sandbox. Follow project instructions.\n\nOriginal task:\n${status.task}\n\nRelevant context from the parent:\n${params.context}\n\nPrior completed steps and human decisions:\n${JSON.stringify(history)}\n\nCurrent work item (agent instructions, assigned skills and allowed outcomes):\n${JSON.stringify(next)}\n\nAssigned skill supporting files are under skillsDirectory/<skill-id>/.\n\nReturn ONLY a JSON object with exactly these fields: outcome (one of allowedOutcomes), summary (nonempty string), evidence (1 to 32 nonempty strings). Do not wrap it in markdown.`;
 				if (Buffer.byteLength(prompt) > 256 * 1024)
 					throw new Error(
 						"Subagent context exceeds 256 KiB; cannot safely omit prior decisions",
@@ -80,6 +80,7 @@ export function createExtension(run = runPi) {
 						"--mode",
 						"json",
 						"--no-session",
+						"--no-skills",
 						"--exclude-tools",
 						"baton_subagent",
 					];

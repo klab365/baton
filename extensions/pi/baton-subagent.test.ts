@@ -35,6 +35,8 @@ function fixture(
 									human: options.human ?? false,
 								},
 								agent: { systemPrompt: "review carefully" },
+								skills: [{ id: "assigned", content: "Assigned skill instructions" }],
+								skillsDirectory: "/workspace/.agents/skills",
 								allowedOutcomes: ["approved", "revise_build"],
 							}
 						: {
@@ -69,6 +71,9 @@ function fixture(
 		const prompt = await readFile((args.at(-1) ?? "").slice(1), "utf8");
 		expect(prompt).toContain("Original issue");
 		expect(prompt).toContain("review carefully");
+		expect(prompt).toContain("Assigned skill instructions");
+		expect(prompt).toContain("/workspace/.agents/skills");
+		expect(prompt).toContain("skillsDirectory/<skill-id>/");
 		expect(prompt).toContain("Acceptance criteria");
 		expect(prompt).toContain("Human decision");
 		expect(prompt).toContain("Prior result");
@@ -115,6 +120,7 @@ test("passes current task and instructions to child and returns a submission", a
 	});
 	expect(f.calls[2]).toContain("test/model");
 	expect(f.calls[2]).toContain("baton_subagent");
+	expect(f.calls[2]).toContain("--no-skills");
 	expect(f.updates.at(-1)).toContain("→ read");
 });
 
