@@ -280,7 +280,7 @@ fn running_run_uses_credential(run: &crate::domain::pipeline::PipelineRun, id: &
     pipeline
         .steps
         .iter()
-        .filter(|step| !step.human)
+        .filter(|step| !step.human && step.command.is_none())
         .any(|step| {
             config
                 .agents

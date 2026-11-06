@@ -230,6 +230,9 @@ async fn start_work_handler(
         None if config.pipelines.len() == 1 => &config.pipelines[0],
         None => return Err("Select a pipeline with --pipeline (project must have exactly one pipeline to infer it)".into()),
     };
+    if pipeline.steps.iter().any(|step| step.command.is_some()) {
+        return Err("Shell steps are not supported in external work sessions".into());
+    }
     for check in &command.checks {
         bounded("Check command", &check.command)?;
         if !pipeline

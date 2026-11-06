@@ -79,6 +79,10 @@ pub struct PipelineStep {
     pub agent_id: String,
     #[serde(default)]
     pub human: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
     #[serde(default)]
     pub transitions: Vec<Transition>,
 }
@@ -183,7 +187,21 @@ impl ProjectConfig {
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 nonempty(&format!("{step_path}.name"), &step.name)?;
-                if step.human {
+                if let Some(timeout) = step.timeout_seconds
+                    && (step.command.is_none() || !(1..=86400).contains(&timeout))
+                {
+                    return Err(format!(
+                        "{step_path}: timeoutSeconds requires a shell step and must be between 1 and 86400"
+                    ));
+                }
+                if let Some(command) = &step.command {
+                    nonempty(&format!("{step_path}.command"), command)?;
+                    if step.human || !step.agent_id.is_empty() {
+                        return Err(format!(
+                            "{step_path}: shell steps cannot have an agent or be human"
+                        ));
+                    }
+                } else if step.human {
                     if !step.agent_id.is_empty() {
                         return Err(format!("{step_path}: human steps cannot have an agent"));
                     }
@@ -204,6 +222,13 @@ impl ProjectConfig {
                 }
                 let mut outcomes = Vec::new();
                 for transition in &step.transitions {
+                    if step.command.is_some()
+                        && !matches!(transition.outcome, Outcome::Completed | Outcome::Failed)
+                    {
+                        return Err(format!(
+                            "{step_path}: shell transitions require completed or failed"
+                        ));
+                    }
                     if step.human
                         && !matches!(
                             transition.outcome,
@@ -448,6 +473,24 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
 #[cfg(test)]
 mod project_identity_tests {
     use super::parse_config;
+
+    #[test]
+    fn shell_timeout_must_be_in_range_and_only_on_shell_steps() {
+        let mut config: super::ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let step = &mut config.pipelines[0].steps[0];
+        step.agent_id.clear();
+        step.command = Some("true".into());
+        step.timeout_seconds = Some(1);
+        assert!(config.validate().is_ok());
+        config.pipelines[0].steps[0].timeout_seconds = Some(0);
+        assert!(config.validate().is_err());
+        config.pipelines[0].steps[0].timeout_seconds = Some(86401);
+        assert!(config.validate().is_err());
+        config.pipelines[0].steps[0].timeout_seconds = Some(1);
+        config.pipelines[0].steps[0].command = None;
+        assert!(config.validate().is_err());
+    }
 
     #[test]
     fn tool_configuration_preserves_defaults_and_validates_transitions() {

@@ -426,6 +426,8 @@ mod tests {
         Pipeline {
             id: "main".into(),
             steps: vec![PipelineStep {
+                command: None,
+                timeout_seconds: None,
                 human: false,
                 transitions: vec![],
                 id: "plan".into(),

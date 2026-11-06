@@ -35,6 +35,8 @@ On first launch Baton creates `.baton/` and initializes the project configuratio
 
 A worktree is **not a sandbox**: agents may run commands with the permissions of the Baton process. Use a container, VM or dedicated OS user for stronger isolation. Task prompts and run data are local and can be sensitive.
 
+Pipeline shell steps run their configured `sh -c` command in the task worktree, with the Baton process's permissions (not in a sandbox). They stop on cancellation and time out after 300 seconds by default; set `timeoutSeconds` per shell step (1–86400 seconds) to change the limit. Exit code 0 produces `completed`; all other exit statuses and timeouts produce `failed`. Configure transitions for those outcomes to route results; without a matching route, failures stop the run. The exit status and bounded stdout/stderr are passed to later steps. Shell steps do not create commits and are not supported in external `baton work` sessions.
+
 Agents can be configured with an explicit allowed tool list in the Agents UI. An omitted list preserves the default tools; an empty list disables all tools. Steps with transitions require `report_outcome`. Disabling `write` and `edit` does not prevent changes if `shell` is enabled: shell commands can modify files and access resources outside the worktree.
 
 ## Set up with a coding agent

@@ -60,6 +60,8 @@ function add() {
 		name: "",
 		agentId: config.agents[0]?.id ?? "",
 		human: false,
+		command: null,
+		timeoutSeconds: null,
 		transitions: [],
 	});
 	expandedStepIds = new Set([...expandedStepIds, id]);
@@ -110,7 +112,7 @@ async function save(remove = false) {
 
 <svelte:head><title>Pipelines · Baton</title></svelte:head>
 <PageHeader title="Pipelines" description="Configure sequential handoffs, bounded review loops, and human decisions.">
- {#snippet actions()}<Button disabled={!config?.agents.length || busy} onclick={() => open()}><Plus size={17} /> Create pipeline</Button>{/snippet}
+ {#snippet actions()}<Button disabled={!config || busy} onclick={() => open()}> <Plus size={17} /> Create pipeline</Button>{/snippet}
 </PageHeader>
 {#if error}<p role="alert" class="status status-error">{error}</p>{/if}
 {#if message}<p role="status" class="status status-success">{message}</p>{/if}
@@ -120,9 +122,9 @@ async function save(remove = false) {
  <div class="pipeline-workbench">
   <aside class="pipeline-sidebar" aria-label="Pipeline library">
    <div class="sidebar-heading"><div><span class="eyebrow">Library</span><h2>Your pipelines</h2></div><span class="count">{config.pipelines.length}</span></div>
-   <p class="muted">Pipelines use agents already defined in project configuration.</p>
+   <p class="muted">Pipelines combine agents, shell commands, and human decisions.</p>
    {#if !config.agents.length}
-    <div class="agent-warning"><Cpu size={18} /><div><strong>No agents available</strong><span>Create and save an agent in Agents before creating a pipeline.</span></div></div>
+    <div class="agent-warning"><Cpu size={18} /><div><strong>No agents available</strong><span>Create an agent to use agent steps, or use shell and human steps.</span></div></div>
    {/if}
    <div class="pipeline-list">
    {#each config.pipelines as pipeline (pipeline.id)}
@@ -135,7 +137,7 @@ async function save(remove = false) {
     <div class="editor-placeholder"><div class="placeholder-icon"><Box size={28} /></div><h2>Select a pipeline to edit</h2><p>Choose a pipeline from the library, or create a new one.</p></div>
    {:else}
     <form onsubmit={(event) => { event.preventDefault(); save(); }}>
-     <div class="editor-toolbar"><div class="editor-title-fields"><span class="eyebrow">{editing ? "Editing pipeline" : "New pipeline"}</span><Field label="Pipeline ID" for="pipeline-name" required>{#snippet children({ describedBy })}<input id="pipeline-name" value={draft?.id ?? ""} oninput={(event) => { if (draft) draft.id = event.currentTarget.value; }} required aria-describedby={describedBy} disabled={busy || editing} placeholder="e.g. product-delivery" />{/snippet}</Field></div><div class="toolbar-actions"><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button><Button type="submit" loading={busy} disabled={!draft.steps.length || !config.agents.length}>Save changes</Button></div></div>
+     <div class="editor-toolbar"><div class="editor-title-fields"><span class="eyebrow">{editing ? "Editing pipeline" : "New pipeline"}</span><Field label="Pipeline ID" for="pipeline-name" required>{#snippet children({ describedBy })}<input id="pipeline-name" value={draft?.id ?? ""} oninput={(event) => { if (draft) draft.id = event.currentTarget.value; }} required aria-describedby={describedBy} disabled={busy || editing} placeholder="e.g. product-delivery" />{/snippet}</Field></div><div class="toolbar-actions"><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button><Button type="submit" loading={busy} disabled={!draft.steps.length}>Save changes</Button></div></div>
      <div class="flow-caption"><span>Task input</span><span>Each step hands its result to the next</span><span>Final output</span></div>
      <ol class="step-flow" aria-label="Ordered pipeline steps">
       {#each draft.steps as step, index (step.id)}
@@ -145,8 +147,10 @@ async function save(remove = false) {
          <header class="step-header"><div class="step-number">{index + 1}</div><button type="button" class="step-title" aria-expanded={expandedStepIds.has(step.id)} aria-controls={`step-details-${step.id}`} onclick={() => toggleStep(step.id)}><strong>{step.name || "Untitled step"}</strong></button><div class="step-controls"><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} up`} disabled={busy || index === 0} onclick={() => move(index, -1)}><ArrowUp size={17} /></button><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} down`} disabled={busy || index === draft.steps.length - 1} onclick={() => move(index, 1)}><ArrowDown size={17} /></button><button type="button" class="icon-button remove-step" aria-label={`Remove ${step.name || `step ${index + 1}`}`} disabled={busy} onclick={() => { if (draft) draft.steps = draft.steps.filter((item) => item.id !== step.id); }}><Trash2 size={16} /></button><GripVertical class="drag-hint" size={19} aria-hidden="true" /></div></header>
          {#if expandedStepIds.has(step.id)}<div class="step-body" id={`step-details-${step.id}`}>
           <Field label="Step name" for={`name-${step.id}`} required>{#snippet children()}<input id={`name-${step.id}`} bind:value={step.name} required disabled={busy} placeholder="e.g. Research request" />{/snippet}</Field>
-          <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.human ? "human" : "agent"} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => { step.human = value === "human"; step.agentId = step.human ? "" : config.agents[0]?.id ?? ""; step.transitions = []; }} />{/snippet}</Field>
-          {#if !step.human}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
+          <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.command != null ? "shell" : step.human ? "human" : "agent"} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }, { id: "shell", name: "Shell" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => { step.human = value === "human"; step.command = value === "shell" ? "" : null; step.timeoutSeconds = null; step.agentId = value === "agent" ? config.agents[0]?.id ?? "" : ""; step.transitions = []; }} />{/snippet}</Field>
+          {#if step.command != null}<Field label="Command" for={`command-${step.id}`} required>{#snippet children({ describedBy })}<input id={`command-${step.id}`} bind:value={step.command} required aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
+          {#if step.command != null}<Field label="Timeout in seconds" for={`timeout-${step.id}`}>{#snippet children({ describedBy })}<input id={`timeout-${step.id}`} type="number" min="1" max="86400" placeholder="300" bind:value={step.timeoutSeconds} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
+          {#if !step.human && step.command == null}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
           <section class="transition-editor" aria-labelledby={`routing-${step.id}`}>
             <header class="transition-heading"><div><span class="eyebrow">Routing</span><h3 id={`routing-${step.id}`}>What happens next?</h3><p>Without a route, this step continues to the next step automatically.</p></div></header>
             {#if step.transitions.length}
@@ -154,7 +158,7 @@ async function save(remove = false) {
               {#each step.transitions as transition, routeIndex}
                 <li class="transition-card">
                   <span class="route-number">Route {routeIndex + 1}</span>
-                  <Field label="When the outcome is" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} items={outcomes.filter((outcome) => !step.human || ["approved", "rejected", "responded"].includes(outcome)).map((outcome) => ({ id: outcome, name: outcome.replaceAll("_", " ") }))} placeholder="Select an outcome" label="Outcomes" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>
+                  <Field label="When the outcome is" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} items={outcomes.filter((outcome) => step.command != null ? ["completed", "failed"].includes(outcome) : !step.human || ["approved", "rejected", "responded"].includes(outcome)).map((outcome) => ({ id: outcome, name: outcome.replaceAll("_", " ") }))} placeholder="Select an outcome" label="Outcomes" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>
                   <div class="route-arrow" aria-hidden="true">→</div>
                   <Field label="Send the task to" for={`target-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`target-${step.id}-${routeIndex}`} value={transition.to ?? "__end__"} items={[{ id: "__end__", name: "End run" }, ...(draft?.steps ?? []).map((target) => ({ id: target.id, name: target.name || target.id }))]} placeholder="Select a destination" label="Destinations" {describedBy} {invalid} disabled={busy} onValueChange={(value) => transition.to = value === "__end__" ? null : value} />{/snippet}</Field>
                   <button class="remove-route" type="button" aria-label={`Remove route ${routeIndex + 1}`} disabled={busy} onclick={() => { step.transitions = step.transitions.filter((_, i) => i !== routeIndex); }}><Trash2 size={15} /></button>
@@ -171,8 +175,8 @@ async function save(remove = false) {
        </li>
       {/each}
      </ol>
-     {#if !draft.steps.length}<div class="empty-flow"><p>Add at least one agent step before saving.</p></div>{/if}
-     <button type="button" class="add-step" disabled={busy || !config.agents.length} onclick={add}><Plus size={18} /><span>Add agent step</span></button>
+     {#if !draft.steps.length}<div class="empty-flow"><p>Add at least one step before saving.</p></div>{/if}
+     <button type="button" class="add-step" disabled={busy} onclick={add}><Plus size={18} /><span>Add step</span></button>
      <div class="editor-footer"><span>{draft.steps.length} {draft.steps.length === 1 ? "step" : "steps"} in this pipeline</span>{#if editing}<Button variant="danger" disabled={busy} onclick={() => { deleting = true; }}><Trash2 size={16} /> Delete pipeline</Button>{/if}</div>
     </form>
     <ConfirmationDialog bind:open={deleting} title="Delete pipeline?" loading={busy} onconfirm={() => save(true)}>Existing tasks retain their pipeline ID; new runs use the current project configuration.</ConfirmationDialog>

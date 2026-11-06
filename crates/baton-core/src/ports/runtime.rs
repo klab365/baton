@@ -17,6 +17,16 @@ pub struct AgentDecision {
 /// Executes one pipeline agent step. Implementations may expose the optional
 /// pipeline outcome control tool when `allowed_outcomes` is non-empty.
 pub trait AgentRuntime: Send {
+    fn execute_shell(
+        &mut self,
+        _directory: &std::path::Path,
+        _command: &str,
+        _timeout_seconds: u32,
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<crate::domain::work::CheckResult, String> {
+        Err("Shell execution is not configured".into())
+    }
+
     /// Lists models exposed by this explicitly selected runtime without reading credentials.
     fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
         Err("This runtime does not expose model discovery".into())
