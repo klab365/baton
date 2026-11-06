@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/klab365/baton/compare/v0.4.0...v0.5.0) - 2026-11-06
+
+### Added
+
+- clarify pipeline run replay
+- add configurable shell pipeline steps
+- improve run context and live observability
+
+### Fixed
+
+- use available port when starting server
+
 ## [0.4.0](https://github.com/klab365/baton/compare/v0.3.0...v0.4.0) - 2026-11-05
 
 ### Added
