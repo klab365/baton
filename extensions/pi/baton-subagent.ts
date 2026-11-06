@@ -17,19 +17,36 @@ export function createExtension(run = runPi) {
 					return;
 				}
 				try {
-					const result = await pi.exec("baton", ["work", "status", ...(id ? ["--run", id] : [])], { cwd: ctx.cwd, maxBuffer: 4 * 1024 * 1024 });
+					const result = await pi.exec(
+						"baton",
+						["work", "status", ...(id ? ["--run", id] : [])],
+						{ cwd: ctx.cwd, maxBuffer: 4 * 1024 * 1024 },
+					);
 					if (result.code !== 0 || result.killed || result.truncated)
-						throw new Error(result.stderr || "command interrupted or output too large");
+						throw new Error(
+							result.stderr || "command interrupted or output too large",
+						);
 					const data = JSON.parse(result.stdout);
 					const runs = Array.isArray(data) ? data : [data];
-					const lines = runs.map((run) => `${run.id}: ${run.status}${run.currentStep ? ` · ${run.currentStep}` : ""}`);
+					const lines = runs.map(
+						(run) =>
+							`${run.id}: ${run.status}${run.currentStep ? ` · ${run.currentStep}` : ""}`,
+					);
 					if (id && runs[0]?.steps) {
 						for (const step of runs[0].steps)
-							lines.push(`  ${step.stepId} #${step.attempt}: ${step.status}${step.outcome ? ` · ${step.outcome}` : ""}${step.error ? ` · ${step.error}` : ""}`);
+							lines.push(
+								`  ${step.stepId} #${step.attempt}: ${step.status}${step.outcome ? ` · ${step.outcome}` : ""}${step.error ? ` · ${step.error}` : ""}`,
+							);
 					}
-					ctx.ui.setWidget("baton-status", lines.length ? lines : ["No Baton work runs in this workspace."]);
+					ctx.ui.setWidget(
+						"baton-status",
+						lines.length ? lines : ["No Baton work runs in this workspace."],
+					);
 				} catch (error) {
-					ctx.ui.notify(`Baton status failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+					ctx.ui.notify(
+						`Baton status failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
 				}
 			},
 		});
@@ -113,10 +130,16 @@ export function createExtension(run = runPi) {
 						args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
 					if (ctx.thinkingLevel) args.push("--thinking", ctx.thinkingLevel);
 					args.push(`@${file}`);
-					const progress = [`Baton ${params.runId} · ${next.step.id} · attempt ${next.attempt}`];
+					const progress = [
+						`Baton ${params.runId} · ${next.step.id} · attempt ${next.attempt}`,
+					];
 					const update = (message?: string) => {
 						if (message) progress.push(message);
-						if (ctx.hasUI) ctx.ui.setStatus("baton", `${progress[0]} · ${message ?? "starting"}`);
+						if (ctx.hasUI)
+							ctx.ui.setStatus(
+								"baton",
+								`${progress[0]} · ${message ?? "starting"}`,
+							);
 						if (progress.length > 13) progress.splice(1, 1);
 						onUpdate?.({
 							content: [{ type: "text", text: progress.join("\n") }],
@@ -128,7 +151,9 @@ export function createExtension(run = runPi) {
 					try {
 						result = await run("pi", args, ctx.cwd, signal, update);
 					} catch (error) {
-						update(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+						update(
+							`Failed: ${error instanceof Error ? error.message : String(error)}`,
+						);
 						throw error;
 					}
 					let answer: unknown;
@@ -166,8 +191,15 @@ export function createExtension(run = runPi) {
 						attempt: next.attempt,
 						...value,
 					};
-					update(`Result: ${value.outcome} · ${value.summary}\nEvidence: ${(value.evidence as string[]).join("; ")}`);
-					if (ctx.hasUI) ctx.ui.setWidget("baton-result", [`Baton ${next.step.id} #${next.attempt}: ${value.outcome}`, String(value.summary), ...(value.evidence as string[]).map((item) => `• ${item}`)]);
+					update(
+						`Result: ${value.outcome} · ${value.summary}\nEvidence: ${(value.evidence as string[]).join("; ")}`,
+					);
+					if (ctx.hasUI)
+						ctx.ui.setWidget("baton-result", [
+							`Baton ${next.step.id} #${next.attempt}: ${value.outcome}`,
+							String(value.summary),
+							...(value.evidence as string[]).map((item) => `• ${item}`),
+						]);
 					return {
 						content: [{ type: "text", text: JSON.stringify(submission) }],
 						details: {},

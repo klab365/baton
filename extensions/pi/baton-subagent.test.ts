@@ -38,7 +38,9 @@ function fixture(
 									human: options.human ?? false,
 								},
 								agent: { systemPrompt: "review carefully" },
-								skills: [{ id: "assigned", content: "Assigned skill instructions" }],
+								skills: [
+									{ id: "assigned", content: "Assigned skill instructions" },
+								],
 								skillsDirectory: "/workspace/.agents/skills",
 								allowedOutcomes: ["approved", "revise_build"],
 							}
@@ -100,7 +102,8 @@ function fixture(
 				thinkingLevel: "high",
 				hasUI: true,
 				ui: {
-					setStatus: (_key: string, value: string | undefined) => statuses.push(value),
+					setStatus: (_key: string, value: string | undefined) =>
+						statuses.push(value),
 					setWidget: (_key: string, lines: string[]) => widgets.push(lines),
 				},
 			},
@@ -144,16 +147,32 @@ test("status command shows run details and reports failures", async () => {
 	const notices: string[] = [];
 	const pi = {
 		registerTool() {},
-		registerCommand(_name: string, command: { handler: typeof handler }) { handler = command.handler; },
+		registerCommand(_name: string, command: { handler: typeof handler }) {
+			handler = command.handler;
+		},
 		async exec(_command: string, args: string[]) {
 			calls.push(args);
 			return fail
 				? { code: 1, stderr: "not found" }
-				: { code: 0, stdout: JSON.stringify({ id: "abc", status: "running", currentStep: "build", steps: [{ stepId: "build", attempt: 1, status: "running" }] }) };
+				: {
+						code: 0,
+						stdout: JSON.stringify({
+							id: "abc",
+							status: "running",
+							currentStep: "build",
+							steps: [{ stepId: "build", attempt: 1, status: "running" }],
+						}),
+					};
 		},
 	};
 	createExtension()(pi as unknown as ExtensionAPI);
-	const ctx = { cwd: "/workspace", ui: { setWidget: (_key: string, lines: string[]) => widgets.push(lines), notify: (message: string) => notices.push(message) } };
+	const ctx = {
+		cwd: "/workspace",
+		ui: {
+			setWidget: (_key: string, lines: string[]) => widgets.push(lines),
+			notify: (message: string) => notices.push(message),
+		},
+	};
 	await handler("abc", ctx);
 	expect(calls[0]).toEqual(["work", "status", "--run", "abc"]);
 	expect(widgets[0]).toEqual(["abc: running · build", "  build #1: running"]);
