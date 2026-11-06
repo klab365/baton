@@ -441,6 +441,56 @@ pub(crate) fn execute_graph(
             &mut run,
             Some(format!("Step {} started", step.id)),
         )?;
+        let cancellation_id = run.id.clone();
+        let cancelled = || {
+            repository
+                .load(&cancellation_id)
+                .map(|r| r.status == Status::Cancelled)
+                .unwrap_or(true)
+        };
+        if let Some(command) = &step.command {
+            let result = runtime.execute_shell(
+                &run.worktree.as_ref().ok_or("Missing worktree")?.path,
+                command,
+                step.timeout_seconds.unwrap_or(300),
+                &cancelled,
+            );
+            if let Some(cancelled) = cancelled_run(repository, &run)? {
+                return Ok(cancelled);
+            }
+            match result {
+                Ok(result) => {
+                    let outcome = if result.exit_code == Some(0) {
+                        Outcome::Completed
+                    } else {
+                        Outcome::Failed
+                    };
+                    let output = format!(
+                        "Exit status: {}\n{}",
+                        result
+                            .exit_code
+                            .map_or_else(|| "none".into(), |code| code.to_string()),
+                        result.output
+                    );
+                    run.handoff = Some(output.clone());
+                    run.steps[index].output = Some(output);
+                    run.steps[index].outcome = Some(outcome.clone());
+                    run.steps[index].status = Status::Succeeded;
+                    route(&mut run, pipeline, index, outcome)?;
+                }
+                Err(error) => {
+                    run.steps[index].status = Status::Failed;
+                    run.steps[index].error = Some(error.chars().take(4096).collect());
+                    run.status = Status::Failed;
+                }
+            }
+            publish(
+                repository,
+                &mut run,
+                Some(format!("Step {} completed", step.id)),
+            )?;
+            continue;
+        }
         let agent = config
             .agents
             .iter()

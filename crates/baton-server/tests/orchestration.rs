@@ -197,6 +197,8 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
     pipeline.steps.push(PipelineStep {
         id: "help".into(),
         name: "Help".into(),
+        command: None,
+        timeout_seconds: None,
         agent_id: String::new(),
         human: true,
         transitions: vec![Transition {

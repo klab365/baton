@@ -78,6 +78,15 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
 }
 
 impl AgentRuntime for ConfiguredRuntime {
+    fn execute_shell(
+        &mut self,
+        directory: &Path,
+        command: &str,
+        timeout_seconds: u32,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<baton_core::domain::work::CheckResult, String> {
+        crate::work::run_shell(directory, command, timeout_seconds, cancelled)
+    }
     fn execute(&mut self, directory: &Path, agent: &Agent, input: &str) -> Result<String, String> {
         self.execute_cancellable(directory, agent, input, &|| false)
     }

@@ -190,7 +190,7 @@ fn validate_task_readiness(
         .list()
         .map_err(|error| format!("Could not validate skills: {error}"))?;
     for step in &pipeline.steps {
-        if step.human {
+        if step.human || step.command.is_some() {
             continue;
         }
         let agent = config

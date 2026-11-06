@@ -46,6 +46,10 @@ pub struct PipelineStep {
     pub agent_id: String,
     #[serde(default)]
     pub human: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
     #[serde(default)]
     pub transitions: Vec<Transition>,
 }
@@ -169,6 +173,8 @@ impl From<domain::PipelineStep> for PipelineStep {
             name: value.name,
             agent_id: value.agent_id,
             human: value.human,
+            command: value.command,
+            timeout_seconds: value.timeout_seconds,
             transitions: value.transitions.into_iter().map(Into::into).collect(),
         }
     }
@@ -181,6 +187,8 @@ impl From<PipelineStep> for domain::PipelineStep {
             name: value.name,
             agent_id: value.agent_id,
             human: value.human,
+            command: value.command,
+            timeout_seconds: value.timeout_seconds,
             transitions: value.transitions.into_iter().map(Into::into).collect(),
         }
     }

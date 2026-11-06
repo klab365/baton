@@ -77,6 +77,15 @@ impl Script {
     }
 }
 impl AgentRuntime for Script {
+    fn execute_shell(
+        &mut self,
+        directory: &Path,
+        command: &str,
+        timeout_seconds: u32,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<baton_core::domain::work::CheckResult, String> {
+        baton_adapters::work::run_shell(directory, command, timeout_seconds, cancelled)
+    }
     fn execute(
         &mut self,
         directory: &Path,
@@ -129,6 +138,98 @@ fn config() -> ProjectConfig {
     ]);
     parse_config(&json.to_string()).unwrap()
 }
+#[test]
+fn shell_success_runs_in_task_worktree() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let pipeline = &mut config.pipelines[0];
+    let mut shell = pipeline.steps[0].clone();
+    shell.agent_id.clear();
+    shell.command = Some("test -e .git && echo ok".into());
+    shell.transitions.clear();
+    pipeline.steps = vec![shell];
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "shell-success",
+        &mut Script::default(),
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert!(run.steps[0].output.as_ref().unwrap().contains("ok"));
+}
+
+#[test]
+fn shell_timeout_routes_as_failure() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let pipeline = &mut config.pipelines[0];
+    let mut shell = pipeline.steps[0].clone();
+    shell.agent_id.clear();
+    shell.command = Some("sleep 30".into());
+    shell.timeout_seconds = Some(1);
+    shell.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Failed,
+        to: Some("build".into()),
+    }];
+    pipeline.steps = vec![shell, pipeline.steps[1].clone()];
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "shell-timeout",
+        &mut Script::new(&["fixed"]),
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert!(
+        run.steps[1]
+            .input
+            .as_ref()
+            .unwrap()
+            .contains("timed out after 1 seconds")
+    );
+}
+
+#[test]
+fn shell_failure_routes_with_output_to_next_step() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let pipeline = &mut config.pipelines[0];
+    let mut shell = pipeline.steps[0].clone();
+    shell.id = "check".into();
+    shell.agent_id.clear();
+    shell.command = Some("echo diagnostic >&2; exit 7".into());
+    shell.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Failed,
+        to: Some("build".into()),
+    }];
+    pipeline.steps = vec![shell, pipeline.steps[1].clone()];
+    let mut runtime = Script::new(&["fixed"]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "shell",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(run.steps[0].outcome, Some(Outcome::Failed));
+    assert!(
+        run.steps[0]
+            .output
+            .as_ref()
+            .unwrap()
+            .contains("Exit status: 7")
+    );
+    assert!(run.steps[1].input.as_ref().unwrap().contains("diagnostic"));
+}
+
 const APPROVED: &str = r#"{"outcome":"approved","output":"Ready for a human"}"#;
 const REWORK: &str = r#"{"outcome":"revise_build","output":"Fix the build"}"#;
 
