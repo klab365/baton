@@ -19,13 +19,9 @@ For Pi, install this repository's skill package (after this change is available 
 pi install git:github.com/klab365/baton
 ```
 
-Restart Pi or reload its resources, then invoke `/skill:baton <issue URL or task>`. The package installs instructions, not the Rust binary. For local development, `pi install /absolute/path/to/baton` loads the local package.
+Restart Pi or reload its resources, then explicitly invoke `/skill:baton <issue URL or task>`. The skill's `disable-model-invocation: true` frontmatter prevents Pi from selecting it automatically; the explicit command remains available. The package installs instructions, not the Rust binary. For local development, `pi install /absolute/path/to/baton` loads the local package.
 
-The same `skills/baton` directory can be installed under `~/.agents/skills/baton` for Codex or `~/.claude/skills/baton` for Claude Code. Keep one maintained copy and use your preferred copy/symlink installation. No host-specific frontmatter is required.
-
-Automatic skill selection does not guarantee that every issue uses Baton. Add an explicit project instruction, for example:
-
-> For issue implementation, use the Baton skill and start or resume the configured factory run before changing code. Follow its steps and report the terminal result or pending human decision.
+The same `skills/baton` directory can be installed under `~/.agents/skills/baton` for Codex or `~/.claude/skills/baton` for Claude Code. Keep one maintained copy and use your preferred copy/symlink installation. The frontmatter setting's behavior in other hosts depends on their skill support.
 
 ## Configure a pipeline
 
