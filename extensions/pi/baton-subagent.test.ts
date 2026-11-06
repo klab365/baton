@@ -16,7 +16,10 @@ function fixture(
 ) {
 	let tool: TestTool | undefined;
 	const calls: string[][] = [];
+	const widgets: string[][] = [];
+	const statuses: (string | undefined)[] = [];
 	const pi = {
+		registerCommand() {},
 		registerTool(value: TestTool) {
 			tool = value;
 		},
@@ -95,10 +98,15 @@ function fixture(
 				cwd: "/workspace",
 				model: { provider: "test", id: "model" },
 				thinkingLevel: "high",
+				hasUI: true,
+				ui: {
+					setStatus: (_key: string, value: string | undefined) => statuses.push(value),
+					setWidget: (_key: string, lines: string[]) => widgets.push(lines),
+				},
 			},
 		);
 	};
-	return { execute, calls, updates };
+	return { execute, calls, updates, widgets, statuses };
 }
 
 test("passes current task and instructions to child and returns a submission", async () => {
@@ -121,7 +129,37 @@ test("passes current task and instructions to child and returns a submission", a
 	expect(f.calls[2]).toContain("test/model");
 	expect(f.calls[2]).toContain("baton_subagent");
 	expect(f.calls[2]).toContain("--no-skills");
-	expect(f.updates.at(-1)).toContain("→ read");
+	expect(f.updates.at(-1)).toContain("Result: approved");
+	expect(f.widgets[0]).toContain("Reviewed");
+	expect(f.widgets[0]).toContain("• diff");
+	expect(f.statuses.some((status) => status?.includes("attempt 3"))).toBe(true);
+	expect(f.statuses.at(-1)).toBeUndefined();
+});
+
+test("status command shows run details and reports failures", async () => {
+	let handler: (args: string, ctx: unknown) => Promise<void> = async () => {};
+	let fail = false;
+	const calls: string[][] = [];
+	const widgets: string[][] = [];
+	const notices: string[] = [];
+	const pi = {
+		registerTool() {},
+		registerCommand(_name: string, command: { handler: typeof handler }) { handler = command.handler; },
+		async exec(_command: string, args: string[]) {
+			calls.push(args);
+			return fail
+				? { code: 1, stderr: "not found" }
+				: { code: 0, stdout: JSON.stringify({ id: "abc", status: "running", currentStep: "build", steps: [{ stepId: "build", attempt: 1, status: "running" }] }) };
+		},
+	};
+	createExtension()(pi as unknown as ExtensionAPI);
+	const ctx = { cwd: "/workspace", ui: { setWidget: (_key: string, lines: string[]) => widgets.push(lines), notify: (message: string) => notices.push(message) } };
+	await handler("abc", ctx);
+	expect(calls[0]).toEqual(["work", "status", "--run", "abc"]);
+	expect(widgets[0]).toEqual(["abc: running · build", "  build #1: running"]);
+	fail = true;
+	await handler("", ctx);
+	expect(notices[0]).toContain("not found");
 });
 
 test("streams child tool progress and validates JSONL completion", async () => {
@@ -230,6 +268,7 @@ test("local Pi package installs the skill and registers the tool", async () => {
 		expect(run.exitCode).toBe(0);
 		const discovered = JSON.parse(await readFile(output, "utf8"));
 		expect(discovered.tools).toContain("baton_subagent");
+		expect(discovered.commands).toContain("baton-status");
 		expect(discovered.commands).toContain("skill:baton");
 	} finally {
 		await rm(dir, { recursive: true, force: true });
