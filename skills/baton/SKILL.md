@@ -1,6 +1,7 @@
 ---
 
 name: baton
+disable-model-invocation: true
 description: Execute an issue or task through a configured Baton software-factory pipeline in the current Git worktree. Use when asked to process an issue with Baton, start or resume factory work, or follow the project's Baton workflow.
 ---
 
