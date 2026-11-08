@@ -27,11 +27,16 @@ type CredentialType = {
 };
 let credentials = $state<Credential[]>([]);
 let credentialTypes = $state<CredentialType[]>([]);
-let credentialName = $state("");
+let credentialId = $state("");
+const validCredentialId = $derived(
+	/^[A-Za-z0-9_-]+$/.test(credentialId) &&
+		!credentials.some((credential) => credential.id === credentialId),
+);
 let credentialType = $state("");
 let credentialSecret = $state("");
 let credentialConfiguration = $state<Record<string, string>>({});
 let authCredentialId = $state("");
+let authCredentialCreated = $state(false);
 let authStatus = $state<{
 	status: string;
 	verificationUri?: string;
@@ -93,8 +98,9 @@ async function load() {
 function closeCredentialForm() {
 	clearTimeout(authTimer);
 	authCredentialId = "";
+	authCredentialCreated = false;
 	authStatus = null;
-	credentialName = "";
+	credentialId = "";
 	credentialSecret = "";
 	credentialConfiguration = {};
 	error = "";
@@ -124,10 +130,10 @@ async function pollAuthentication() {
 	}
 }
 async function startAuthentication() {
-	if (!credentialName.trim()) return;
+	if (!authCredentialId && !validCredentialId) return;
 	error = "";
-	if (authStatus?.status !== "failed" || !authCredentialId)
-		authCredentialId = crypto.randomUUID();
+	const createOnly = !authCredentialCreated;
+	if (!authCredentialId) authCredentialId = credentialId;
 	const id = authCredentialId;
 	authStatus = { status: "starting" };
 	try {
@@ -136,7 +142,11 @@ async function startAuthentication() {
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ name: credentialName.trim(), credentialType }),
+				body: JSON.stringify({
+					name: id,
+					credentialType,
+					createOnly,
+				}),
 			},
 		);
 		if (!response.ok)
@@ -145,6 +155,7 @@ async function startAuthentication() {
 			);
 		const status = await response.json();
 		if (id !== authCredentialId) return;
+		authCredentialCreated = true;
 		authStatus = status;
 		await load();
 		if (id === authCredentialId && authStatus?.status === "pending")
@@ -158,15 +169,16 @@ async function startAuthentication() {
 	}
 }
 async function saveCredential() {
-	if (!credentialName.trim() || !credentialType || !credentialSecret) return;
+	if (!credentialType || !credentialSecret || !validCredentialId) return;
 	const saved = await mutate(
-		`/api/credentials/${encodeURIComponent(crypto.randomUUID())}`,
+		`/api/credentials/${encodeURIComponent(credentialId)}`,
 		"PUT",
 		{
-			name: credentialName.trim(),
+			name: credentialId,
 			credentialType,
 			configuration: credentialConfiguration,
 			secret: credentialSecret,
+			createOnly: true,
 		},
 	);
 	if (saved) closeCredentialForm();
@@ -247,8 +259,10 @@ onMount(() => {
 				<label for={`credential-config-${field.id}`}>{field.label}</label>
 				<input id={`credential-config-${field.id}`} bind:value={credentialConfiguration[field.id]} placeholder={field.id === "baseUrl" ? "http://localhost:11434" : ""} disabled={busy} />
 			{/each}
-			<label for="credential-name">Name</label>
-			<input id="credential-name" bind:value={credentialName} placeholder="e.g. Personal OpenAI" disabled={busy} />
+			<label for="credential-id">Credential name</label>
+			<input id="credential-id" bind:value={credentialId} placeholder="e.g. openai-default" disabled={busy} aria-describedby="credential-id-hint" />
+			<small id="credential-id-hint">Use the same ID as your team. Only letters, digits, hyphens and underscores are allowed.</small>
+			{#if credentialId && !validCredentialId}<small role="alert">Enter a valid ID that is not already in use.</small>{/if}
 			{#if credentialTypes.find((type) => type.id === credentialType)?.authentication !== "device_code"}
 				<label for="credential-secret">Secret</label>
 				<input id="credential-secret" type="password" bind:value={credentialSecret} autocomplete="off" disabled={busy} />
@@ -260,10 +274,10 @@ onMount(() => {
 					{#if authStatus.status === "failed"}<Button disabled={busy} onclick={startAuthentication}>Try again</Button>{/if}
 				{:else if credentialTypes.find((type) => type.id === credentialType)?.authentication === "device_code"}
 					<Button variant="quiet" disabled={busy} onclick={closeCredentialForm}>Cancel</Button>
-					<Button disabled={busy || !credentialName.trim()} onclick={startAuthentication}>Connect account</Button>
+					<Button disabled={busy || !validCredentialId} onclick={startAuthentication}>Connect account</Button>
 				{:else}
 					<Button variant="quiet" disabled={busy} onclick={closeCredentialForm}>Cancel</Button>
-					<Button disabled={busy || !credentialName.trim() || !credentialType || !credentialSecret} onclick={saveCredential}>Save credential</Button>
+					<Button disabled={busy || !credentialType || !credentialSecret || !validCredentialId} onclick={saveCredential}>Save credential</Button>
 				{/if}
 			</div>
 		</div>
@@ -273,7 +287,7 @@ onMount(() => {
 	<header><div class="credential-heading"><h2 id="saved-credentials">Credentials</h2><span>{credentials.length}</span></div><div class="credential-section-actions"><Button disabled={busy} onclick={() => (showForm = true)}><Plus size={16} /> Add credential</Button></div></header>
 	<div class="credential-list">
 		{#each credentials as credential (credential.id)}
-			<article class="credential-card"><div><strong>{credential.name}</strong><code>{credential.credentialType}</code><span class="credential-status">{credential.status.replaceAll("_", " ")}</span>{#if connectionResult[credential.id]}<span role={connectionResult[credential.id].ok ? "status" : "alert"}>{connectionResult[credential.id].message}</span>{/if}</div>{#if credentialTypes.find((type) => type.id === credential.credentialType)?.supportsTest}<Button disabled={busy || !!testingCredentialId} onclick={() => testConnection(credential.id)}>{testingCredentialId === credential.id ? "Testing…" : "Test connection"}</Button>{/if}<Button variant="danger" disabled={busy} onclick={() => { credentialToDelete = credential; deleteDialogOpen = true; }}>Delete</Button></article>
+			<article class="credential-card"><div><strong>{credential.name}</strong><code>{credential.name !== credential.id ? `${credential.id} · ` : ""}{credential.credentialType}</code><span class="credential-status">{credential.status.replaceAll("_", " ")}</span>{#if connectionResult[credential.id]}<span role={connectionResult[credential.id].ok ? "status" : "alert"}>{connectionResult[credential.id].message}</span>{/if}</div>{#if credentialTypes.find((type) => type.id === credential.credentialType)?.supportsTest}<Button disabled={busy || !!testingCredentialId} onclick={() => testConnection(credential.id)}>{testingCredentialId === credential.id ? "Testing…" : "Test connection"}</Button>{/if}<Button variant="danger" disabled={busy} onclick={() => { credentialToDelete = credential; deleteDialogOpen = true; }}>Delete</Button></article>
 		{:else}<p class="empty-hint">No provider credentials yet. Add one to connect an agent.</p>{/each}
 	</div>
 </section>

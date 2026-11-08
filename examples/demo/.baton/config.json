@@ -10,7 +10,7 @@
         "provider": "chatgpt",
         "model": "gpt-6.1-terra"
       },
-      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
+      "credentialId": "openai-default",
       "skillIds": [
         "concise-planning"
       ],
@@ -29,7 +29,7 @@
         "provider": "chatgpt",
         "model": "gpt-6-luna"
       },
-      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
+      "credentialId": "openai-default",
       "skillIds": [
         "ponytail",
         "verification-before-completion"
@@ -52,7 +52,7 @@
         "provider": "chatgpt",
         "model": "gpt-6.1-sol"
       },
-      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
+      "credentialId": "openai-default",
       "skillIds": [
         "code-review-excellence",
         "verification-before-completion"
@@ -73,7 +73,7 @@
         "provider": "chatgpt",
         "model": "gpt-5.6-luna"
       },
-      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
+      "credentialId": "openai-default",
       "skillIds": [
         "verification-before-completion"
       ],
