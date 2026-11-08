@@ -6,20 +6,17 @@ The standalone Work CLI and the managed-runtime/server mode share core pipeline 
 
 ## Install
 
-Install a Baton binary built from a revision containing `baton work`; older release binaries do not support this protocol. From source:
+Install an official Baton release containing `baton install pi`, and install Pi with `pi` on your PATH. Then run:
 
 ```sh
-cargo build --release -p baton-cli
-# Put target/release/baton on PATH, or invoke it by its absolute path.
+baton install pi
 ```
 
-For Pi, install this repository's skill package (after this change is available on the selected Git ref):
+This installs both the Pi extension and skill from the CLI's release tag (`v<version>`). Re-run it after upgrading or downgrading Baton; Pi updates its existing package entry. The tag must be available on GitHub. Older binaries do not have this command; upgrade Baton first.
 
-```sh
-pi install git:github.com/klab365/baton
-```
+Source and development builds cannot establish a matching published package and the command refuses to install one. For local development, build with `cargo build --release -p baton-cli` and use `pi install /absolute/path/to/baton` for the same checkout instead. Do not mix that local package with the release package.
 
-Restart Pi or reload its resources, then explicitly invoke `/skill:baton <issue URL or task>`. The skill's `disable-model-invocation: true` frontmatter prevents Pi from selecting it automatically; the explicit command remains available. The package installs instructions, not the Rust binary. For local development, `pi install /absolute/path/to/baton` loads the local package.
+Restart Pi or reload its resources, then explicitly invoke `/skill:baton <issue URL or task>`. The skill's `disable-model-invocation: true` frontmatter prevents Pi from selecting it automatically; the explicit command remains available. The package installs instructions, not the Rust binary. Baton does not check for an incompatible Pi package at runtime.
 
 The same `skills/baton` directory can be installed under `~/.agents/skills/baton` for Codex or `~/.claude/skills/baton` for Claude Code. Keep one maintained copy and use your preferred copy/symlink installation. The frontmatter setting's behavior in other hosts depends on their skill support.
 
