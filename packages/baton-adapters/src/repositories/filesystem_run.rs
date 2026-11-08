@@ -58,7 +58,7 @@ impl FilesystemRunRepository {
         let path = self.path(&run.id)?;
         let parent = path.parent().unwrap();
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let temporary = parent.join(format!("{}.tmp", run.id));
+        let temporary = parent.join(format!("{}.{}.tmp", run.id, uuid::Uuid::new_v4()));
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -245,6 +245,34 @@ mod tests {
         assigned.trace[0].attempt = Some(3);
         repository.save(&assigned).unwrap();
         assert_eq!(repository.load("run-1").unwrap(), assigned);
+    }
+
+    #[test]
+    fn orphaned_temporary_file_does_not_block_writes_or_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = FilesystemRunRepository(directory.path().to_path_buf());
+        let runs_dir = directory.path().join(".baton/runs");
+        fs::create_dir_all(&runs_dir).unwrap();
+        let orphan = runs_dir.join("run-1.tmp");
+        fs::write(&orphan, b"orphan").unwrap();
+        let value = serde_json::json!({
+            "id": "run-1", "pipelineId": "pipeline", "task": "task",
+            "startedAt": "2026-01-01T00:00:00Z", "status": "running", "steps": []
+        });
+        let run = deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap();
+
+        repository.create(&run).unwrap();
+        repository.save(&run).unwrap();
+        repository.recover_interrupted().unwrap();
+
+        let recovered = repository.load("run-1").unwrap();
+        assert_eq!(recovered.status, Status::Failed);
+        assert_eq!(
+            recovered.events.last().unwrap().message.as_deref(),
+            Some("Run interrupted by server restart")
+        );
+        assert_eq!(fs::read(orphan).unwrap(), b"orphan");
+        assert!(repository.create(&run).is_err());
     }
 
     #[test]
