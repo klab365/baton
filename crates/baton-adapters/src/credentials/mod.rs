@@ -389,6 +389,7 @@ impl CredentialRepository for FilesystemCredentialRepository {
 
     async fn save(&self, credential: &Credential, secret: Option<&str>) -> Result<(), String> {
         credential.validate()?;
+        let _lease = self.acquire_delete_lease(&credential.id)?;
         if credential.configuration.keys().any(|key| key != "baseUrl")
             || (credential.credential_type.0 != "ollama_api_key"
                 && !credential.configuration.is_empty())
@@ -544,6 +545,41 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn running_credential_cannot_be_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = FilesystemCredentialRepository::new(temp.path().into());
+        let credential = Credential {
+            id: "shared".into(),
+            name: "shared".into(),
+            credential_type: CredentialType::new("openai_api_key").unwrap(),
+            configuration: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+            status: CredentialStatus::Available,
+        };
+        repository
+            .save(&credential, Some("original"))
+            .await
+            .unwrap();
+        let lease = repository.acquire_run_leases(&["shared".into()]).unwrap();
+        assert!(
+            repository
+                .save(&credential, Some("replacement"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            repository.secret_sync("shared").unwrap().as_deref(),
+            Some("original")
+        );
+        drop(lease);
+        repository
+            .save(&credential, Some("replacement"))
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn run_and_delete_leases_exclude_each_other_and_release_on_drop() {
         let temp = tempfile::tempdir().unwrap();
@@ -565,6 +601,43 @@ mod tests {
         assert!(repository.acquire_delete_lease("b").is_ok());
         drop(delete);
         assert!(repository.acquire_run_leases(&["a".into()]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn same_shared_id_resolves_to_each_local_vaults_secret() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = FilesystemCredentialRepository::new(temp.path().join("first"));
+        let second = FilesystemCredentialRepository::new(temp.path().join("second"));
+        let credential = Credential {
+            id: "openai-default".into(),
+            name: "openai-default".into(),
+            credential_type: CredentialType::new("openai_api_key").unwrap(),
+            configuration: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+            status: CredentialStatus::Available,
+        };
+        first.save(&credential, Some("first-secret")).await.unwrap();
+        second
+            .save(&credential, Some("second-secret"))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.get_sync("openai-default").unwrap().unwrap().id,
+            credential.id
+        );
+        assert_eq!(
+            second.get_sync("openai-default").unwrap().unwrap().id,
+            credential.id
+        );
+        assert_eq!(
+            first.secret_sync("openai-default").unwrap().as_deref(),
+            Some("first-secret")
+        );
+        assert_eq!(
+            second.secret_sync("openai-default").unwrap().as_deref(),
+            Some("second-secret")
+        );
     }
 
     #[test]

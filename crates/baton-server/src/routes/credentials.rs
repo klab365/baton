@@ -57,6 +57,8 @@ struct Save {
     #[serde(default)]
     configuration: std::collections::BTreeMap<String, String>,
     secret: Option<String>,
+    #[serde(default)]
+    create_only: bool,
 }
 async fn save(
     State(state): State<AppState>,
@@ -68,11 +70,17 @@ async fn save(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let existing = state
-        .mediator
-        .send(GetCredential { id: id.clone() })
-        .await
-        .ok();
+    let existing = match state.mediator.send(GetCredential { id: id.clone() }).await {
+        Ok(credential) => Some(credential),
+        Err(CredentialError::NotFound) => None,
+        Err(error) => return Err(error.into()),
+    };
+    if body.create_only && existing.is_some() {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: "Credential ID already exists".into(),
+        });
+    }
     let credential_type =
         CredentialType::new(body.credential_type).map_err(|message| ApiError {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -104,6 +112,8 @@ struct Authenticate {
     name: String,
     #[serde(default = "default_session_type")]
     credential_type: String,
+    #[serde(default)]
+    create_only: bool,
 }
 fn default_session_type() -> String {
     "chatgpt_session".into()
@@ -123,13 +133,24 @@ async fn authenticate(
             message: "Unsupported device authentication type".into(),
         });
     }
-    if let Ok(existing) = state.mediator.send(GetCredential { id: id.clone() }).await
-        && existing.credential_type.0 != body.credential_type
-    {
-        return Err(ApiError {
-            status: StatusCode::UNPROCESSABLE_ENTITY,
-            message: "Device authentication is not supported for this credential type".into(),
-        });
+    let existing = match state.mediator.send(GetCredential { id: id.clone() }).await {
+        Ok(credential) => Some(credential),
+        Err(CredentialError::NotFound) => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(existing) = existing {
+        if body.create_only {
+            return Err(ApiError {
+                status: StatusCode::CONFLICT,
+                message: "Credential ID already exists".into(),
+            });
+        }
+        if existing.credential_type.0 != body.credential_type {
+            return Err(ApiError {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message: "Device authentication is not supported for this credential type".into(),
+            });
+        }
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

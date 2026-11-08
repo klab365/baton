@@ -161,6 +161,38 @@ mod tests {
     use crate::credentials::FilesystemCredentialRepository;
     use baton_core::ports::credentials::CredentialRepository;
 
+    #[tokio::test]
+    async fn missing_and_incompatible_credentials_report_clear_errors() {
+        use baton_core::domain::credentials::{Credential, CredentialStatus, CredentialType};
+        let root = tempfile::tempdir().unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent", "systemPrompt":"test", "runtimeKind":"rig", "model":{"provider":"openai", "model":"gpt-4.1"}, "credentialId":"shared", "skillIds":[]})).unwrap();
+        let error = runtime.execute(root.path(), &agent, "test").unwrap_err();
+        assert!(
+            error.contains("shared") && error.contains("unavailable"),
+            "{error}"
+        );
+        let credential = Credential {
+            id: "shared".into(),
+            name: "shared".into(),
+            credential_type: CredentialType::new("ollama_api_key").unwrap(),
+            configuration: Default::default(),
+            created_at: 0,
+            updated_at: 0,
+            status: CredentialStatus::Available,
+        };
+        repository
+            .save(&credential, Some("local-secret"))
+            .await
+            .unwrap();
+        let error = runtime.execute(root.path(), &agent, "test").unwrap_err();
+        assert!(error.contains("openai_api_key"), "{error}");
+    }
+
     #[test]
     fn pipeline_runtime_holds_and_releases_credential_lease() {
         let root = tempfile::tempdir().unwrap();
