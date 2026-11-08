@@ -100,7 +100,8 @@ impl AppState {
         let runs = FilesystemRunRepository(project_dir.clone());
         // A running run cannot survive a process restart because adapters are in-process.
         // Convert it deterministically to a durable terminal record before serving requests.
-        let _ = runs.recover_interrupted();
+        runs.recover_interrupted()
+            .unwrap_or_else(|error| panic!("failed to recover interrupted runs: {error}"));
         let repository: Arc<dyn ProjectConfigRepository> = Arc::new(repository);
         let credential_store = FilesystemCredentialRepository::for_project(&project_dir)
             .expect("local credential storage path must be available");
@@ -514,6 +515,16 @@ mod web_tests {
             );
         }
         assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to recover interrupted runs")]
+    fn startup_surfaces_run_recovery_errors() {
+        let project = tempfile::tempdir().unwrap();
+        let runs = project.path().join(".baton/runs");
+        std::fs::create_dir_all(&runs).unwrap();
+        std::fs::write(runs.join("broken.json"), b"invalid json").unwrap();
+        AppState::new(project.path().to_path_buf());
     }
 
     #[tokio::test]
