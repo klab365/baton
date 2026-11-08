@@ -37,6 +37,22 @@ fn install_pi(
 }
 
 fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
+    let git = |args: &[&str]| -> anyhow::Result<std::process::Output> {
+        Ok(std::process::Command::new("git")
+            .current_dir(project)
+            .args(args)
+            .output()?)
+    };
+    let probe = git(&["rev-parse", "--is-inside-work-tree"])?;
+    let new_repo = !probe.status.success();
+    if new_repo {
+        let output = git(&["init"])?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let baton_dir = project.join(".baton");
     let was_missing = !baton_dir.exists();
     std::fs::create_dir_all(&baton_dir)?;
@@ -49,6 +65,28 @@ fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
         Ok(mut file) => file.write_all(BATON_GITIGNORE.as_bytes())?,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error.into()),
+    }
+    baton_adapters::repositories::filesystem_project_config::ensure_project_identity(project)
+        .map_err(anyhow::Error::msg)?;
+    if new_repo {
+        for args in [
+            &["add", "--", ".baton/config.json"][..],
+            &[
+                "commit",
+                "-m",
+                "Initialize Baton configuration",
+                "--",
+                ".baton/config.json",
+            ][..],
+        ] {
+            let output = git(args)?;
+            anyhow::ensure!(
+                output.status.success(),
+                "git {} failed: {}",
+                args[0],
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
     Ok(was_missing)
 }
@@ -305,18 +343,61 @@ mod tests {
 
     #[test]
     fn bootstraps_missing_baton_directory_and_gitignore() {
+        if env::var_os("BATON_TEST_GIT_IDENTITY").is_none() {
+            let status = std::process::Command::new(env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::bootstraps_missing_baton_directory_and_gitignore",
+                ])
+                .env("BATON_TEST_GIT_IDENTITY", "1")
+                .env("GIT_AUTHOR_NAME", "Baton Test")
+                .env("GIT_AUTHOR_EMAIL", "baton@example.com")
+                .env("GIT_COMMITTER_NAME", "Baton Test")
+                .env("GIT_COMMITTER_EMAIL", "baton@example.com")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
         let project = TempDir::new();
         assert!(bootstrap_project(&project.0).unwrap());
         assert_eq!(
             std::fs::read_to_string(project.0.join(".baton/.gitignore")).unwrap(),
             BATON_GITIGNORE
         );
+        let config = std::fs::read(project.0.join(".baton/config.json")).unwrap();
         assert!(!bootstrap_project(&project.0).unwrap());
+        assert_eq!(
+            std::fs::read(project.0.join(".baton/config.json")).unwrap(),
+            config
+        );
+        let output = std::process::Command::new("git")
+            .current_dir(&project.0)
+            .args(["rev-list", "--count", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+        let output = std::process::Command::new("git")
+            .current_dir(&project.0)
+            .args(["show", "HEAD:.baton/config.json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, config);
     }
 
     #[test]
     fn bootstrap_preserves_existing_gitignore() {
         let project = TempDir::new();
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&project.0)
+                .arg("init")
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
         let baton = project.0.join(".baton");
         std::fs::create_dir(&baton).unwrap();
         std::fs::write(baton.join(".gitignore"), "custom/\n").unwrap();
@@ -324,6 +405,16 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(baton.join(".gitignore")).unwrap(),
             "custom/\n"
+        );
+        assert!(baton.join("config.json").exists());
+        assert!(
+            !std::process::Command::new("git")
+                .current_dir(&project.0)
+                .args(["rev-parse", "--verify", "HEAD"])
+                .output()
+                .unwrap()
+                .status
+                .success()
         );
     }
 }
