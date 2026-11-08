@@ -7,6 +7,7 @@ import Button from "../../components/Button.svelte";
 import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
 import EmptyState from "../../components/EmptyState.svelte";
 import Field from "../../components/Field.svelte";
+import MultilineInput from "../../components/MultilineInput.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
@@ -178,7 +179,7 @@ async function save(remove = false) {
 						<Field label="Provider" for="agent-provider" required hint="Derived from the selected credential.">{#snippet children({ describedBy })}<input id="agent-provider" value={draft!.model!.provider} readonly aria-describedby={describedBy} />{/snippet}</Field>
 						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" bind:value={draft!.model!.model} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert">{modelsError}</small>{/if}{/snippet}</Field>
 					</div></section>
-					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="System prompt" for="agent-prompt" required hint="Define this agent’s role, scope, and response style.">{#snippet children({ describedBy })}<textarea id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} aria-describedby={describedBy}></textarea>{/snippet}</Field>
+					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="System prompt" for="agent-prompt" required hint="Define this agent’s role, scope, and response style.">{#snippet children({ describedBy })}<MultilineInput id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} {describedBy} required />{/snippet}</Field>
 					</section>
 					<section class="references form-section" aria-label="Tools">
 						<AssignedResources id="agent-add-tool" title="Tools" label="Assigned tools" addLabel="Add tool" emptyMessage="No tools assigned." items={tools.map((id) => ({ id }))} selected={draft.allowedTools ?? []} disabled={busy} onChange={(selected) => { if (draft) draft.allowedTools = selected; }} />
