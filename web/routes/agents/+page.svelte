@@ -93,7 +93,9 @@ async function loadModels(credentialId: string) {
 			`/api/credentials/${encodeURIComponent(credentialId)}/models`,
 		);
 		if (response.status === 404)
-			throw new Error(`Credential "${credentialId}" was not found locally. Create it in Settings or select another credential.`);
+			throw new Error(
+				`Credential "${credentialId}" was not found locally. Create it in Settings or select another credential.`,
+			);
 		if (!response.ok)
 			throw new Error((await response.json()).error ?? "Could not list models");
 		models = await response.json();
