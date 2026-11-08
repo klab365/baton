@@ -24,25 +24,6 @@ impl FilesystemProjectConfigRepository {
     fn config_path(&self) -> PathBuf {
         self.baton_dir().join("config.json")
     }
-    async fn ensure_runs_gitignore(&self) -> Result<(), String> {
-        let path = self.baton_dir().join(".gitignore");
-        tokio::task::spawn_blocking(move || {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut file) => file
-                    .write_all(b"runs/\ntasks/\n")
-                    .map_err(|e| format!("Could not write {}: {e}", path.display())),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                Err(error) => Err(format!("Could not create {}: {error}", path.display())),
-            }
-        })
-        .await
-        .map_err(|e| format!("Gitignore write task failed: {e}"))?
-    }
-
     async fn persist(&self, expected: Option<&str>, config: &ProjectConfig) -> Result<(), String> {
         config.validate()?;
         let contents = serde_json::to_vec_pretty(config).map_err(|e| e.to_string())?;
@@ -136,8 +117,7 @@ impl ProjectConfigRepository for FilesystemProjectConfigRepository {
         }
     }
     async fn create(&self, config: &ProjectConfig) -> Result<(), String> {
-        self.persist(None, config).await?;
-        self.ensure_runs_gitignore().await
+        self.persist(None, config).await
     }
     async fn update(&self, expected_revision: &str, config: &ProjectConfig) -> Result<(), String> {
         self.persist(Some(expected_revision), config).await
@@ -148,17 +128,7 @@ impl ProjectConfigRepository for FilesystemProjectConfigRepository {
 pub fn ensure_project_identity(project_dir: &Path) -> Result<String, String> {
     let baton_dir = project_dir.join(".baton");
     fs::create_dir_all(&baton_dir).map_err(|_| "Could not create project directory")?;
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(baton_dir.join(".gitignore"))
-    {
-        Ok(mut file) => file
-            .write_all(b"runs/\ntasks/\n")
-            .map_err(|_| "Could not write project gitignore")?,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(_) => return Err("Could not create project gitignore".into()),
-    }
+    ensure_gitignore(&baton_dir)?;
     let path = baton_dir.join("config.json");
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => Some(contents),
@@ -211,15 +181,44 @@ impl Drop for RemoveOnDrop {
     }
 }
 
+fn ensure_gitignore(parent: &Path) -> Result<(), String> {
+    let path = parent.join(".gitignore");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => file
+            .write_all(b"runs/\ntasks/\n")
+            .map_err(|error| format!("Could not write {}: {error}", path.display()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(format!("Could not create {}: {error}", path.display())),
+    }
+    Ok(())
+}
+
+struct ConfigurationLock(fs::File);
+
+impl Drop for ConfigurationLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 fn persist(path: &Path, expected: Option<&str>, contents: &[u8]) -> Result<(), String> {
     let parent = path.parent().expect("configuration path has a parent");
     fs::create_dir_all(parent)
         .map_err(|e| format!("Could not create configuration directory: {e}"))?;
-    let lock_path = parent.join("config.lock");
-    let mut lock = fs::OpenOptions::new().write(true).create_new(true).open(&lock_path)
-        .map_err(|e| format!("Could not lock configuration (another writer or stale .baton/config.lock; retry after checking no writer is active): {e}"))?;
-    let _lock_cleanup = RemoveOnDrop(lock_path);
-    writeln!(lock, "{}", std::process::id()).map_err(|e| e.to_string())?;
+    let project_root = parent
+        .parent()
+        .expect("configuration directory has a parent");
+    let lock = fs::File::open(project_root)
+        .map_err(|e| format!("Could not open configuration lock: {e}"))?;
+    lock.try_lock()
+        .map_err(|e| format!("Could not lock configuration (another writer may be active): {e}"))?;
+    // Explicitly unlock even if a forked process inherited the file descriptor.
+    let _lock = ConfigurationLock(lock);
+    ensure_gitignore(parent)?;
     match expected {
         Some(revision) => {
             let current = fs::read_to_string(path)
@@ -243,7 +242,7 @@ fn persist(path: &Path, expected: Option<&str>, contents: &[u8]) -> Result<(), S
         .and_then(|()| temporary.sync_all())
         .map_err(|e| format!("Could not write configuration: {e}"))?;
     drop(temporary);
-    // Recheck immediately before publishing; cooperating writers hold config.lock throughout.
+    // Recheck immediately before publishing; cooperating writers hold the project directory lock throughout.
     if let Some(revision) = expected {
         if fs::read_to_string(path).map_err(|e| e.to_string())? != revision {
             return Err("Configuration changed; reload before updating.".into());
@@ -363,13 +362,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failures_preserve_existing_bytes() {
+    async fn orphan_lock_file_does_not_block_updates() {
         let fixture = Fixture::new();
         let repo = fixture.repo();
         initialize_project(&repo).await.unwrap();
         let initial = snapshot(&repo).await;
         let lock = repo.config_path().with_file_name("config.lock");
-        fs::write(&lock, "held").unwrap();
+        fs::write(&lock, "12345\n").unwrap();
+        repo.update(&initial.revision, &initial.config)
+            .await
+            .unwrap();
+        assert!(lock.exists());
+    }
+
+    #[test]
+    fn configuration_lock_releases_even_with_a_duplicated_handle() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.0).unwrap();
+        let file = fs::File::open(&fixture.0).unwrap();
+        file.try_lock().unwrap();
+        let duplicate = file.try_clone().unwrap();
+        drop(ConfigurationLock(file));
+        let other = fs::File::open(&fixture.0).unwrap();
+        other.try_lock().unwrap();
+        drop(duplicate);
+    }
+
+    #[tokio::test]
+    async fn failures_preserve_existing_bytes() {
+        let fixture = Fixture::new();
+        let repo = fixture.repo();
+        initialize_project(&repo).await.unwrap();
+        let initial = snapshot(&repo).await;
+        let held_lock = fs::File::open(&fixture.0).unwrap();
+        held_lock.try_lock().unwrap();
         assert!(
             repo.update(&initial.revision, &initial.config)
                 .await
@@ -380,8 +406,7 @@ mod tests {
             fs::read_to_string(repo.config_path()).unwrap(),
             initial.revision
         );
-        assert!(lock.exists());
-        fs::remove_file(lock).unwrap();
+        drop(held_lock);
         fs::write(repo.config_path(), "broken").unwrap();
         assert!(matches!(
             repo.load().await.unwrap(),
@@ -448,6 +473,60 @@ mod tests {
             fs::read_to_string(baton.join(".gitignore")).unwrap(),
             "custom/\n"
         );
+    }
+
+    #[tokio::test]
+    async fn git_cleanup_cannot_bypass_active_lock() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.0).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&fixture.0)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let repo = fixture.repo();
+        initialize_project(&repo).await.unwrap();
+        let initial = snapshot(&repo).await;
+        assert!(
+            std::process::Command::new("git")
+                .args(["add", ".baton/config.json", ".baton/.gitignore"])
+                .current_dir(&fixture.0)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let held = fs::File::open(&fixture.0).unwrap();
+        held.try_lock().unwrap();
+        fs::write(fixture.0.join(".baton/config.lock"), "orphan").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["clean", "-fdxq"])
+                .current_dir(&fixture.0)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .args(["restore", "--worktree", ".baton"])
+                .current_dir(&fixture.0)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            repo.update(&initial.revision, &initial.config)
+                .await
+                .unwrap_err()
+                .contains("lock")
+        );
+        drop(held);
+        repo.update(&initial.revision, &initial.config)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
