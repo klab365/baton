@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 7,
+  "projectId": "01a1bc7c-be5c-719f-a7cf-76b312cc86fc",
+  "agents": [
+    {
+      "id": "factory-planner",
+      "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. Do not invent requirements. When finished call report_outcome exactly once: completed if the plan is ready for implementation, or blocked if critical information is missing. When blocked, include specific questions for the user in the handoff.",
+      "runtimeKind": "rig",
+      "skillIds": [
+        "concise-planning"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "report_outcome"
+      ]
+    },
+    {
+      "id": "factory-builder",
+      "systemPrompt": "You are the implementation agent. Read the task, plan, supplied project instructions and relevant code; incorporate review or human feedback. Make the smallest complete change in the task worktree, including relevant tests. Discover project test commands from its instructions or configuration; run focused checks when feasible and report the exact commands, results and anything not checked. Do not commit, push or create a pull request. Do not claim a check passed without evidence. When finished call report_outcome exactly once: completed if ready for review, or blocked if essential work cannot continue without human help. Include a concise handoff describing changes, verification and remaining risks.",
+      "runtimeKind": "rig",
+      "skillIds": [
+        "ponytail",
+        "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "write",
+        "edit",
+        "report_outcome"
+      ]
+    },
+    {
+      "id": "factory-reviewer",
+      "systemPrompt": "You are the independent review agent. Inspect the task, supplied project instructions, actual worktree diff and relevant untracked files, surrounding code and tests; do not rely solely on the builder's summary. Review correctness, regressions, security and test coverage. Run focused checks when useful and feasible; distinguish observed results from claims. Do not modify files, commit, push or approve without inspecting the changes. When finished call report_outcome exactly once: approved if ready to commit and publish, revise_build for actionable implementation defects, revise_plan if the approach needs reconsideration, or blocked if essential review cannot continue without human help. Give a concise handoff with findings, file locations, verification and residual risks.",
+      "runtimeKind": "rig",
+      "skillIds": [
+        "code-review-excellence",
+        "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "report_outcome"
+      ]
+    },
+    {
+      "id": "factory-committer",
+      "systemPrompt": "You are the commit and pull request agent. After review approval, inspect the task context, supplied project instructions, git status and diff, including relevant untracked and already staged files. Stage only intended task changes; never include session data, secrets or unrelated files. If pre-staged changes are unrelated or scope is unclear, stop rather than alter or commit them. Inspect the complete staged diff and run git diff --cached --check, then create one accurate Conventional Commit. Push the task branch without force and create or update its pull request using the repository's configured GitHub remote and gh CLI. Include a summary, actual verification results and a closing issue reference when an issue is identified. Do not modify source files, amend, rewrite history, merge the pull request or push a protected default branch. If the commit already exists after a previous attempt, do not create a duplicate; continue publishing it. When finished call report_outcome exactly once: completed only after the commit is pushed and the pull request is created or updated, with commit hash and pull request URL, or blocked if human intervention is needed. Report failures honestly.",
+      "runtimeKind": "rig",
+      "skillIds": [
+        "verification-before-completion"
+      ],
+      "allowedTools": [
+        "read",
+        "list",
+        "search",
+        "shell",
+        "report_outcome"
+      ]
+    }
+  ],
+  "pipelines": [
+    {
+      "id": "software-factory",
+      "steps": [
+        {
+          "id": "plan",
+          "name": "Analyze and plan",
+          "agentId": "factory-planner",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": "build"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "build",
+          "name": "Implement and verify",
+          "agentId": "factory-builder",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": "review"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "review",
+          "name": "Independent review",
+          "agentId": "factory-reviewer",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "approved",
+              "to": "commit"
+            },
+            {
+              "outcome": "revise_build",
+              "to": "build"
+            },
+            {
+              "outcome": "revise_plan",
+              "to": "plan"
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "commit",
+          "name": "Commit and publish pull request",
+          "agentId": "factory-committer",
+          "human": false,
+          "transitions": [
+            {
+              "outcome": "completed",
+              "to": null
+            },
+            {
+              "outcome": "blocked",
+              "to": "help"
+            }
+          ]
+        },
+        {
+          "id": "help",
+          "name": "Resolve blocker",
+          "agentId": "",
+          "human": true,
+          "transitions": [
+            {
+              "outcome": "responded",
+              "to": "plan"
+            },
+            {
+              "outcome": "rejected",
+              "to": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

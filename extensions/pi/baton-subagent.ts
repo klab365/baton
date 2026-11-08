@@ -194,12 +194,6 @@ export function createExtension(run = runPi) {
 					update(
 						`Result: ${value.outcome} · ${value.summary}\nEvidence: ${(value.evidence as string[]).join("; ")}`,
 					);
-					if (ctx.hasUI)
-						ctx.ui.setWidget("baton-result", [
-							`Baton ${next.step.id} #${next.attempt}: ${value.outcome}`,
-							String(value.summary),
-							...(value.evidence as string[]).map((item) => `• ${item}`),
-						]);
 					return {
 						content: [{ type: "text", text: JSON.stringify(submission) }],
 						details: {},

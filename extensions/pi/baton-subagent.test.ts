@@ -133,8 +133,7 @@ test("passes current task and instructions to child and returns a submission", a
 	expect(f.calls[2]).toContain("baton_subagent");
 	expect(f.calls[2]).toContain("--no-skills");
 	expect(f.updates.at(-1)).toContain("Result: approved");
-	expect(f.widgets[0]).toContain("Reviewed");
-	expect(f.widgets[0]).toContain("• diff");
+	expect(f.widgets).toHaveLength(0);
 	expect(f.statuses.some((status) => status?.includes("attempt 3"))).toBe(true);
 	expect(f.statuses.at(-1)).toBeUndefined();
 });
