@@ -38,6 +38,8 @@ jobs:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch newly created release tags
+        run: git fetch --tags origin
       - name: Create or update release PR
         uses: release-plz/action@v0.5
         with:
