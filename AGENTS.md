@@ -26,7 +26,16 @@ GitHub Actions runs these checks on pull requests. Run the matching `mise` tasks
 - Commands represent application use cases, not individual helper functions. Keep domain rules in `domain/`; have feature handlers coordinate ports and domain logic.
 - Compose the mediator and inject adapter resources in `baton-server`. HTTP routes should validate/translate HTTP input, dispatch with `state.mediator.send(...)`, and map results/errors to HTTP responses; they should not implement use cases or access repositories directly.
 
+## Rust conventions
+
+- Follow the existing crate and module patterns. Prefer explicit domain types and `Result`-based error handling; propagate useful context at boundaries rather than using `unwrap` or `expect` on recoverable failures.
+- Keep async operations non-blocking where practical, and avoid holding locks across `.await` unless required. Add focused tests for changed behavior and failure paths.
+
 ## Web UI conventions
+
+- Use the existing Svelte 5 and SvelteKit patterns: prefer runes for new reactive state, derive values with `$derived`, and reserve `$effect` for synchronization with external state. Follow existing route and data-loading conventions.
+- Keep TypeScript types explicit at API and component boundaries; reuse generated API types instead of duplicating DTOs or bypassing checks with `any` or unchecked assertions.
+- Use semantic HTML and accessible labels, keyboard interactions, and feedback for loading and error states.
 
 - Keep the SvelteKit interface visually consistent: use shared components under `packages/baton-web/components/` for buttons, fields, status feedback, dialogs, panels, and resource selection. Do not introduce one-off route-local replacements for them.
 - Use `ResourceSelect.svelte` (Bits UI) for application option pickers. Do not add native `<select>` controls to new or updated UI; extend the shared component when a picker needs a new presentation.
