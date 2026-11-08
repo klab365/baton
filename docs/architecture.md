@@ -14,9 +14,9 @@ Browser → embedded SvelteKit UI → HTTP /api → Axum (baton-server)
 
 - `baton-core` owns domain models and rules, feature commands and handlers, and outbound ports. `medi-rs` dispatches application commands to handlers. The core does not implement HTTP, Git, filesystem persistence or model-provider integrations.
 - `baton-adapters` implements those ports: local repositories, Git worktrees, credentials, skill discovery and agent runtimes. The configured runtime selects Rig or the deterministic fake runtime according to each agent's settings.
-- `baton-server` composes adapters and mediator resources, exposes Axum routes and translates between HTTP DTOs and application commands. It also generates the TypeScript DTOs in `web/lib/generated/`.
+- `baton-server` composes adapters and mediator resources, exposes Axum routes and translates between HTTP DTOs and application commands. It also generates the TypeScript DTOs in `packages/baton-web/lib/generated/`.
 - `baton-cli` starts the API and embedded web UI for a project and provides direct commands for running pipelines and managing task/run lifecycle.
-- `web/` contains the client-side SvelteKit UI. Release builds embed its static assets in the Rust server and serve API requests from the same origin. During development Vite proxies `/api` to `BATON_API_URL` (default `http://127.0.0.1:5173`).
+- `packages/baton-web/` contains the client-side SvelteKit UI. Release builds embed its static assets in the Rust server and serve API requests from the same origin. During development Vite proxies `/api` to `BATON_API_URL` (default `http://127.0.0.1:5173`).
 
 ## Request and execution lifecycle
 

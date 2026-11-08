@@ -28,9 +28,9 @@ GitHub Actions runs these checks on pull requests. Run the matching `mise` tasks
 
 ## Web UI conventions
 
-- Keep the SvelteKit interface visually consistent: use shared components under `web/components/` for buttons, fields, status feedback, dialogs, panels, and resource selection. Do not introduce one-off route-local replacements for them.
+- Keep the SvelteKit interface visually consistent: use shared components under `packages/baton-web/components/` for buttons, fields, status feedback, dialogs, panels, and resource selection. Do not introduce one-off route-local replacements for them.
 - Use `ResourceSelect.svelte` (Bits UI) for application option pickers. Do not add native `<select>` controls to new or updated UI; extend the shared component when a picker needs a new presentation.
-- Reuse the dark workspace design tokens and status semantics from `web/app.css`; do not hard-code divergent light-theme colors in route-local styles.
+- Reuse the dark workspace design tokens and status semantics from `packages/baton-web/app.css`; do not hard-code divergent light-theme colors in route-local styles.
 
 ## API and runtime boundaries
 

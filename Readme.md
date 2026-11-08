@@ -57,11 +57,11 @@ See the [agent setup guide](docs/getting-started-for-agents.md) for what the age
 
 ```sh
 mise install
-bun install --frozen-lockfile
+(cd packages/baton-web && bun install --frozen-lockfile)
 mise run dev
 ```
 
-This starts the API and Vite development UI using `examples/demo`. The API is on port 5173 and Vite on port 5174, proxying `/api` to the backend. To build a standalone binary from source, run `bun run build` followed by `BATON_WEB_DIR="$PWD/build" cargo build --release -p baton-cli`. Without `BATON_WEB_DIR`, Rust builds show a placeholder instead of the embedded UI. To run checks:
+This starts the API and Vite development UI using `examples/demo`. The API is on port 5173 and Vite on port 5174, proxying `/api` to the backend. To build a standalone binary from source, run `(cd packages/baton-web && bun run build)` followed by `BATON_WEB_DIR="$PWD/packages/baton-web/build" cargo build --release -p baton-cli`. Without `BATON_WEB_DIR`, Rust builds show a placeholder instead of the embedded UI. To run checks:
 
 ```sh
 mise run check-format

@@ -20,7 +20,7 @@ impl Fixture {
         fs::create_dir(path.join(".baton")).unwrap();
         fs::write(
             path.join(".baton/config.json"),
-            include_str!("../examples/session-factory/.baton/config.json"),
+            include_str!("../../../examples/session-factory/.baton/config.json"),
         )
         .unwrap();
         fs::write(path.join("uncommitted"), "preserve").unwrap();
