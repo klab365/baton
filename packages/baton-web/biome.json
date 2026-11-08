@@ -3,6 +3,7 @@
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
+		"root": "../..",
 		"useIgnoreFile": true
 	},
 	"files": {
@@ -25,7 +26,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["web/lib/generated/**"],
+			"includes": ["lib/generated/**"],
 			"formatter": { "enabled": false },
 			"linter": { "enabled": false }
 		},

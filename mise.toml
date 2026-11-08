@@ -7,11 +7,11 @@ rust = "stable"
 _.file = ".env"
 
 [hooks]
-postinstall = "bun install --frozen-lockfile"
+postinstall = "cd packages/baton-web && bun install --frozen-lockfile"
 
 [tasks.dev]
 description = "Run the SvelteKit UI and Rust API in the demo project"
-run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; bun run dev -- --host 127.0.0.1 --port 5174'"
+run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; cd packages/baton-web && bun run dev -- --host 127.0.0.1 --port 5174'"
 
 [tasks.server]
 description = "Run the Rust API server for the demo project"
@@ -27,11 +27,11 @@ run = "cargo fmt --all -- --check"
 
 [tasks.format-web]
 description = "Format web source files"
-run = "bun run format"
+run = "cd packages/baton-web && bun run format"
 
 [tasks.check-format-web]
 description = "Check web source formatting"
-run = "bun run check-format"
+run = "cd packages/baton-web && bun run check-format"
 
 [tasks.lint-rust]
 description = "Lint Rust workspace"
@@ -39,7 +39,7 @@ run = "cargo clippy --workspace --all-targets -- -D warnings"
 
 [tasks.lint-web]
 description = "Lint web source files"
-run = "bun run lint"
+run = "cd packages/baton-web && bun run lint"
 
 [tasks.generate-types]
 description = "Generate TypeScript DTO types from Rust"
@@ -47,12 +47,12 @@ run = "cargo run -p baton-server --bin generate-types"
 
 [tasks.check-generated-types]
 description = "Check committed TypeScript DTO types match Rust"
-run = "cargo run -p baton-server --bin generate-types && git diff --exit-code -- web/lib/generated"
+run = "cargo run -p baton-server --bin generate-types && git diff --exit-code -- packages/baton-web/lib/generated"
 
 [tasks.check]
 description = "Run generated-type, Svelte, and TypeScript checks"
 depends = ["check-generated-types"]
-run = "bun run check"
+run = "cd packages/baton-web && bun run check"
 
 [tasks.test]
 description = "Run Rust workspace tests"
@@ -65,8 +65,8 @@ run = "bun test extensions/"
 [tasks.test-embedded-web]
 description = "Build the web UI and test it embedded in the Rust server"
 run = [
-  "bun run build",
-  'BATON_WEB_DIR="$PWD/build" cargo test --locked -p baton-server --lib serves_embedded_web_build -- --ignored',
+  "cd packages/baton-web && bun run build",
+  'BATON_WEB_DIR="$PWD/packages/baton-web/build" cargo test --locked -p baton-server --lib serves_embedded_web_build -- --ignored',
 ]
 
 [tasks.build-rust]
@@ -75,7 +75,7 @@ run = "cargo build --workspace"
 
 [tasks.build-web]
 description = "Build the SvelteKit UI"
-run = "bun run build"
+run = "cd packages/baton-web && bun run build"
 
 [tasks.format]
 description = "Format Rust and web source files"

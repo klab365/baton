@@ -13,4 +13,5 @@ changelog_update = true
 git_release_enable = true
 git_tag_enable = true
 git_tag_name = "v{{ version }}"
-changelog_include = ["baton-core", "baton-adapters", "baton-server"]
+changelog_path = "CHANGELOG.md"
+changelog_include = ["baton-core", "baton-adapters", "baton-server", "baton-web"]

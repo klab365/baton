@@ -5,12 +5,12 @@ const config = {
 	kit: {
 		adapter: adapter({ fallback: "index.html" }),
 		alias: {
-			$components: "web/components",
+			$components: "components",
 		},
 		files: {
-			lib: "web/lib",
-			routes: "web/routes",
-			appTemplate: "web/app.html",
+			lib: "lib",
+			routes: "routes",
+			appTemplate: "app.html",
 		},
 	},
 };
