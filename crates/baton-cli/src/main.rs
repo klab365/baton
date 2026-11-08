@@ -8,6 +8,34 @@ use std::{
 
 const BATON_GITIGNORE: &str = "runs/\ntasks/\n";
 
+fn install_pi(
+    version: &str,
+    release_tag: Option<&str>,
+    pi: &std::path::Path,
+) -> anyhow::Result<()> {
+    let tag = format!("v{version}");
+    if release_tag != Some(tag.as_str()) {
+        anyhow::bail!(
+            "This development build has no matching published Pi package. Install an official Baton release, or use `pi install /absolute/path/to/baton` for local development."
+        );
+    }
+    println!("Installing Baton Pi package for {tag}...");
+    io::stdout().flush()?;
+    let source = format!("git:github.com/klab365/baton@{tag}");
+    let status = std::process::Command::new(pi)
+        .args(["install", &source])
+        .status()
+        .map_err(|error| {
+            anyhow::anyhow!("Could not run Pi: {error}. Install Pi and make sure `pi` is on PATH.")
+        })?;
+    if !status.success() {
+        anyhow::bail!(
+            "Pi could not install {source} ({status}). Check that the release tag exists and Pi can access GitHub, then retry `baton install pi`."
+        );
+    }
+    Ok(())
+}
+
 fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
     let baton_dir = project.join(".baton");
     let was_missing = !baton_dir.exists();
@@ -41,6 +69,17 @@ async fn load_project_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if env::args().nth(1).as_deref() == Some("install") {
+        let args: Vec<_> = env::args().skip(2).collect();
+        if args != ["pi"] {
+            anyhow::bail!("Usage: baton install pi");
+        }
+        return install_pi(
+            env!("CARGO_PKG_VERSION"),
+            option_env!("BATON_RELEASE_TAG"),
+            std::path::Path::new("pi"),
+        );
+    }
     if env::args().nth(1).as_deref() == Some("work") {
         return work::run(env::args().skip(2).collect()).await;
     }
@@ -214,6 +253,54 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn development_and_mismatched_release_builds_are_rejected() {
+        for tag in [None, Some("v0.4.0"), Some("main")] {
+            let error = install_pi("0.5.0", tag, std::path::Path::new("pi"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("development build"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installs_the_selected_release_and_reports_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let pi = temp.path().join("pi");
+        let output = temp.path().join("args");
+        std::fs::write(
+            &pi,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                output.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for version in ["0.4.0", "0.5.0"] {
+            install_pi(version, Some(&format!("v{version}")), &pi).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(&output).unwrap(),
+                format!("install\ngit:github.com/klab365/baton@v{version}\n")
+            );
+        }
+        std::fs::write(&pi, "#!/bin/sh\nexit 1\n").unwrap();
+        assert!(
+            install_pi("0.5.0", Some("v0.5.0"), &pi)
+                .unwrap_err()
+                .to_string()
+                .contains("release tag exists")
+        );
+        assert!(
+            install_pi("0.5.0", Some("v0.5.0"), &temp.path().join("missing"))
+                .unwrap_err()
+                .to_string()
+                .contains("on PATH")
+        );
     }
 
     #[test]

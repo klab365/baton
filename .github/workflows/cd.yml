@@ -93,6 +93,7 @@ jobs:
       - name: Build and package
         env:
           TARGET: ${{ matrix.target }}
+          BATON_RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           BATON_WEB_DIR="$GITHUB_WORKSPACE/build" cargo build --locked --release -p baton-cli --target "$TARGET"
           tar -czf "baton-${TARGET}.tar.gz" -C "target/${TARGET}/release" baton
