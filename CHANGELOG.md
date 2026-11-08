@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/klab365/baton/compare/v0.6.1...v0.6.2) - 2026-11-08
+
+### Fixed
+
+- secure local API against cross-origin requests
+
 ## [0.6.1](https://github.com/klab365/baton/compare/v0.6.0...v0.6.1) - 2026-11-08
 
 ### Changed
