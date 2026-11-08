@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3](https://github.com/klab365/baton/compare/v0.6.2...v0.6.3) - 2026-11-08
+
+### Fixed
+
+- release inherited configuration locks
+- prevent orphaned configuration locks
+- recover runs despite orphaned temporary files
+
 ## [0.6.2](https://github.com/klab365/baton/compare/v0.6.1...v0.6.2) - 2026-11-08
 
 ### Fixed
