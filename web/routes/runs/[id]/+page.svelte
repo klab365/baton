@@ -6,6 +6,7 @@ import { replaySteps } from "$lib/run-replay";
 import Button from "../../../components/Button.svelte";
 import DetailPanel from "../../../components/DetailPanel.svelte";
 import MultilineInput from "../../../components/MultilineInput.svelte";
+import Markdown from "../../../components/Markdown.svelte";
 import PageHeader from "../../../components/PageHeader.svelte";
 import RunActivity from "../../../components/RunActivity.svelte";
 import StatusMessage from "../../../components/StatusMessage.svelte";
@@ -152,7 +153,7 @@ async function cancel() {
 {#if data.run.status === "waitingHuman"}
 <div class="action-panel"><DetailPanel title="Your input is needed">
 	<p class="action-intro">The run is paused at <strong>{data.run.currentStep}</strong>. Choose an outcome to continue.</p>
-	{#if previousAttempt?.output}<div class="action-context"><span>FROM {previousAttempt.stepId}{previousAttempt.outcome ? ` · ${previousAttempt.outcome}` : ""}</span><p>{previousAttempt.output}</p></div>{/if}
+	{#if previousAttempt?.output}<div class="action-context"><span>FROM {previousAttempt.stepId}{previousAttempt.outcome ? ` · ${previousAttempt.outcome}` : ""}</span><Markdown value={previousAttempt.output} /></div>{/if}
 	<label for="human-response">Your response <span class="muted">(optional)</span></label>
 	<MultilineInput id="human-response" name="human-response" bind:value={responseText} disabled={actionLoading || cancelling} rows={4} placeholder="Add context for the next step" />
 	<div class="page-actions">{#each humanActions as outcome}<Button loading={actionLoading} disabled={cancelling} onclick={() => act(outcome)}>{outcome === "responded" ? "Send response" : outcome === "approved" ? "Approve" : outcome === "rejected" ? "Reject" : outcome}</Button>{/each}</div>
@@ -168,7 +169,7 @@ async function cancel() {
 <div class="task-detail-layout">
 	<DetailPanel title="Replay · newest first" id="steps">
 		<p class="muted">{data.run.session ? "External work session: runtime activity and handoff context may not be recorded." : "Only persisted results, transitions and handoff context are shown."}{#if attempts.some((step: { attempt: number }) => !step.attempt)} Some older steps lack attempt numbers; their saved order is shown in reverse.{/if}</p>
-		{#if attempts.length}<ol class="run-steps timeline">{#each [...attempts].reverse() as step, index (index)}{@const stepTrace = (data.run.trace ?? []).filter((entry: { attempt?: number }) => step.attempt > 0 && entry.attempt === step.attempt)}<li id={`attempt-${step.attempt}`}><header><div class="step-heading"><span class="step-number">{step.attempt || "–"}</span><div><strong>{step.stepId}</strong><div class="step-meta">{isHuman(step.stepId) ? "Human decision" : step.agentId}</div></div></div><StatusBadge status={step.status} /></header>{#if step.outcome}<p class="step-route"><span>{step.outcome}</span>{#if step.selectedTransition}<span aria-hidden="true">→</span><span>{step.selectedTransition.to ?? "End run"}</span>{/if}</p>{/if}{#if step.output?.trim()}<div class="step-result"><span>{isHuman(step.stepId) ? "RESPONSE" : "RESULT"}</span>{#if step.output.length > 500}<p>{step.output.slice(0, 350)}…</p><details><summary>Show full result</summary><p>{step.output}</p></details>{:else}<p>{step.output}</p>{/if}</div>{:else if isHuman(step.stepId) && step.outcome}<p class="muted">No comment provided.</p>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}{#if stepTrace.length}<RunActivity entries={stepTrace} />{:else if !isHuman(step.stepId) && step.status !== "running"}<p class="muted">No activity linked to this attempt.</p>{/if}{#if step.input}<details><summary>Handoff / context received by this step</summary><pre>{step.input}</pre></details>{/if}</li>{/each}</ol>{:else}<p class="muted">No steps have started yet.</p>{/if}
+		{#if attempts.length}<ol class="run-steps timeline">{#each [...attempts].reverse() as step, index (index)}{@const stepTrace = (data.run.trace ?? []).filter((entry: { attempt?: number }) => step.attempt > 0 && entry.attempt === step.attempt)}<li id={`attempt-${step.attempt}`}><header><div class="step-heading"><span class="step-number">{step.attempt || "–"}</span><div><strong>{step.stepId}</strong><div class="step-meta">{isHuman(step.stepId) ? "Human decision" : step.agentId}</div></div></div><StatusBadge status={step.status} /></header>{#if step.outcome}<p class="step-route"><span>{step.outcome}</span>{#if step.selectedTransition}<span aria-hidden="true">→</span><span>{step.selectedTransition.to ?? "End run"}</span>{/if}</p>{/if}{#if step.output?.trim()}<div class="step-result"><span>{isHuman(step.stepId) ? "RESPONSE" : "RESULT"}</span>{#if step.output.length > 500}<Markdown value={step.output.slice(0, 350) + "…"} /><details><summary>Show full result</summary><Markdown value={step.output} /></details>{:else}<Markdown value={step.output} />{/if}</div>{:else if isHuman(step.stepId) && step.outcome}<p class="muted">No comment provided.</p>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}{#if stepTrace.length}<RunActivity entries={stepTrace} />{:else if !isHuman(step.stepId) && step.status !== "running"}<p class="muted">No activity linked to this attempt.</p>{/if}{#if step.input}<details><summary>Handoff / context received by this step</summary><pre>{step.input}</pre></details>{/if}</li>{/each}</ol>{:else}<p class="muted">No steps have started yet.</p>{/if}
 	</DetailPanel>
 	<DetailPanel title="Run details" id="diagnostics">
 		<dl class="task-facts"><div><dt>Task</dt><dd>{#if data.task}<a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a>{:else if data.run.taskId}Unavailable task ({data.run.taskId}){:else}No linked task{/if}</dd></div><div><dt>Run ID</dt><dd><code>{data.run.id}</code></dd></div><div><dt>Pipeline</dt><dd>{data.run.pipelineId}</dd></div><div><dt>Started</dt><dd>{new Date(data.run.startedAt).toLocaleString()}</dd></div><div><dt>Ended</dt><dd>{data.run.endedAt ? new Date(data.run.endedAt).toLocaleString() : "Not ended"}</dd></div><div><dt>Duration</dt><dd>{data.run.durationMs == null ? "Not available" : `${data.run.durationMs} ms`}</dd></div></dl>
@@ -205,7 +206,7 @@ async function cancel() {
 		border-radius: 0.5rem;
 		background: var(--surface-muted);
 	}
-	.action-context p, .step-result p {
+	.action-context :global(.markdown), .step-result :global(.markdown) {
 		margin: 0.5rem 0 0;
 		color: var(--text);
 		line-height: 1.55;
