@@ -4,7 +4,7 @@ use crate::{
         project::Outcome,
     },
     features::{human_actions::resume_human, pipeline_engine::utc_now},
-    ports::{runs::RunRepository, runtime::AgentRuntimeFactory},
+    ports::{runs::RunRepository, runtime::AgentRuntimeFactory, tasks::TaskRepository},
 };
 use medi_rs::{MediCommand, medi_handler, medi_module};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct RunFeatureResources {
     pub runs: Arc<dyn RunRepository>,
+    pub tasks: Arc<dyn TaskRepository>,
     pub runtime_factory: Arc<dyn AgentRuntimeFactory>,
 }
 
@@ -123,6 +124,11 @@ async fn respond_to_run_handler(
 ) -> Result<PipelineRun, String> {
     let lease = resources.runs.acquire_action_lease(&command.id)?;
     let run = resources.runs.load(&command.id)?;
+    let task_lease = run
+        .task_id
+        .as_deref()
+        .map(|id| resources.tasks.acquire_operation_lease(id))
+        .transpose()?;
     let config = run
         .config_snapshot
         .clone()
@@ -131,15 +137,26 @@ async fn respond_to_run_handler(
         .runtime_factory
         .create(&config, &run.pipeline_id)?;
     let runs = resources.runs;
+    let tasks = resources.tasks;
     tokio::task::spawn_blocking(move || {
         let _lease = lease;
-        resume_human(
+        let _task_lease = task_lease;
+        let run = resume_human(
             &command.id,
             command.outcome,
             &command.response,
             runtime.as_mut(),
             runs.as_ref(),
-        )
+        )?;
+        if run.status == Status::Succeeded
+            && let Some(id) = &run.task_id
+        {
+            let mut task = tasks.load(id)?;
+            task.status = crate::domain::tasks::TaskStatus::Done;
+            task.updated_at = utc_now().max(task.updated_at.clone());
+            tasks.save(&task)?;
+        }
+        Ok(run)
     })
     .await
     .map_err(|error| error.to_string())?

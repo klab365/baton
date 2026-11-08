@@ -139,7 +139,7 @@ impl AppState {
         let skill_downloader: Arc<dyn baton_core::ports::skill_downloader::SkillDownloader> =
             Arc::new(baton_adapters::skill_downloader::GithubSkillDownloader::default());
         let task_resources = TaskFeatureResources {
-            tasks: task_repository,
+            tasks: task_repository.clone(),
             runs: run_repository.clone(),
             project_config: repository.clone(),
             runtime_factory: runtime_factory.clone(),
@@ -147,6 +147,7 @@ impl AppState {
         };
         let run_resources = RunFeatureResources {
             runs: run_repository,
+            tasks: task_repository,
             runtime_factory,
         };
         let mediator = Arc::new(mediator::new(
