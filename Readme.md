@@ -31,7 +31,7 @@ cd /path/to/project
 baton
 ```
 
-On first launch Baton creates `.baton/` and initializes the project configuration automatically. Open <http://127.0.0.1:5173> for the embedded UI. `BATON_PORT` changes the starting port. If it is occupied, Baton uses the next available port and prints the address. Configure credentials and agents, create a pipeline, then create and start a task. Follow the [Software Factory getting started guide](docs/getting-started.md) for a complete example. The `fake` runtime is available for offline testing. Agent execution requires Git; real model execution also requires a compatible provider credential.
+On first launch Baton creates `.baton/` and initializes the project configuration automatically. Open <http://127.0.0.1:5173> for the embedded UI. `BATON_HOST` may only resolve to loopback addresses; external binding is not supported. Baton has no authentication and must not be exposed through a reverse proxy. `BATON_PORT` changes the starting port. If it is occupied, Baton uses the next available port and prints the address. Configure credentials and agents, create a pipeline, then create and start a task. Follow the [Software Factory getting started guide](docs/getting-started.md) for a complete example. The `fake` runtime is available for offline testing. Agent execution requires Git; real model execution also requires a compatible provider credential.
 
 A worktree is **not a sandbox**: agents may run commands with the permissions of the Baton process. Use a container, VM or dedicated OS user for stronger isolation. Task prompts and run data are local and can be sensitive.
 
@@ -61,7 +61,7 @@ mise install
 mise run dev
 ```
 
-This starts the API and Vite development UI using `examples/demo`. The API is on port 5173 and Vite on port 5174, proxying `/api` to the backend. To build a standalone binary from source, run `(cd packages/baton-web && bun run build)` followed by `BATON_WEB_DIR="$PWD/packages/baton-web/build" cargo build --release -p baton-cli`. Without `BATON_WEB_DIR`, Rust builds show a placeholder instead of the embedded UI. To run checks:
+This starts the API and Vite development UI using `examples/demo`. The API is on port 5173 and Vite on port 5174, proxying `/api` to the backend. The development proxy validates local Host and browser Origin headers before forwarding API requests, including mutations. It is intended only for local development and must not be exposed remotely. To build a standalone binary from source, run `(cd packages/baton-web && bun run build)` followed by `BATON_WEB_DIR="$PWD/packages/baton-web/build" cargo build --release -p baton-cli`. Without `BATON_WEB_DIR`, Rust builds show a placeholder instead of the embedded UI. To run checks:
 
 ```sh
 mise run check-format

@@ -324,8 +324,12 @@ pub async fn serve_with_project_lock(
     _project_lock: ProjectProcessLock,
 ) -> anyhow::Result<()> {
     let listener = bind_available_port(host, port).await?;
-    println!("Web interface: http://{}", listener.local_addr()?);
-    axum::serve(listener, router(AppState::new(project_dir)))
+    let address = listener.local_addr()?;
+    println!("Web interface: http://{address}");
+    let app = router(AppState::new(project_dir)).layer(axum::middleware::from_fn(
+        move |request, next| request_boundary(address.port(), request, next),
+    ));
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
@@ -333,10 +337,68 @@ pub async fn serve_with_project_lock(
     Ok(())
 }
 
+async fn request_boundary(
+    port: u16,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::Method;
+    let headers = request.headers();
+    let mut hosts = headers.get_all(header::HOST).iter();
+    let host = hosts.next().and_then(|value| value.to_str().ok());
+    let valid_host = host
+        .and_then(|value| value.parse::<axum::http::uri::Authority>().ok())
+        .is_some_and(|authority| {
+            let name = authority.host();
+            let local = name.eq_ignore_ascii_case("localhost")
+                || name
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback());
+            local && authority.port_u16() == Some(port) && !authority.as_str().contains('@')
+        });
+    if !valid_host || hosts.next().is_some() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        let mut origins = headers.get_all(header::ORIGIN).iter();
+        if let Some(origin) = origins.next() {
+            let valid_origin = origin
+                .to_str()
+                .ok()
+                .and_then(|value| value.strip_prefix("http://"))
+                == host;
+            if !valid_origin || origins.next().is_some() {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+        } else if headers
+            .get("sec-fetch-site")
+            .is_some_and(|value| value != "none" && value != "same-origin")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
+    next.run(request).await
+}
+
 async fn bind_available_port(host: &str, port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    let addresses: Vec<_> = tokio::net::lookup_host((host, port)).await?.collect();
+    if addresses.is_empty() || addresses.iter().any(|address| !address.ip().is_loopback()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Baton only listens on loopback addresses",
+        ));
+    }
     let mut port = port;
     loop {
-        match tokio::net::TcpListener::bind((host, port)).await {
+        let addresses: Vec<_> = addresses
+            .iter()
+            .map(|address| std::net::SocketAddr::new(address.ip(), port))
+            .collect();
+        match tokio::net::TcpListener::bind(addresses.as_slice()).await {
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse && port < u16::MAX => {
                 port += 1;
             }
@@ -378,6 +440,88 @@ mod web_tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn request_boundary_rejects_untrusted_requests_before_mutation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let count = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .fallback({
+                let count = count.clone();
+                move || async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::OK
+                }
+            })
+            .layer(axum::middleware::from_fn(|request, next| {
+                request_boundary(5173, request, next)
+            }));
+        for (host, origin, expected) in [
+            (
+                "127.0.0.1:5173",
+                Some("http://127.0.0.1:5173"),
+                StatusCode::OK,
+            ),
+            ("localhost:5173", None, StatusCode::OK),
+            ("[::1]:5173", None, StatusCode::OK),
+            (
+                "127.0.0.1:5173",
+                Some("http://evil.test"),
+                StatusCode::FORBIDDEN,
+            ),
+            ("127.0.0.1:5173", Some("null"), StatusCode::FORBIDDEN),
+            ("evil.test:5173", None, StatusCode::FORBIDDEN),
+            ("localhost:9999", None, StatusCode::FORBIDDEN),
+            ("localhost", None, StatusCode::FORBIDDEN),
+        ] {
+            let mut request = Request::post("/api/tasks")
+                .header(header::HOST, host)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            assert_eq!(
+                app.clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                expected
+            );
+        }
+        for request in [
+            Request::get("/").body(Body::empty()).unwrap(),
+            Request::get("/")
+                .header(header::HOST, "localhost:5173")
+                .header(header::HOST, "evil.test:5173")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/")
+                .header(header::HOST, "localhost:5173")
+                .header(header::ORIGIN, "http://localhost:5173")
+                .header(header::ORIGIN, "http://evil.test")
+                .body(Body::empty())
+                .unwrap(),
+            Request::post("/")
+                .header(header::HOST, "localhost:5173")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn rejects_external_bind_addresses() {
+        assert!(bind_available_port("0.0.0.0", 0).await.is_err());
+        assert!(bind_available_port("::", 0).await.is_err());
+        assert!(bind_available_port("127.0.0.1", 0).await.is_ok());
+    }
 
     #[tokio::test]
     async fn board_stream_notifies_task_and_run_changes() {
