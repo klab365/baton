@@ -197,6 +197,14 @@ fn ensure_gitignore(parent: &Path) -> Result<(), String> {
     Ok(())
 }
 
+struct ConfigurationLock(fs::File);
+
+impl Drop for ConfigurationLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 fn persist(path: &Path, expected: Option<&str>, contents: &[u8]) -> Result<(), String> {
     let parent = path.parent().expect("configuration path has a parent");
     fs::create_dir_all(parent)
@@ -208,6 +216,8 @@ fn persist(path: &Path, expected: Option<&str>, contents: &[u8]) -> Result<(), S
         .map_err(|e| format!("Could not open configuration lock: {e}"))?;
     lock.try_lock()
         .map_err(|e| format!("Could not lock configuration (another writer may be active): {e}"))?;
+    // Explicitly unlock even if a forked process inherited the file descriptor.
+    let _lock = ConfigurationLock(lock);
     ensure_gitignore(parent)?;
     match expected {
         Some(revision) => {
@@ -363,6 +373,19 @@ mod tests {
             .await
             .unwrap();
         assert!(lock.exists());
+    }
+
+    #[test]
+    fn configuration_lock_releases_even_with_a_duplicated_handle() {
+        let fixture = Fixture::new();
+        fs::create_dir_all(&fixture.0).unwrap();
+        let file = fs::File::open(&fixture.0).unwrap();
+        file.try_lock().unwrap();
+        let duplicate = file.try_clone().unwrap();
+        drop(ConfigurationLock(file));
+        let other = fs::File::open(&fixture.0).unwrap();
+        other.try_lock().unwrap();
+        drop(duplicate);
     }
 
     #[tokio::test]
