@@ -7,7 +7,7 @@ use crate::{
     ports::{
         project_config::ProjectConfigRepository,
         runs::RunRepository,
-        runtime::{AgentRuntime, AgentRuntimeFactory},
+        runtime::{AgentRuntime, AgentRuntimeFactory, MAX_HANDOFF_BYTES},
         skills::SkillRepository,
         tasks::TaskRepository,
     },
@@ -134,7 +134,8 @@ pub fn start_task_run(
             worktree
         }
     };
-    let prompt = task.description.clone();
+    let prompt =
+        follow_up_prompt(&task.description, &related).map_err(TaskRunStartError::Pipeline)?;
     let previous_status = task.status;
     task.status = TaskStatus::Doing;
     task.updated_at = utc_now().max(task.updated_at.clone());
@@ -164,8 +165,14 @@ pub fn start_task_run(
             Ok(run)
         }
         Err(message) => {
-            if previous_status == TaskStatus::Draft {
-                task.status = TaskStatus::Draft;
+            if previous_status != TaskStatus::Doing
+                && !runs
+                    .list()
+                    .map_err(TaskRunStartError::Infrastructure)?
+                    .iter()
+                    .any(|run| run.id == run_id)
+            {
+                task.status = previous_status;
                 task.updated_at = utc_now().max(task.updated_at.clone());
                 task_repository
                     .save(task)
@@ -173,6 +180,96 @@ pub fn start_task_run(
             }
             Err(TaskRunStartError::Pipeline(message))
         }
+    }
+}
+
+fn follow_up_prompt(description: &str, runs: &[PipelineRun]) -> Result<String, String> {
+    let Some(previous) = runs
+        .iter()
+        .filter(|run| run.status == Status::Succeeded)
+        .max_by(|a, b| a.started_at.cmp(&b.started_at))
+    else {
+        return Ok(description.to_owned());
+    };
+    let header = format!(
+        "\n\nHandoffs from previous successful run {} (chronological):",
+        previous.id
+    );
+    let budget = MAX_HANDOFF_BYTES
+        .saturating_sub(description.len())
+        .min(8 * 1024);
+    if header.len() > budget {
+        return Err("Task description is too long to include the previous run reference".into());
+    }
+    let mut context = header;
+    let mut steps: Vec<_> = previous
+        .steps
+        .iter()
+        .filter(|step| {
+            step.attempt > 0
+                && step.status == Status::Succeeded
+                && step
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| !output.is_empty())
+        })
+        .collect();
+    steps.sort_by_key(|step| step.attempt);
+    for step in steps {
+        let entry = format!(
+            "\n\n{}. {}:\n{}",
+            step.attempt,
+            step.step_id,
+            step.output.as_deref().unwrap_or_default()
+        );
+        if context.len() + entry.len() > budget {
+            let marker = "\n\n[Further handoffs omitted due to size limit.]";
+            if context.len() + marker.len() <= budget {
+                let available = budget - context.len() - marker.len();
+                let mut end = available.min(entry.len());
+                while !entry.is_char_boundary(end) {
+                    end -= 1;
+                }
+                context.push_str(&entry[..end]);
+                context.push_str(marker);
+            }
+            break;
+        }
+        context.push_str(&entry);
+    }
+    Ok(format!("{description}{context}"))
+}
+
+#[cfg(test)]
+mod follow_up_tests {
+    use super::*;
+
+    fn run(id: &str, status: &str, started: &str, output: &str) -> PipelineRun {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "pipelineId": "p", "task": "old task", "startedAt": started,
+            "endedAt": null, "durationMs": null, "status": status,
+            "steps": [{"stepId": "build", "agentId": "agent", "status": "succeeded",
+                "input": "secret input", "output": output, "error": null, "attempt": 1}],
+            "trace": [{"occurredAt": "time", "kind": "event", "content": "secret trace"}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn uses_only_latest_successful_run_and_limits_handoffs() {
+        let runs = vec![
+            run("old", "succeeded", "1", "old output"),
+            run("chosen", "succeeded", "2", &"ä".repeat(10000)),
+            run("failed", "failed", "3", "failed output"),
+        ];
+        let prompt = follow_up_prompt("Follow up", &runs).unwrap();
+        assert!(prompt.contains("run chosen"));
+        assert!(!prompt.contains("old output") && !prompt.contains("failed output"));
+        assert!(!prompt.contains("secret input") && !prompt.contains("secret trace"));
+        assert!(prompt.contains("omitted due to size limit"));
+        assert!(prompt.len() <= "Follow up".len() + 8192);
+        assert!(follow_up_prompt(&"x".repeat(MAX_HANDOFF_BYTES), &runs).is_err());
+        assert_eq!(follow_up_prompt("First run", &[]).unwrap(), "First run");
     }
 }
 
@@ -231,6 +328,13 @@ async fn list_tasks_handler(
     _command: ListTasks,
 ) -> Result<Vec<Task>, String> {
     let mut tasks = resources.tasks.list()?;
+    for task in &mut tasks {
+        *task = reconcile_completed_task(
+            resources.tasks.as_ref(),
+            resources.runs.as_ref(),
+            task.clone(),
+        )?;
+    }
     tasks.sort_by(|left, right| {
         right
             .created_at
@@ -245,7 +349,35 @@ async fn get_task_handler(
     resources: TaskFeatureResources,
     command: GetTask,
 ) -> Result<Task, String> {
-    resources.tasks.load(&command.id)
+    let task = resources.tasks.load(&command.id)?;
+    reconcile_completed_task(resources.tasks.as_ref(), resources.runs.as_ref(), task)
+}
+
+fn reconcile_completed_task(
+    tasks: &dyn TaskRepository,
+    runs: &dyn RunRepository,
+    task: Task,
+) -> Result<Task, String> {
+    if task.status != TaskStatus::Doing {
+        return Ok(task);
+    }
+    let Ok(_lease) = tasks.acquire_operation_lease(&task.id) else {
+        return Ok(task);
+    };
+    let mut task = tasks.load(&task.id)?;
+    if task.status == TaskStatus::Doing
+        && runs
+            .list()?
+            .into_iter()
+            .filter(|run| run.task_id.as_deref() == Some(&task.id))
+            .max_by(|a, b| a.started_at.cmp(&b.started_at))
+            .is_some_and(|run| run.status == Status::Succeeded)
+    {
+        task.status = TaskStatus::Done;
+        task.updated_at = utc_now().max(task.updated_at.clone());
+        tasks.save(&task)?;
+    }
+    Ok(task)
 }
 
 #[medi_handler]

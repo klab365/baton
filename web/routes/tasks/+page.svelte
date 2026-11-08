@@ -156,7 +156,7 @@ function laneItems(lane: Lane) {
 	return items.filter((item) => item.lane === lane);
 }
 function canMove(item: BoardItem, from: Lane, to: Lane) {
-	return (from === "draft" || from === "done") && to === "doing";
+	return from === "draft" && to === "doing";
 }
 function dndType(lane: Lane) {
 	const item = items.find((candidate) => candidate.id === draggingTask);
@@ -299,7 +299,7 @@ const lanes: {
 							{#if lane.id === "draft"}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}>{busyTasks.includes(item.id) ? "Starting…" : "Start task"}<ArrowRight size={14} /></button>
 							{:else if lane.id === "approval"}<a class="card-action" href={`/runs/${item.run?.id}`}>Review run<ArrowRight size={14} /></a>
 							{:else if lane.id === "doing" && (item.run?.status === "failed" || item.run?.status === "limitExhausted")}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Retry</button>
-							{:else if lane.id === "done"}<button class="card-action" type="button" disabled={busyTasks.includes(item.id)} onclick={() => moveTask(item, "doing")}><RotateCcw size={14} /> Reopen & rerun</button>
+							{:else if lane.id === "done"}<a class="card-action" href={`/tasks/${item.id}#reopen`}><RotateCcw size={14} /> Reopen & rerun</a>
 							{/if}
 						</div>
 					</article>

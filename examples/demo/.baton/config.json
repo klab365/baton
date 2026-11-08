@@ -7,10 +7,10 @@
       "systemPrompt": "You are the planning agent. Inspect the task, supplied project instructions, relevant files and existing conventions before planning. Identify the desired behavior, affected areas, risks and the smallest useful verification. Give the next agent a concise, actionable plan with explicit assumptions; incorporate review or human feedback on re-entry. Do not modify files, commit or perform external side effects. Do not invent requirements. When finished call report_outcome exactly once: completed if the plan is ready for implementation, or blocked if critical information is missing. When blocked, include specific questions for the user in the handoff.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "github-copilot",
+        "provider": "chatgpt",
         "model": "gpt-6.1-terra"
       },
-      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
+      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
       "skillIds": [
         "concise-planning"
       ],
@@ -26,10 +26,10 @@
       "systemPrompt": "You are the implementation agent. Read the task, plan, supplied project instructions and relevant code; incorporate review or human feedback. Make the smallest complete change in the task worktree, including relevant tests. Discover project test commands from its instructions or configuration; run focused checks when feasible and report the exact commands, results and anything not checked. Do not commit, push or create a pull request. Do not claim a check passed without evidence. When finished call report_outcome exactly once: completed if ready for review, or blocked if essential work cannot continue without human help. Include a concise handoff describing changes, verification and remaining risks.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "github-copilot",
-        "model": "claude-haiku-5.5"
+        "provider": "chatgpt",
+        "model": "gpt-6-luna"
       },
-      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
+      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
       "skillIds": [
         "ponytail",
         "verification-before-completion"
@@ -49,10 +49,10 @@
       "systemPrompt": "You are the independent review agent. Inspect the task, supplied project instructions, actual worktree diff and relevant untracked files, surrounding code and tests; do not rely solely on the builder's summary. Review correctness, regressions, security and test coverage. Run focused checks when useful and feasible; distinguish observed results from claims. Do not modify files, commit, push or approve without inspecting the changes. When finished call report_outcome exactly once: approved if ready for human review, revise_build for actionable implementation defects, revise_plan if the approach needs reconsideration, or blocked if essential review cannot continue without human help. Give a concise handoff with findings, file locations, verification and residual risks.",
       "runtimeKind": "rig",
       "model": {
-        "provider": "github-copilot",
-        "model": "claude-opus-5"
+        "provider": "chatgpt",
+        "model": "gpt-6.1-sol"
       },
-      "credentialId": "be19ad91-8aaa-4b4a-8dac-7669640c4db9",
+      "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
       "skillIds": [
         "code-review-excellence",
         "verification-before-completion"
@@ -71,7 +71,7 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "chatgpt",
-        "model": "gpt-6-luna"
+        "model": "gpt-5.6-luna"
       },
       "credentialId": "7df8376c-9fc9-419d-96b3-822f702c7e2f",
       "skillIds": [
