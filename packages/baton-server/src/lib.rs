@@ -330,11 +330,10 @@ pub async fn serve_with_project_lock(
     let app = router(AppState::new(project_dir)).layer(axum::middleware::from_fn(
         move |request, next| request_boundary(address.port(), request, next),
     ));
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
+    tokio::select! {
+        result = axum::serve(listener, app).into_future() => result?,
+        result = tokio::signal::ctrl_c() => result?,
+    }
     Ok(())
 }
 
