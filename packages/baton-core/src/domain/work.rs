@@ -25,7 +25,6 @@ pub struct WorkSession {
 #[serde(rename_all = "camelCase")]
 pub struct WorkRecord {
     pub attempt: u32,
-    pub evidence: Vec<String>,
     pub checks: Vec<CheckResult>,
 }
 
@@ -45,7 +44,6 @@ pub struct WorkSubmission {
     pub attempt: u32,
     pub outcome: Outcome,
     pub summary: String,
-    pub evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

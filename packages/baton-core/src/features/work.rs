@@ -438,12 +438,6 @@ async fn submit_work_handler(
             &result.outcome,
         )?;
         bounded("Summary", &result.summary)?;
-        if result.evidence.is_empty() || result.evidence.len() > 32 {
-            return Err("Supply between 1 and 32 evidence references".into());
-        }
-        for evidence in &result.evidence {
-            bounded("Evidence", evidence)?;
-        }
         let mut routed = run.clone();
         let (_, pipeline) = graph(&run)?;
         route(&mut routed, pipeline, index, result.outcome.clone())?;
@@ -475,7 +469,6 @@ async fn submit_work_handler(
             .submissions
             .push(WorkRecord {
                 attempt: result.attempt,
-                evidence: result.evidence,
                 checks,
             });
         complete(&mut run, index, result.outcome, result.summary)?;

@@ -24,11 +24,11 @@ The project must have a configured `.baton/config.json` pipeline. Use an explici
 
 ## Execute the pipeline
 
-1. Fetch `baton work next --run ID`. Use the current step, agent instructions, assigned skills, allowed outcomes and configured checks. The active Pi/Claude Code/Codex session owns the conversation context: use the issue, acceptance criteria and user answers already present there. `next` does not replay task/history. Resolve supporting skill files under the returned `skillsDirectory/<skill-id>/`. If context is missing in a genuinely new session, explicitly inspect `baton work status --run ID` for the stored task and decisions, or ask the user when those records are insufficient. Do not load full status on every step.
+1. Fetch `baton work next --run ID`. Use the current step, agent instructions, assigned skills, allowed outcomes and configured checks. The active coding-agent session owns the conversation context: use the issue, acceptance criteria and user answers already present there. `next` does not replay task/history. Resolve supporting skill files under the returned `skillsDirectory/<skill-id>/`. If context is missing in a genuinely new session, explicitly inspect `baton work status --run ID` for the stored task and decisions, or ask the user when those records are insufficient. Do not load full status on every step.
 2. If the state is `waitingHuman`, show the question/context and stop worker execution until the user responds. Never manufacture approval. `respond` is a separate explicit human action, not an agent submission.
 3. If terminal (`succeeded`, `failed`, `cancelled`, `limitExhausted`), report the result and remaining work. Do not restart automatically or raise attempt limits to bypass a stop.
 4. Perform only the current step's work. Follow project instructions. Derive task acceptance criteria from the supplied issue/prompt; clarify material ambiguity instead of silently adding or replacing requirements. Pipeline checks are separate process gates.
-   - Delegate every agent step. In Pi, call the bundled `baton_subagent` tool with the run ID and relevant acceptance criteria and decisions as `context`. It fetches the original task, prior step results and human decisions, and the current work item, starts a separate Pi process, and returns a validated submission. Save that result as JSON and submit it unchanged. Do not pass the full conversation by default. Only you submit to Baton; never delegate human decisions. In other hosts, delegate using their separate-session subagent facility with equivalent context and result validation.
+   - Delegate every agent step using the host's separate-session subagent facility. Provide the original task, prior step results and human decisions, current work item, and relevant acceptance criteria and decisions. Validate the returned outcome and summary against the current work item, then submit the result unchanged. Do not pass the full conversation by default. Only you submit to Baton; never delegate human decisions.
    - If no suitable subagent tool is available, stop and explain the missing capability. Never silently execute the step yourself. If a subagent fails or returns an invalid result, stop without submitting and report the failure. A separate context is not a sandbox; the subagent shares the worktree and its host permissions.
 5. Write a JSON result file, then submit it:
 
@@ -38,15 +38,14 @@ The project must have a configured `.baton/config.json` pipeline. Use an explici
      "stepId": "build",
      "attempt": 1,
      "outcome": "completed",
-     "summary": "What changed and how the issue's acceptance criteria were checked",
-     "evidence": ["Relevant files, actual test commands/results, or artifact references"]
+     "summary": "What changed and how the issue's acceptance criteria were checked"
    }
    ```
 
    Use the exact revision, step ID and attempt returned by `next`, and an allowed outcome. Use `baton work submit --run ID --result /absolute/path/result.json`. Keep temporary result files out of commits and never include secrets.
 6. Fetch the next step and continue until a terminal state, a human decision, or a blocker. If submission is stale, fetch state again and reconcile; do not resubmit old work with a fresh revision blindly. If a configured check fails, fix the problem and resubmit the same current attempt when appropriate.
 
-Evidence references are agent reports, not independent verification. Baton records the checks it actually executes separately. A review performed in this same context is self-review; only claim independent review when a separate reviewer actually performed it. Use a host's separate reviewer capability only when available and authorized by the task/project workflow; otherwise surface an unmet independent-review requirement.
+Agent summaries are reports, not independent verification. Baton records the checks it actually executes separately. A review performed in this same context is self-review; only claim independent review when a separate reviewer actually performed it. Use a host's separate reviewer capability only when available and authorized by the task/project workflow; otherwise surface an unmet independent-review requirement.
 
 For a human response, present the current step and collect the user's decision. Submit `baton work respond --run ID --result FILE` with `revision`, `stepId`, `attempt`, `outcome`, and `response` reflecting that explicit decision. Stop on new ambiguity.
 

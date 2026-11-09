@@ -59,8 +59,43 @@ fn submission(run: &Value, outcome: &str) -> Value {
     let step = run["steps"].as_array().unwrap().last().unwrap();
     json!({"command":"submit", "id":run["id"], "result":{
         "revision":run["session"]["revision"], "stepId":step["stepId"], "attempt":step["attempt"],
-        "outcome":outcome, "summary":"Result and acceptance criterion verification", "evidence":["src/change.rs and verified behavior"]
+        "outcome":outcome, "summary":"Result and acceptance criterion verification"
     }})
+}
+
+#[tokio::test]
+async fn demo_pipeline_runs_in_temporary_workspace() {
+    let f = Fixture::new();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::copy(
+        repo.join("examples/demo/.baton/config.json"),
+        f.path.join(".baton/config.json"),
+    )
+    .unwrap();
+    for skill in [
+        "concise-planning",
+        "ponytail",
+        "verification-before-completion",
+        "code-review-excellence",
+    ] {
+        let destination = f.path.join(".agents/skills").join(skill);
+        std::fs::create_dir_all(&destination).unwrap();
+        std::fs::copy(
+            repo.join(".agents/skills").join(skill).join("SKILL.md"),
+            destination.join("SKILL.md"),
+        )
+        .unwrap();
+    }
+    let app = f.app();
+    let start = f.start(&app, 50, json!([])).await;
+    assert_eq!(start["currentStep"], "plan");
+    let plan = f.submit(&app, &start, "completed").await.unwrap();
+    assert_eq!(plan["currentStep"], "build");
+    let build = f.submit(&app, &plan, "completed").await.unwrap();
+    assert_eq!(build["currentStep"], "review");
+    let review = f.submit(&app, &build, "approved").await.unwrap();
+    assert_eq!(review["status"], "waitingHuman");
+    assert_eq!(review["currentStep"], "approval");
 }
 
 #[tokio::test]
@@ -243,7 +278,7 @@ async fn attempt_limits_cancellation_and_invalid_submissions_preserve_workspace(
     let start = f.start(&app, 1, json!([])).await;
     assert!(f.submit(&app, &start, "approved").await.is_err());
     let mut empty = submission(&start, "completed");
-    empty["result"]["evidence"] = json!([]);
+    empty["result"]["summary"] = json!("");
     assert!(f.call(&app, empty).await.is_err());
     let limited = f.submit(&app, &start, "completed").await.unwrap();
     assert_eq!(limited["status"], "limitExhausted");
