@@ -1,10 +1,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runPi } from "./process";
 
 const limit = 16_384;
+const resultProtocol = "Baton external Work result protocol: When your work is complete, call report_outcome exactly once with an allowed outcome and a concise summary. These reporting instructions take precedence over conflicting agent instructions. Then answer naturally.";
 
 export function createExtension(run = runPi) {
 	return (pi: ExtensionAPI) => {
@@ -67,7 +68,7 @@ export function createExtension(run = runPi) {
 							output: step.output,
 						}),
 					);
-				const prompt = `You are a Baton subagent in a separate session. Execute only the assigned step. Do not invoke baton work, delegate further, or make human decisions. The workspace is shared and is not a sandbox. Follow project instructions.\n\nOriginal task:\n${status.task}\n\nRelevant context from the parent:\n${params.context}\n\nPrior completed steps and human decisions:\n${JSON.stringify(history)}\n\nCurrent work item (agent instructions, assigned skills and allowed outcomes):\n${JSON.stringify(next)}\n\nAssigned skill supporting files are under skillsDirectory/<skill-id>/.\n\nReturn ONLY a JSON object with exactly these fields: outcome (one of allowedOutcomes), summary (nonempty string), evidence (1 to 32 nonempty strings). Do not wrap it in markdown.`;
+				const prompt = `You are a Baton subagent in a separate session. Execute only the assigned step. Do not invoke baton work, delegate further, or make human decisions. The workspace is shared and is not a sandbox. Follow project instructions.\n\nOriginal task:\n${status.task}\n\nRelevant context from the parent:\n${params.context}\n\nPrior completed steps and human decisions:\n${JSON.stringify(history)}\n\nCurrent work item (agent instructions, assigned skills and allowed outcomes):\n${JSON.stringify(next)}\n\nAssigned skill supporting files are under skillsDirectory/<skill-id>/.`;
 				if (Buffer.byteLength(prompt) > 256 * 1024)
 					throw new Error(
 						"Subagent context exceeds 256 KiB; cannot safely omit prior decisions",
@@ -75,7 +76,25 @@ export function createExtension(run = runPi) {
 				const dir = await mkdtemp(join(tmpdir(), "baton-subagent-"));
 				try {
 					const file = join(dir, "task.txt");
+					const resultFile = join(dir, "outcome.json");
+					const extensionFile = join(dir, "report-outcome.mjs");
 					await writeFile(file, prompt, { mode: 0o600 });
+					await writeFile(extensionFile, `import { writeFile } from "node:fs/promises";
+const resultFile = ${JSON.stringify(resultFile)};
+const allowed = ${JSON.stringify(next.allowedOutcomes)};
+export default function(pi) {
+  pi.registerTool({
+    name: "report_outcome", label: "Report outcome",
+    description: "Report the configured outcome and a concise summary for the next step. Call once when work is complete.",
+    parameters: { type: "object", properties: { outcome: { type: "string", enum: allowed }, summary: { type: "string" } }, required: ["outcome", "summary"], additionalProperties: false },
+    async execute(_id, value) {
+      if (!allowed.includes(value.outcome) || typeof value.summary !== "string" || !value.summary.trim() || Buffer.byteLength(value.summary) > 16384) throw new Error("Invalid outcome or summary");
+      try { await writeFile(resultFile, JSON.stringify({ outcome: value.outcome, summary: value.summary.trim() }), { mode: 0o600, flag: "wx" }); }
+      catch (error) { if (error.code === "EEXIST") throw new Error("An outcome has already been reported for this step"); throw error; }
+      return { content: [{ type: "text", text: "Outcome recorded." }], details: {} };
+    }
+  });
+}`, { mode: 0o600 });
 					const args = [
 						"--mode",
 						"json",
@@ -83,6 +102,10 @@ export function createExtension(run = runPi) {
 						"--no-skills",
 						"--exclude-tools",
 						"baton_subagent",
+						"--extension",
+						extensionFile,
+						"--append-system-prompt",
+						resultProtocol,
 					];
 					if (ctx.model)
 						args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
@@ -105,9 +128,8 @@ export function createExtension(run = runPi) {
 						});
 					};
 					update();
-					let result: string;
 					try {
-						result = await run("pi", args, ctx.cwd, signal, update);
+						await run("pi", args, ctx.cwd, signal, update);
 					} catch (error) {
 						update(
 							`Failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -116,10 +138,10 @@ export function createExtension(run = runPi) {
 					}
 					let answer: unknown;
 					try {
-						answer = JSON.parse(result);
+						answer = JSON.parse(await readFile(resultFile, "utf8"));
 					} catch {
 						throw new Error(
-							"Subagent returned invalid JSON; do not submit this attempt",
+							"Subagent did not report a valid outcome; do not submit this attempt",
 						);
 					}
 					if (!answer || typeof answer !== "object" || Array.isArray(answer))
@@ -130,17 +152,12 @@ export function createExtension(run = runPi) {
 						x.trim().length > 0 &&
 						Buffer.byteLength(x) <= limit;
 					if (
-						Object.keys(value).sort().join(",") !==
-							"evidence,outcome,summary" ||
+						Object.keys(value).sort().join(",") !== "outcome,summary" ||
 						!next.allowedOutcomes.includes(value.outcome) ||
-						!bounded(value.summary) ||
-						!Array.isArray(value.evidence) ||
-						value.evidence.length < 1 ||
-						value.evidence.length > 32 ||
-						!value.evidence.every(bounded)
+						!bounded(value.summary)
 					) {
 						throw new Error(
-							"Subagent returned an invalid outcome, summary, or evidence; do not submit this attempt",
+							"Subagent returned an invalid outcome or summary; do not submit this attempt",
 						);
 					}
 					const submission = {
@@ -149,9 +166,7 @@ export function createExtension(run = runPi) {
 						attempt: next.attempt,
 						...value,
 					};
-					update(
-						`Result: ${value.outcome} · ${value.summary}\nEvidence: ${(value.evidence as string[]).join("; ")}`,
-					);
+					update(`Result: ${value.outcome} · ${value.summary}`);
 					return {
 						content: [{ type: "text", text: JSON.stringify(submission) }],
 						details: {},

@@ -80,7 +80,7 @@ fn cli_persists_steps_across_processes_and_emits_parseable_errors() {
     assert!(start.get("steps").is_none());
     assert_eq!(next["step"]["id"], "build");
     let result = f.path.join("result.json");
-    fs::write(&result, json!({"revision":0,"stepId":"build","attempt":1,"outcome":"completed","summary":"Changed and tested login","evidence":["actual verification"]}).to_string()).unwrap();
+    fs::write(&result, json!({"revision":0,"stepId":"build","attempt":1,"outcome":"completed","summary":"Changed and tested login"}).to_string()).unwrap();
     let result = result.to_str().unwrap();
     let submitted = f.value(&["submit", "--run", id, "--result", result]);
     assert_eq!(submitted["currentStep"], "review");

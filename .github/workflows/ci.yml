@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -56,6 +57,25 @@ jobs:
 
       - name: Build UI
         run: mise run build-web
+
+  ollama-smoke:
+    name: Ollama Cloud smoke test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Mise, Rust, Bun and Pi
+        uses: jdx/mise-action@v2
+
+      - name: Run Ollama Cloud integration test
+        env:
+          OLLAMA_LIVE_TEST: "1"
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: "glm-5.3-flash:cloud"
+        run: bun test extensions/pi/baton-demo.integration.test.ts
 
   embedded-web:
     name: Embedded web UI

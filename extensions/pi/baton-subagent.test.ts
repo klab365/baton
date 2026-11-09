@@ -12,7 +12,7 @@ type TestTool = {
 
 function fixture(
 	answer: string,
-	options: { human?: boolean; code?: number; stale?: boolean } = {},
+	options: { human?: boolean; code?: number; stale?: boolean; exerciseTool?: boolean; realPi?: boolean } = {},
 ) {
 	let tool: TestTool | undefined;
 	const calls: string[][] = [];
@@ -35,7 +35,7 @@ function fixture(
 									id: "review",
 									human: options.human ?? false,
 								},
-								agent: { systemPrompt: "review carefully" },
+								agent: { systemPrompt: "review carefully; call report_outcome exactly once" },
 								skills: [
 									{ id: "assigned", content: "Assigned skill instructions" },
 								],
@@ -75,7 +75,43 @@ function fixture(
 		expect(prompt).toContain("Do not invoke baton work, delegate further, or make human decisions.");
 		expect(prompt).not.toContain("commit, or push");
 		expect(prompt).toContain("Original issue");
-		expect(prompt).toContain("review carefully");
+		expect(prompt).toContain("review carefully; call report_outcome exactly once");
+		const protocolIndex = args.indexOf("--append-system-prompt");
+		expect(protocolIndex).toBeGreaterThanOrEqual(0);
+		const protocol = args[protocolIndex + 1];
+		expect(protocol).toContain("take precedence over conflicting agent instructions");
+		expect(protocol).toContain("call report_outcome exactly once");
+		expect(args[args.indexOf("--exclude-tools") + 1]).toBe("baton_subagent");
+		const extension = await readFile(args[args.indexOf("--extension") + 1], "utf8");
+		expect(extension).toContain('name: "report_outcome"');
+		const resultPath = extension.match(/const resultFile = (.+);/)?.[1];
+		if (!resultPath) throw new Error("Missing outcome file");
+		if (options.realPi) {
+			const dir = await mkdtemp(join(tmpdir(), "baton-report-probe-"));
+			try {
+				const probe = join(dir, "probe.mjs");
+				const output = join(dir, "tools.json");
+				await writeFile(probe, `import { writeFileSync } from "node:fs"; export default function(pi) { pi.on("session_start", () => writeFileSync(${JSON.stringify(output)}, JSON.stringify(pi.getAllTools()))); }`);
+				const child = Bun.spawnSync(["pi", "--no-extensions", "--extension", args[args.indexOf("--extension") + 1], "--extension", probe, "--mode", "rpc", "--no-session"], { env: { ...process.env, PI_CODING_AGENT_DIR: dir, PI_OFFLINE: "1" }, stdin: "ignore" });
+				expect(child.exitCode).toBe(0);
+				const tools = JSON.parse(await readFile(output, "utf8"));
+				expect(tools.some((tool: { name: string }) => tool.name === "report_outcome")).toBe(true);
+			} finally {
+				await rm(dir, { recursive: true, force: true });
+			}
+		}
+		if (options.exerciseTool) {
+			const module = await import(args[args.indexOf("--extension") + 1]);
+			let report: TestTool | undefined;
+			module.default({ registerTool: (tool: TestTool) => { report = tool; } });
+			if (!report) throw new Error("Missing report_outcome tool");
+			await expect(report.execute("1", { outcome: "invalid", summary: "x" })).rejects.toThrow("Invalid outcome");
+			await expect(report.execute("1", { outcome: "approved", summary: " " })).rejects.toThrow("Invalid outcome");
+			await report.execute("1", JSON.parse(answer));
+			await expect(report.execute("2", JSON.parse(answer))).rejects.toThrow("already been reported");
+		} else {
+			await writeFile(JSON.parse(resultPath), answer);
+		}
 		expect(prompt).toContain("Assigned skill instructions");
 		expect(prompt).toContain("/workspace/.agents/skills");
 		expect(prompt).toContain("skillsDirectory/<skill-id>/");
@@ -116,7 +152,6 @@ test("passes current task and instructions to child and returns a submission", a
 		JSON.stringify({
 			outcome: "approved",
 			summary: "Reviewed",
-			evidence: ["diff"],
 		}),
 	);
 	const result = await f.execute();
@@ -126,7 +161,6 @@ test("passes current task and instructions to child and returns a submission", a
 		attempt: 3,
 		outcome: "approved",
 		summary: "Reviewed",
-		evidence: ["diff"],
 	});
 	expect(f.calls[2]).toContain("test/model");
 	expect(f.calls[2]).toContain("baton_subagent");
@@ -134,6 +168,17 @@ test("passes current task and instructions to child and returns a submission", a
 	expect(f.updates.at(-1)).toContain("Result: approved");
 	expect(f.statuses.some((status) => status?.includes("attempt 3"))).toBe(true);
 	expect(f.statuses.at(-1)).toBeUndefined();
+});
+
+test("report_outcome validates the decision and records it only once", async () => {
+	const f = fixture(JSON.stringify({ outcome: "approved", summary: "Reviewed" }), { exerciseTool: true });
+	const result = await f.execute();
+	expect(JSON.parse(result.content[0].text).outcome).toBe("approved");
+});
+
+test("real Pi loads the generated report_outcome tool", async () => {
+	const f = fixture(JSON.stringify({ outcome: "approved", summary: "Reviewed" }), { realPi: true });
+	await f.execute();
 });
 
 test("streams child tool progress and validates JSONL completion", async () => {
@@ -253,10 +298,10 @@ test("rejects failed and invalid child results", async () => {
 	await expect(fixture("{}", { code: 1 }).execute()).rejects.toThrow(
 		"Subagent failed",
 	);
-	await expect(fixture("not json").execute()).rejects.toThrow("invalid JSON");
+	await expect(fixture("not json").execute()).rejects.toThrow("did not report a valid outcome");
 	await expect(
 		fixture(
-			JSON.stringify({ outcome: "failed", summary: "x", evidence: ["y"] }),
+			JSON.stringify({ outcome: "failed", summary: "x" }),
 		).execute(),
 	).rejects.toThrow("invalid outcome");
 });
