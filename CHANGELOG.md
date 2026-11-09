@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/klab365/baton/compare/v0.6.3...v0.7.0) - 2026-11-09
+
+### Added
+
+- align external agent outcome reporting
+
+### Fixed
+
+- update Ctrl+C behavior for graceful shutdown in server
+
 ## [0.6.3](https://github.com/klab365/baton/compare/v0.6.2...v0.6.3) - 2026-11-08
 
 ### Fixed
