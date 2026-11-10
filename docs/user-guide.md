@@ -83,7 +83,7 @@ Open **Runs** and select a run to see its status, configured steps, ordered atte
 
 When a run reaches a human step, it enters `waitingHuman`. In **Action required**, read the step context, optionally enter a response and select one of the configured outcomes. The chosen outcome determines the route; the response is the next handoff. Waiting has no automatic timeout or approval. A run can be cancelled while running or waiting; cancellation is cooperative for in-flight work, and a cancelled run cannot be resumed. Its task worktree remains until the task is done or deleted.
 
-After a backend restart, a previously waiting run remains available for a human response; an interrupted running run is marked failed rather than automatically retried. Human resumption uses the saved pipeline snapshot and retained worktree. See [directed workflows and human decisions](workflow-transitions.md).
+After a backend restart, a previously waiting run remains available for a human response. Baton attempts to resume interrupted managed agent steps with the saved pipeline snapshot and retained worktree; the previous attempt is marked failed and a fresh attempt is started. The agent is instructed to reconcile possible external side effects, but this is not an exactly-once guarantee. Interrupted shell steps, missing or invalid worktrees, and unavailable runtime configuration are not retried automatically and remain failed. See [directed workflows and human decisions](workflow-transitions.md).
 
 ## Files, configuration and security
 
@@ -125,7 +125,7 @@ baton cleanup <project-directory> <run-id>
 - **Skill unavailable:** check the assigned ID and `.agents/skills/<id>/SKILL.md`. Import is a one-time copy, not automatic synchronization. Existing skills may require explicit replacement confirmation.
 - **Run fails at a routed agent step:** verify the agent called `report_outcome` with an outcome configured on that step. Check the step error and trace.
 - **Run remains in a loop or waits:** loops are unlimited, and human waits never auto-approve. Respond or cancel explicitly.
-- **Run interrupted by restart:** running work is not automatically resumed; inspect the failed run and task worktree before starting another run.
+- **Run interrupted by restart:** managed agent steps are retried in the retained worktree when possible. If recovery fails or a shell step was interrupted, inspect the failed run and worktree before starting another run.
 - **Tests appear successful:** agent-reported checks are not a deterministic Baton quality gate. Inspect actual commands/results and rely on independent CI as appropriate.
 - **Execution boundaries:** only local execution is supported; no remote execution targets or parallel branches. Native command/test pipeline steps, automatic merges and automatic Baton commits are not provided.
 

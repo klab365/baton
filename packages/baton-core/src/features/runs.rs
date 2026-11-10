@@ -3,7 +3,10 @@ use crate::{
         pipeline::{PipelineRun, RunEvent, Status},
         project::Outcome,
     },
-    features::{human_actions::resume_human, pipeline_engine::utc_now},
+    features::{
+        human_actions::resume_human,
+        pipeline_engine::{execute_graph, publish, utc_now},
+    },
     ports::{runs::RunRepository, runtime::AgentRuntimeFactory, tasks::TaskRepository},
 };
 use medi_rs::{MediCommand, medi_handler, medi_module};
@@ -114,6 +117,81 @@ pub(crate) fn cancel_run(repository: &dyn RunRepository, id: &str) -> Result<Pip
     run.events.push(event.clone());
     repository.save(&run)?;
     repository.publish(&event)?;
+    Ok(run)
+}
+
+/// Resume a server-interrupted agent step in its existing worktree.
+pub fn resume_interrupted_run(
+    id: &str,
+    runs: &dyn RunRepository,
+    tasks: &dyn TaskRepository,
+    factory: &dyn AgentRuntimeFactory,
+) -> Result<PipelineRun, String> {
+    let _lease = runs.acquire_action_lease(id)?;
+    let mut run = runs.load(id)?;
+    if run.status != Status::Failed
+        || !run.events.last().is_some_and(|event| {
+            event.message.as_deref() == Some("Run interrupted by server restart")
+        })
+    {
+        return Err("Run was not interrupted by server restart".into());
+    }
+    let _task_lease = run
+        .task_id
+        .as_deref()
+        .map(|id| tasks.acquire_operation_lease(id))
+        .transpose()?;
+    let config = run
+        .config_snapshot
+        .clone()
+        .ok_or("Run has no configuration snapshot")?;
+    config.validate()?;
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == run.pipeline_id)
+        .ok_or("Unknown pipeline")?;
+    let step = pipeline
+        .steps
+        .iter()
+        .find(|step| Some(&step.id) == run.current_step.as_ref())
+        .ok_or("Unknown current step")?;
+    if step.human || step.command.is_some() {
+        return Err("Interrupted human or shell step requires manual reconciliation".into());
+    }
+    let workspace = run.worktree.as_ref().ok_or("Missing isolated worktree")?;
+    runs.worktree_manager()?
+        .validate(&workspace.owner, workspace)?;
+    let mut runtime = factory.create(&config, &run.pipeline_id)?;
+    let note = "Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile any potentially completed external actions (including commits, pushes and pull requests) before continuing; do not repeat side effects blindly.";
+    if let Some(attempt) = run
+        .steps
+        .iter_mut()
+        .rev()
+        .find(|attempt| attempt.status == Status::Running)
+    {
+        attempt.status = Status::Failed;
+        attempt.error =
+            Some("Interrupted by server restart; outcome and side effects are unknown".into());
+        attempt.output = Some(note.into());
+    }
+    run.handoff = Some(note.into());
+    run.status = Status::Running;
+    run.ended_at = None;
+    publish(
+        runs,
+        &mut run,
+        Some("Resuming interrupted agent step in existing worktree".into()),
+    )?;
+    let run = execute_graph(&config, run, runtime.as_mut(), runs)?;
+    if run.status == Status::Succeeded
+        && let Some(id) = &run.task_id
+    {
+        let mut task = tasks.load(id)?;
+        task.status = crate::domain::tasks::TaskStatus::Done;
+        task.updated_at = utc_now().max(task.updated_at.clone());
+        tasks.save(&task)?;
+    }
     Ok(run)
 }
 

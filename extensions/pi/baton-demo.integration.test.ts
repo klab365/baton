@@ -15,12 +15,15 @@ async function runDemo(live: boolean) {
 		offline: process.env.PI_OFFLINE,
 	};
 	let requests = 0;
+	let attempts = 0;
+	const scriptedOutcomes = ["completed", "progress", "progress", "progress", "progress", "completed", "revise_build", "completed", "approved"];
 	const server = Bun.serve({
 		port: 0,
 		fetch: async (request) => {
 			const body = (await request.json()) as { messages: { role: string }[] };
 			const isFinal = body.messages.some((message) => message.role === "tool");
 			requests++;
+			const outcome = isFinal ? undefined : scriptedOutcomes[attempts++];
 			const delta = isFinal
 				? { content: "Plan complete." }
 				: {
@@ -32,8 +35,8 @@ async function runDemo(live: boolean) {
 								function: {
 									name: "report_outcome",
 									arguments: JSON.stringify({
-										outcome: "completed",
-										summary: "Plan ready for implementation.",
+										outcome,
+										summary: attempts === 1 ? "Plan ready for implementation." : `Attempt ${attempts}: ${outcome}; next continue`,
 										blocker_reason: "",
 										human_action: "",
 									}),
@@ -165,6 +168,25 @@ async function runDemo(live: boolean) {
 			resultFile,
 		]);
 		expect(next.currentStep).toBe("build");
+		if (!live) {
+			for (const [expectedStep, expectedOutcome, nextStep] of [
+				["build", "progress", "build"], ["build", "progress", "build"],
+				["build", "progress", "build"], ["build", "progress", "build"],
+				["build", "completed", "review"], ["review", "revise_build", "build"],
+				["build", "completed", "review"], ["review", "approved", "approval"],
+			]) {
+				const result = await tool.execute("1", { runId: start.id, context: "Test acceptance criteria" }, undefined, undefined, {
+					cwd: workspace, model: { provider: "test", id: "fake" }, thinkingLevel: "off", hasUI: false,
+				});
+				const submission = JSON.parse(result.content[0].text);
+				expect(submission).toMatchObject({ stepId: expectedStep, outcome: expectedOutcome });
+				await writeFile(resultFile, JSON.stringify(submission));
+				const state = await command(["submit", "--run", start.id, "--result", resultFile]);
+				expect(state.currentStep).toBe(nextStep);
+			}
+			const status = await command(["status", "--run", start.id]);
+			expect(status.status).toBe("waitingHuman");
+		}
 		expect(
 			await readFile(join(workspace, ".baton/config.json"), "utf8"),
 		).toContain("call report_outcome exactly once");

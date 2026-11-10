@@ -57,6 +57,7 @@ pub struct PipelineStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
+    Progress,
     Completed,
     Approved,
     ReviseBuild,
@@ -197,6 +198,7 @@ impl From<PipelineStep> for domain::PipelineStep {
 impl From<domain::Outcome> for Outcome {
     fn from(value: domain::Outcome) -> Self {
         match value {
+            domain::Outcome::Progress => Self::Progress,
             domain::Outcome::Completed => Self::Completed,
             domain::Outcome::Approved => Self::Approved,
             domain::Outcome::ReviseBuild => Self::ReviseBuild,
@@ -212,6 +214,7 @@ impl From<domain::Outcome> for Outcome {
 impl From<Outcome> for domain::Outcome {
     fn from(value: Outcome) -> Self {
         match value {
+            Outcome::Progress => Self::Progress,
             Outcome::Completed => Self::Completed,
             Outcome::Approved => Self::Approved,
             Outcome::ReviseBuild => Self::ReviseBuild,

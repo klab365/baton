@@ -335,6 +335,17 @@ fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) ->
     input
 }
 
+// Managed runs need a safety limit even when no external Work budget exists.
+pub(crate) fn progress_limit_reached(run: &PipelineRun, step_id: &str) -> bool {
+    let mut attempts: Vec<_> = run.steps.iter().filter(|step| step.attempt > 0).collect();
+    attempts.sort_by_key(|step| std::cmp::Reverse(step.attempt));
+    attempts
+        .into_iter()
+        .take_while(|step| step.step_id == step_id && step.outcome == Some(Outcome::Progress))
+        .count()
+        >= 50
+}
+
 fn repeated_blocker(
     run: &PipelineRun,
     pipeline: &crate::domain::project::Pipeline,
@@ -496,11 +507,15 @@ pub(crate) fn execute_graph(
             .iter()
             .find(|a| a.id == step.agent_id)
             .ok_or("Unknown agent")?;
-        let allowed_outcomes = step
+        let mut allowed_outcomes = step
             .transitions
             .iter()
             .map(|transition| transition.outcome.clone())
             .collect::<Vec<_>>();
+        // Unrouted legacy steps do not require a control decision.
+        if !allowed_outcomes.is_empty() {
+            allowed_outcomes.push(Outcome::Progress);
+        }
         let assigned = agent.clone();
         let cancellation_id = run.id.clone();
         let cancelled = || {
@@ -569,7 +584,21 @@ pub(crate) fn execute_graph(
                 run.steps[index].output = Some(output);
                 run.steps[index].outcome = Some(outcome.clone());
                 run.steps[index].status = Status::Succeeded;
-                route(&mut run, pipeline, index, outcome)?;
+                if outcome == Outcome::Progress {
+                    if progress_limit_reached(&run, &step.id) {
+                        run.status = Status::LimitExhausted;
+                        publish(
+                            repository,
+                            &mut run,
+                            Some(format!(
+                                "Step {} stopped after 50 consecutive progress submissions",
+                                step.id
+                            )),
+                        )?;
+                    }
+                } else {
+                    route(&mut run, pipeline, index, outcome)?;
+                }
                 if repeated {
                     publish(
                         repository,

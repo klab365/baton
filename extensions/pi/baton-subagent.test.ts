@@ -40,7 +40,7 @@ function fixture(
 									{ id: "assigned", content: "Assigned skill instructions" },
 								],
 								skillsDirectory: "/workspace/.agents/skills",
-								allowedOutcomes: ["approved", "revise_build", "blocked"],
+								allowedOutcomes: ["approved", "revise_build", "blocked", "progress"],
 							}
 						: {
 								task: "Original issue",
@@ -177,6 +177,12 @@ test("report_outcome validates the decision and records it only once", async () 
 	const f = fixture(JSON.stringify({ outcome: "approved", summary: "Reviewed" }), { exerciseTool: true });
 	const result = await f.execute();
 	expect(JSON.parse(result.content[0].text).outcome).toBe("approved");
+});
+
+test("reports progress for a fresh continuation attempt", async () => {
+	const f = fixture(JSON.stringify({ outcome: "progress", summary: "Implemented API; next add tests" }), { exerciseTool: true });
+	const result = await f.execute();
+	expect(JSON.parse(result.content[0].text)).toMatchObject({ outcome: "progress", summary: "Implemented API; next add tests" });
 });
 
 test("blocked outcome includes the reason and human action in the handoff", async () => {

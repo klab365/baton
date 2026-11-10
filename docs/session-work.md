@@ -62,6 +62,8 @@ Submission files use camelCase:
 
 Use the exact revision, step ID and attempt from `next`. Revisions advance only when a submission or human response is accepted. Unknown fields/outcomes, stale attempts, empty summaries, or outcomes absent from the configured step are rejected without advancing. Successful un-routed agent steps use `completed`; routed steps use their configured outcomes.
 
+External agent steps also accept `progress` when useful work is incomplete. Include changes, verification and the next action in the summary. Baton persists the handoff and prepares a fresh attempt of the same step without executing success checks or advancing to review. The Pi subagent receives prior summaries and continues in the same workspace, not the same model session. The configured overall attempt limit also applies to progress; reaching it stops the run with `limitExhausted`. Managed runs stop after 50 consecutive progress attempts as a separate safety limit. Progress is not proof of changes or verification. It cannot be configured as a pipeline transition. Managed runs also support it for agent steps with configured transitions; legacy agent steps without transitions continue to complete without an explicit outcome.
+
 A human-response file uses the same revision/step/attempt identifiers, plus `outcome` and `response` instead of `summary`. It is accepted only at a human step. `submit` cannot complete a human step. This is a protocol distinction, not identity authentication: an agent with shell access can technically invoke `respond`; the skill must wait for an actual user decision.
 
 ## Verifiable process gates and bounded loops

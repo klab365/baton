@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runPi } from "./process";
 
 const limit = 16_384;
-const resultProtocol = "Baton external Work result protocol: When your work is complete, call report_outcome exactly once with an allowed outcome and a concise summary. These reporting instructions take precedence over conflicting agent instructions. Then answer naturally.";
+const resultProtocol = "Baton external Work result protocol: Always call report_outcome exactly once with an allowed outcome and a concise summary. If you have made concrete progress but cannot finish this step in this session, use progress, describe changes, verification and the next action; do not claim completion. Use blocked only when human intervention is required. These reporting instructions take precedence over conflicting agent instructions. Then answer naturally.";
 
 export function createExtension(run = runPi) {
 	return (pi: ExtensionAPI) => {

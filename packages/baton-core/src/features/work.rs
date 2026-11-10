@@ -336,7 +336,16 @@ async fn next_work_handler(
         revision: session.revision,
         status: run.status.clone(),
         workspace: session.workspace.clone(),
-        allowed_outcomes: step.as_ref().map(outcomes).unwrap_or_default(),
+        allowed_outcomes: step
+            .as_ref()
+            .map(|step| {
+                let mut allowed = outcomes(step);
+                if !step.human {
+                    allowed.push(Outcome::Progress);
+                }
+                allowed
+            })
+            .unwrap_or_default(),
         attempt: if active {
             run.steps.last().map(|s| s.attempt)
         } else {
@@ -391,7 +400,7 @@ fn validate_submission(
     if run.steps[index].attempt != attempt {
         return Err("Stale attempt; fetch next again".into());
     }
-    if !outcomes(step).contains(outcome) {
+    if !outcomes(step).contains(outcome) && (human || *outcome != Outcome::Progress) {
         return Err("Outcome is not allowed by this step".into());
     }
     Ok(index)
@@ -439,8 +448,10 @@ async fn submit_work_handler(
         )?;
         bounded("Summary", &result.summary)?;
         let mut routed = run.clone();
-        let (_, pipeline) = graph(&run)?;
-        route(&mut routed, pipeline, index, result.outcome.clone())?;
+        if result.outcome != Outcome::Progress {
+            let (_, pipeline) = graph(&run)?;
+            route(&mut routed, pipeline, index, result.outcome.clone())?;
+        }
         let session = run.session.as_ref().ok_or("Missing session")?;
         let mut checks = vec![];
         if matches!(
@@ -471,12 +482,22 @@ async fn submit_work_handler(
                 attempt: result.attempt,
                 checks,
             });
-        complete(&mut run, index, result.outcome, result.summary)?;
-        publish(
-            resources.runs.as_ref(),
-            &mut run,
-            Some("External worker submission accepted".into()),
-        )?;
+        let is_progress = result.outcome == Outcome::Progress;
+        if is_progress {
+            run.steps[index].status = Status::Succeeded;
+            run.steps[index].output = Some(result.summary);
+            run.steps[index].outcome = Some(Outcome::Progress);
+            run.session.as_mut().ok_or("Missing session")?.revision += 1;
+            prepare(&mut run)?;
+        } else {
+            complete(&mut run, index, result.outcome, result.summary)?;
+        }
+        let message = if run.status == Status::LimitExhausted && is_progress {
+            "External work stopped after reaching the configured attempt limit"
+        } else {
+            "External worker submission accepted"
+        };
+        publish(resources.runs.as_ref(), &mut run, Some(message.into()))?;
         Ok(run)
     })
     .await
