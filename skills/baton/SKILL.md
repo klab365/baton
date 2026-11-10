@@ -49,4 +49,4 @@ Agent summaries are reports, not independent verification. Baton records the che
 
 For a human response, present the current step and collect the user's decision. Submit `baton work respond --run ID --result FILE` with `revision`, `stepId`, `attempt`, `outcome`, and `response` reflecting that explicit decision. Stop on new ambiguity.
 
-The skill does not grant permission to comment on issues, commit, push, merge, or delete worktrees. Follow the user's authorization for those actions.
+Follow the configured pipeline and the user's instructions. Delegate each agent step, submit its result, and continue automatically until Baton reports a terminal state or requires a human decision. Do not pause between configured steps. If a subagent fails or returns an invalid result, stop and report the failure without submitting.
