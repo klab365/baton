@@ -152,6 +152,84 @@ fn config() -> ProjectConfig {
     ]);
     parse_config(&json.to_string()).unwrap()
 }
+#[derive(Default)]
+struct MemoryScript {
+    decision: Option<AgentDecision>,
+    calls: usize,
+}
+impl AgentRuntime for MemoryScript {
+    fn execute(&mut self, _: &Path, _: &Agent, _: &str) -> Result<String, String> {
+        unreachable!()
+    }
+    fn execute_pipeline_step(
+        &mut self,
+        directory: &Path,
+        _: &Agent,
+        input: &str,
+        _: &[Outcome],
+        _: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        let path = directory.join(".baton/work/memory-run.md");
+        assert!(input.contains(".baton/work/memory-run.md"));
+        if self.calls == 0 {
+            fs::write(&path, "Integrated parser; next test").unwrap();
+            self.decision = Some(AgentDecision {
+                outcome: Outcome::Progress,
+                summary: "Continue".into(),
+            });
+        } else {
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                "Integrated parser; next test"
+            );
+            self.decision = Some(AgentDecision {
+                outcome: Outcome::Approved,
+                summary: "Done".into(),
+            });
+        }
+        self.calls += 1;
+        Ok("done".into())
+    }
+    fn take_decision(&mut self) -> Option<AgentDecision> {
+        self.decision.take()
+    }
+}
+
+#[test]
+fn managed_attempts_share_ignored_run_notes() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: None,
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = MemoryScript::default();
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "memory-run",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(runtime.calls, 2);
+    let workspace = &run.worktree.unwrap().path;
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["check-ignore", ".baton/work/memory-run.md"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
+
 struct ResumeFactory;
 impl AgentRuntimeFactory for ResumeFactory {
     fn create(&self, _: &ProjectConfig, _: &str) -> Result<Box<dyn AgentRuntime>, String> {
