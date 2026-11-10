@@ -16,16 +16,18 @@ async function runDemo(live: boolean) {
 	};
 	let requests = 0;
 	let attempts = 0;
+	let builderReceivedPlan = false;
 	const scriptedOutcomes = ["completed", "progress", "progress", "progress", "progress", "completed", "revise_build", "completed", "approved"];
 	const server = Bun.serve({
 		port: 0,
 		fetch: async (request) => {
 			const body = (await request.json()) as { messages: { role: string }[] };
+			if (attempts === 1 && JSON.stringify(body.messages).includes("Implement the greeting and verify the README.")) builderReceivedPlan = true;
 			const isFinal = body.messages.some((message) => message.role === "tool");
 			requests++;
 			const outcome = isFinal ? undefined : scriptedOutcomes[attempts++];
 			const delta = isFinal
-				? { content: "Plan complete." }
+				? { content: attempts === 1 ? "Implement the greeting and verify the README." : "Step complete." }
 				: {
 						tool_calls: [
 							{
@@ -36,7 +38,7 @@ async function runDemo(live: boolean) {
 									name: "report_outcome",
 									arguments: JSON.stringify({
 										outcome,
-										summary: attempts === 1 ? "Plan ready for implementation." : `Attempt ${attempts}: ${outcome}; next continue`,
+										summary: attempts === 1 ? "Detailed handoff follows." : `Attempt ${attempts}: ${outcome}; next continue`,
 										blocker_reason: "",
 										human_action: "",
 									}),
@@ -155,7 +157,7 @@ async function runDemo(live: boolean) {
 		expect(typeof submission.summary).toBe("string");
 		expect(submission.summary.trim()).not.toBe("");
 		if (!live) {
-			expect(submission.summary).toBe("Plan ready for implementation.");
+			expect(submission.summary).toBe("Detailed handoff follows.\n\nFinal response:\nImplement the greeting and verify the README.");
 			expect(requests).toBeGreaterThanOrEqual(2);
 		}
 		const resultFile = join(dir, "result.json");
@@ -168,6 +170,7 @@ async function runDemo(live: boolean) {
 			resultFile,
 		]);
 		expect(next.currentStep).toBe("build");
+		expect((await command(["status", "--run", start.id])).steps[0].output).toContain("Implement the greeting and verify the README.");
 		if (!live) {
 			for (const [expectedStep, expectedOutcome, nextStep] of [
 				["build", "progress", "build"], ["build", "progress", "build"],
@@ -184,6 +187,7 @@ async function runDemo(live: boolean) {
 				const state = await command(["submit", "--run", start.id, "--result", resultFile]);
 				expect(state.currentStep).toBe(nextStep);
 			}
+			expect(builderReceivedPlan).toBe(true);
 			const status = await command(["status", "--run", start.id]);
 			expect(status.status).toBe("waitingHuman");
 		}

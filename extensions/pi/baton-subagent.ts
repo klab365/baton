@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runPi } from "./process";
 
 const limit = 16_384;
-const resultProtocol = "Baton external Work result protocol: Always call report_outcome exactly once with an allowed outcome and a concise summary. If you have made concrete progress but cannot finish this step in this session, use progress, describe changes, verification and the next action; do not claim completion. Use blocked only when human intervention is required. These reporting instructions take precedence over conflicting agent instructions. Then answer naturally.";
+const resultProtocol = "Baton external Work result protocol: Always call report_outcome exactly once with an allowed outcome and a self-contained summary of the work and relevant handoff. Do not refer to a handoff elsewhere without including it. If you have made concrete progress but cannot finish this step in this session, use progress, describe changes, verification and the next action; do not claim completion. Use blocked only when human intervention is required. These reporting instructions take precedence over conflicting agent instructions. Any final answer is also included in the handoff, within the combined 16 KiB limit.";
 
 export function createExtension(run = runPi) {
 	return (pi: ExtensionAPI) => {
@@ -85,7 +85,7 @@ const allowed = ${JSON.stringify(next.allowedOutcomes)};
 export default function(pi) {
   pi.registerTool({
     name: "report_outcome", label: "Report outcome",
-    description: "Report the configured outcome and a concise summary for the next step. Call once when work is complete.",
+    description: "Report the configured outcome and a self-contained summary with the relevant handoff for the next step. Call once when work is complete.",
     parameters: { type: "object", properties: { outcome: { type: "string", enum: allowed }, summary: { type: "string" }, blocker_reason: { type: "string", description: "For blocked outcomes, explain why work cannot continue without human help; otherwise use an empty string." }, human_action: { type: "string", description: "For blocked outcomes, state the specific question or action needed from a human; otherwise use an empty string." } }, required: ["outcome", "summary", "blocker_reason", "human_action"], additionalProperties: false },
     async execute(_id, value) {
       if (!allowed.includes(value.outcome) || typeof value.summary !== "string" || !value.summary.trim() || typeof value.blocker_reason !== "string" || typeof value.human_action !== "string") throw new Error("Invalid outcome or summary");
@@ -134,8 +134,9 @@ export default function(pi) {
 						});
 					};
 					update();
+					let finalText: string;
 					try {
-						await run("pi", args, ctx.cwd, signal, update);
+						finalText = await run("pi", args, ctx.cwd, signal, update);
 					} catch (error) {
 						update(
 							`Failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -166,11 +167,19 @@ export default function(pi) {
 							"Subagent returned an invalid outcome or summary; do not submit this attempt",
 						);
 					}
+					const summary = value.summary as string;
+					const final = finalText.trim();
+					const handoff = final && final !== summary.trim()
+						? `${summary}\n\nFinal response:\n${final}`
+						: summary;
+					if (!bounded(handoff))
+						throw new Error("Subagent handoff exceeds 16 KiB; do not submit this attempt");
 					const submission = {
 						revision: next.revision,
 						stepId: next.step.id,
 						attempt: next.attempt,
 						...value,
+						summary: handoff,
 					};
 					update(`Result: ${value.outcome} · ${value.summary}`);
 					return {
