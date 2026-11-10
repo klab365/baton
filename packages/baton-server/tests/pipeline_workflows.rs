@@ -1,4 +1,6 @@
-use baton_adapters::repositories::filesystem_run::FilesystemRunRepository;
+use baton_adapters::repositories::{
+    filesystem_run::FilesystemRunRepository, filesystem_task::FilesystemTaskRepository,
+};
 use baton_core::{
     domain::{
         pipeline::*,
@@ -7,7 +9,7 @@ use baton_core::{
     features::{human_actions::resume_human, pipeline_engine::*},
     ports::{
         runs::RunRepository,
-        runtime::{AgentDecision, AgentRuntime},
+        runtime::{AgentDecision, AgentRuntime, AgentRuntimeFactory},
     },
 };
 use std::{
@@ -66,6 +68,7 @@ impl Drop for Fixture {
 struct Script {
     outputs: VecDeque<String>,
     directories: Vec<PathBuf>,
+    allowed: Vec<Vec<Outcome>>,
     decision: Option<AgentDecision>,
 }
 impl Script {
@@ -114,6 +117,17 @@ impl AgentRuntime for Script {
             Ok(output)
         }
     }
+    fn execute_pipeline_step(
+        &mut self,
+        directory: &Path,
+        agent: &Agent,
+        input: &str,
+        allowed_outcomes: &[Outcome],
+        _cancelled: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        self.allowed.push(allowed_outcomes.to_vec());
+        self.execute(directory, agent, input)
+    }
     fn take_decision(&mut self) -> Option<AgentDecision> {
         self.decision.take()
     }
@@ -138,6 +152,184 @@ fn config() -> ProjectConfig {
     ]);
     parse_config(&json.to_string()).unwrap()
 }
+struct ResumeFactory;
+impl AgentRuntimeFactory for ResumeFactory {
+    fn create(&self, _: &ProjectConfig, _: &str) -> Result<Box<dyn AgentRuntime>, String> {
+        Ok(Box::new(Script::new(&[
+            r#"{"outcome":"approved","output":"Verified"}"#,
+        ])))
+    }
+}
+
+#[test]
+fn interrupted_agent_resumes_in_same_worktree_with_reconciliation_warning() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: None,
+    }];
+    config.pipelines[0].steps = vec![step];
+    let repo = fixture.repo();
+    let mut run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "resume-agent",
+        &mut Script::new(&[r#"{"outcome":"approved","output":"original"}"#]),
+        &repo,
+    )
+    .unwrap();
+    let worktree = run.worktree.clone();
+    run.status = Status::Running;
+    run.current_step = Some("review".into());
+    run.steps[0].status = Status::Running;
+    run.steps[0].output = None;
+    run.steps[0].outcome = None;
+    run.steps[0].selected_transition = None;
+    repo.save(&run).unwrap();
+    repo.recover_interrupted().unwrap();
+    let tasks = FilesystemTaskRepository(fixture.0.clone());
+    let resumed = baton_core::features::runs::resume_interrupted_run(
+        "resume-agent",
+        &repo,
+        &tasks,
+        &ResumeFactory,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+    assert_eq!(resumed.worktree, worktree);
+    assert_eq!(resumed.steps[0].status, Status::Failed);
+    assert_eq!(resumed.steps[1].attempt, 2);
+    assert!(
+        resumed.steps[1]
+            .input
+            .as_ref()
+            .unwrap()
+            .contains("do not repeat side effects blindly")
+    );
+    assert!(
+        baton_core::features::runs::resume_interrupted_run(
+            "resume-agent",
+            &repo,
+            &tasks,
+            &ResumeFactory
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn interrupted_shell_is_not_replayed_automatically() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[0].clone();
+    step.agent_id.clear();
+    step.command = Some("true".into());
+    config.pipelines[0].steps = vec![step];
+    let repo = fixture.repo();
+    let mut run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "resume-shell",
+        &mut Script::default(),
+        &repo,
+    )
+    .unwrap();
+    run.status = Status::Running;
+    run.current_step = Some("plan".into());
+    run.steps[0].status = Status::Running;
+    repo.save(&run).unwrap();
+    repo.recover_interrupted().unwrap();
+    let tasks = FilesystemTaskRepository(fixture.0.clone());
+    let error = baton_core::features::runs::resume_interrupted_run(
+        "resume-shell",
+        &repo,
+        &tasks,
+        &ResumeFactory,
+    )
+    .unwrap_err();
+    assert!(error.contains("manual reconciliation"));
+    assert_eq!(repo.load("resume-shell").unwrap().status, Status::Failed);
+}
+
+#[test]
+fn routed_agent_progress_continues_with_handoff_before_completion() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: None,
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = Script::new(&[
+        r#"{"outcome":"progress","output":"Implemented part; next verify"}"#,
+        r#"{"outcome":"progress","output":"Second"}"#,
+        r#"{"outcome":"progress","output":"Third"}"#,
+        r#"{"outcome":"progress","output":"Fourth"}"#,
+        r#"{"outcome":"approved","output":"Verified"}"#,
+    ]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "progress-test",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(run.steps.len(), 5);
+    assert_eq!(run.steps[0].outcome, Some(Outcome::Progress));
+    assert!(
+        run.steps[1]
+            .input
+            .as_ref()
+            .unwrap()
+            .contains("Implemented part; next verify")
+    );
+    assert_eq!(runtime.directories[0], runtime.directories[1]);
+    assert!(
+        runtime
+            .allowed
+            .iter()
+            .all(|allowed| allowed.contains(&Outcome::Progress))
+    );
+}
+
+#[test]
+fn routed_agent_progress_stops_at_safety_limit() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: None,
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = Script::new(&vec![r#"{"outcome":"progress","output":"next"}"#; 50]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "progress-limit",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::LimitExhausted);
+    assert_eq!(run.steps.len(), 50);
+    assert!(run.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("50 consecutive progress"))
+    }));
+}
+
 #[test]
 fn shell_success_runs_in_task_worktree() {
     let fixture = Fixture::new();

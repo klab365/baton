@@ -175,6 +175,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_outcome_records_progress_handoff() {
+        let decision = Arc::new(Mutex::new(None));
+        let tool = ReportOutcome::new(vec![Outcome::Progress], decision.clone());
+        assert_eq!(
+            tool.parameters()["properties"]["outcome"]["enum"],
+            serde_json::json!(["progress"])
+        );
+        tool.call(
+            &mut ToolContext::default(),
+            super::ReportOutcomeArgs {
+                outcome: "progress".into(),
+                summary: "Implemented part; next run tests".into(),
+                blocker_reason: String::new(),
+                human_action: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decision.lock().unwrap().as_ref().unwrap().outcome,
+            Outcome::Progress
+        );
+    }
+
+    #[tokio::test]
     async fn report_outcome_records_only_configured_choices() {
         let decision = Arc::new(Mutex::new(None));
         let tool = ReportOutcome::new(vec![Outcome::Approved], decision.clone());

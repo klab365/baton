@@ -365,6 +365,8 @@ impl RigRuntime {
         if app.should_exit().is_some() {
             return Err("Rig Harness startup failed".into());
         }
+        // Startup may report the interrupted previous turn; it is not the new turn's result.
+        app.world_mut().resource_mut::<Completed>().0.take();
 
         let mut preamble = baton_agent.system_prompt.clone();
         if let Some(instructions) = instructions {
@@ -386,7 +388,7 @@ impl RigRuntime {
                 .collect::<Vec<_>>()
                 .join(", ");
             preamble.push_str(&format!(
-                "\n\nThis pipeline step requires a control decision. When your work is complete, call the report_outcome tool exactly once with one of these outcomes: {allowed}. Provide a concise summary there; then answer naturally. Do not encode the decision as JSON in your final answer."
+                "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these outcomes: {allowed}. If you have made concrete progress but cannot finish this step in this session, use progress and summarize changes, verification, and the next action; do not claim completion. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
             ));
         }
         let setup_trace = RunTraceEntry {

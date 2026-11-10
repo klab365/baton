@@ -98,8 +98,7 @@ impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
         let repository = FilesystemProjectConfigRepository::new(project_dir.clone());
         let runs = FilesystemRunRepository(project_dir.clone());
-        // A running run cannot survive a process restart because adapters are in-process.
-        // Convert it deterministically to a durable terminal record before serving requests.
+        // Record interruptions durably before attempting to resume their agent steps.
         runs.recover_interrupted()
             .unwrap_or_else(|error| panic!("failed to recover interrupted runs: {error}"));
         let repository: Arc<dyn ProjectConfigRepository> = Arc::new(repository);
@@ -146,6 +145,33 @@ impl AppState {
             runtime_factory: runtime_factory.clone(),
             skills: skills.clone(),
         };
+        let interrupted = run_repository
+            .list()
+            .unwrap_or_else(|error| panic!("failed to list interrupted runs: {error}"))
+            .into_iter()
+            .filter(|run| {
+                run.status == baton_core::domain::pipeline::Status::Failed
+                    && run.events.last().is_some_and(|event| {
+                        event.message.as_deref() == Some("Run interrupted by server restart")
+                    })
+            })
+            .map(|run| run.id)
+            .collect::<Vec<_>>();
+        for id in interrupted {
+            let runs = run_repository.clone();
+            let tasks = task_repository.clone();
+            let factory = runtime_factory.clone();
+            std::thread::spawn(move || {
+                if let Err(error) = baton_core::features::runs::resume_interrupted_run(
+                    &id,
+                    runs.as_ref(),
+                    tasks.as_ref(),
+                    factory.as_ref(),
+                ) {
+                    eprintln!("Could not resume interrupted run {id}: {error}");
+                }
+            });
+        }
         let run_resources = RunFeatureResources {
             runs: run_repository,
             tasks: task_repository,

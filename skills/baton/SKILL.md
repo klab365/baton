@@ -43,7 +43,8 @@ The project must have a configured `.baton/config.json` pipeline. Use an explici
    ```
 
    Use the exact revision, step ID and attempt returned by `next`, and an allowed outcome. Use `baton work submit --run ID --result /absolute/path/result.json`. Keep temporary result files out of commits and never include secrets.
-6. Fetch the next step and continue until a terminal state, a human decision, or a blocker. If submission is stale, fetch state again and reconcile; do not resubmit old work with a fresh revision blindly. If a configured check fails, fix the problem and resubmit the same current attempt when appropriate.
+6. When a subagent reports `progress`, submit it unchanged and delegate the next attempt of the same step; do not treat it as completion. The handoff must identify work done, verification, and the next action. Baton enforces the configured overall attempt limit.
+7. Fetch the next step and continue until a terminal state, a human decision, or a blocker. If submission is stale, fetch state again and reconcile; do not resubmit old work with a fresh revision blindly. If a configured check fails, delegate the same current attempt again with the exact failure output and request a correction; do not make changes in the orchestrator. Submit the new result only after the delegated agent has addressed the failure. Do not blindly resubmit the unchanged result.
 
 Agent summaries are reports, not independent verification. Baton records the checks it actually executes separately. A review performed in this same context is self-review; only claim independent review when a separate reviewer actually performed it. Use a host's separate reviewer capability only when available and authorized by the task/project workflow; otherwise surface an unmet independent-review requirement.
 

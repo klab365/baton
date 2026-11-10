@@ -90,6 +90,7 @@ pub struct PipelineStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
+    Progress,
     Completed,
     Approved,
     ReviseBuild,
@@ -222,6 +223,11 @@ impl ProjectConfig {
                 }
                 let mut outcomes = Vec::new();
                 for transition in &step.transitions {
+                    if transition.outcome == Outcome::Progress {
+                        return Err(format!(
+                            "{step_path}: progress is reserved for external work continuation"
+                        ));
+                    }
                     if step.command.is_some()
                         && !matches!(transition.outcome, Outcome::Completed | Outcome::Failed)
                     {

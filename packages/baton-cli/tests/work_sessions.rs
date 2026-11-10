@@ -64,6 +64,66 @@ fn submission(run: &Value, outcome: &str) -> Value {
 }
 
 #[tokio::test]
+async fn progress_continues_same_step_and_is_bounded() {
+    let f = Fixture::new();
+    let app = f.app();
+    let start = f
+        .start(&app, 5, json!([{"stepId":"build", "command":"false"}]))
+        .await;
+    let next = f
+        .call(&app, json!({"command":"next", "id":start["id"]}))
+        .await
+        .unwrap();
+    assert!(
+        next["allowedOutcomes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("progress"))
+    );
+    let first = f.submit(&app, &start, "progress").await.unwrap();
+    assert_eq!(first["currentStep"], "build");
+    assert_eq!(first["session"]["revision"], 1);
+    assert_eq!(first["steps"][0]["outcome"], "progress");
+    assert_eq!(first["steps"][1]["attempt"], 2);
+    assert!(f.submit(&app, &start, "progress").await.is_err());
+    assert!(
+        f.submit(&app, &first, "completed")
+            .await
+            .unwrap_err()
+            .contains("Configured check failed")
+    );
+    let second = f.submit(&app, &first, "progress").await.unwrap();
+    let third = f.submit(&app, &second, "progress").await.unwrap();
+    assert_eq!(third["status"], "running");
+    let fourth = f.submit(&app, &third, "progress").await.unwrap();
+    let fifth = f.submit(&app, &fourth, "progress").await.unwrap();
+    assert_eq!(fifth["status"], "limitExhausted");
+    assert_eq!(fifth["steps"].as_array().unwrap().len(), 5);
+    assert!(!fifth["endedAt"].is_null());
+}
+
+#[tokio::test]
+async fn progress_can_finish_and_advance_to_review() {
+    let f = Fixture::new();
+    let app = f.app();
+    let start = f.start(&app, 50, json!([])).await;
+    let continued = f.submit(&app, &start, "progress").await.unwrap();
+    drop(app);
+    let app = f.app();
+    let restored = f
+        .call(&app, json!({"command":"status", "id":start["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(restored, continued);
+    let review = f.submit(&app, &restored, "completed").await.unwrap();
+    assert_eq!(review["currentStep"], "review");
+    assert_eq!(
+        review["steps"][0]["output"],
+        "Result and acceptance criterion verification"
+    );
+}
+
+#[tokio::test]
 async fn demo_pipeline_runs_in_temporary_workspace() {
     let f = Fixture::new();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
