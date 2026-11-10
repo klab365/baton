@@ -55,6 +55,12 @@ jobs:
       - name: Run extension tests
         run: mise run test-extensions
 
+      - name: Install browser
+        run: cd packages/baton-web && bunx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: mise run test-browser
+
       - name: Build UI
         run: mise run build-web
 

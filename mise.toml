@@ -62,6 +62,10 @@ run = "cargo test --workspace"
 description = "Run extension tests"
 run = "bun test extensions/"
 
+[tasks.test-browser]
+description = "Run Chromium browser tests"
+run = "cd packages/baton-web && bun run test-browser"
+
 [tasks.test-embedded-web]
 description = "Build the web UI and test it embedded in the Rust server"
 run = [

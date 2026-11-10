@@ -85,3 +85,7 @@ mise run build
 - [Release process](docs/releases.md)
 
 Baton currently runs agents locally; remote execution targets are not implemented.
+
+## Browser tests
+
+Install dependencies with `mise install`, then install Chromium with `cd packages/baton-web && bunx playwright install chromium`. From the repository root run `mise run test-browser`. The tests use mocked API responses and do not require a running backend. CI installs Chromium and its system dependencies before running them.
