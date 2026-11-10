@@ -86,10 +86,16 @@ export default function(pi) {
   pi.registerTool({
     name: "report_outcome", label: "Report outcome",
     description: "Report the configured outcome and a concise summary for the next step. Call once when work is complete.",
-    parameters: { type: "object", properties: { outcome: { type: "string", enum: allowed }, summary: { type: "string" } }, required: ["outcome", "summary"], additionalProperties: false },
+    parameters: { type: "object", properties: { outcome: { type: "string", enum: allowed }, summary: { type: "string" }, blocker_reason: { type: "string", description: "For blocked outcomes, explain why work cannot continue without human help; otherwise use an empty string." }, human_action: { type: "string", description: "For blocked outcomes, state the specific question or action needed from a human; otherwise use an empty string." } }, required: ["outcome", "summary", "blocker_reason", "human_action"], additionalProperties: false },
     async execute(_id, value) {
-      if (!allowed.includes(value.outcome) || typeof value.summary !== "string" || !value.summary.trim() || Buffer.byteLength(value.summary) > 16384) throw new Error("Invalid outcome or summary");
-      try { await writeFile(resultFile, JSON.stringify({ outcome: value.outcome, summary: value.summary.trim() }), { mode: 0o600, flag: "wx" }); }
+      if (!allowed.includes(value.outcome) || typeof value.summary !== "string" || !value.summary.trim() || typeof value.blocker_reason !== "string" || typeof value.human_action !== "string") throw new Error("Invalid outcome or summary");
+      let summary = value.summary.trim();
+      if (value.outcome === "blocked") {
+        if (!value.blocker_reason.trim() || !value.human_action.trim()) throw new Error("Blocked outcomes require a blocker reason and a specific human action");
+        summary += "\\n\\nBlocker: " + value.blocker_reason.trim() + "\\nHuman action needed: " + value.human_action.trim();
+      }
+      if (Buffer.byteLength(summary) > 16384) throw new Error("Invalid outcome or summary");
+      try { await writeFile(resultFile, JSON.stringify({ outcome: value.outcome, summary }), { mode: 0o600, flag: "wx" }); }
       catch (error) { if (error.code === "EEXIST") throw new Error("An outcome has already been reported for this step"); throw error; }
       return { content: [{ type: "text", text: "Outcome recorded." }], details: {} };
     }

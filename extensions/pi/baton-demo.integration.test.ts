@@ -34,6 +34,8 @@ async function runDemo(live: boolean) {
 									arguments: JSON.stringify({
 										outcome: "completed",
 										summary: "Plan ready for implementation.",
+										blocker_reason: "",
+										human_action: "",
 									}),
 								},
 							},
