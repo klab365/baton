@@ -90,6 +90,32 @@ fn demo_factory_pipeline_requires_human_approval_before_commit() {
 }
 
 #[test]
+fn project_factory_checks_ci_before_finishing() {
+    use baton_core::domain::project::Outcome;
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.baton/config.json");
+    let config = parse_config(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|p| p.id == "software-factory")
+        .unwrap();
+    let step = |id: &str| pipeline.steps.iter().find(|s| s.id == id).unwrap();
+    let routes_to = |id: &str, outcome, to: Option<&str>| {
+        step(id)
+            .transitions
+            .iter()
+            .any(|t| t.outcome == outcome && t.to.as_deref() == to)
+    };
+    assert!(routes_to("commit", Outcome::Completed, Some("ci")));
+    assert!(routes_to("ci", Outcome::Completed, None));
+    assert!(routes_to("ci", Outcome::ReviseBuild, Some("build")));
+    assert!(routes_to("ci", Outcome::Blocked, Some("ci-help")));
+    assert!(step("ci-help").human);
+    assert!(routes_to("ci-help", Outcome::Responded, Some("ci")));
+}
+
+#[test]
 fn roundtrip_preserves_pipeline_step_order_and_configuration() {
     let config = parse_config(&example().to_string()).unwrap();
     assert_eq!(

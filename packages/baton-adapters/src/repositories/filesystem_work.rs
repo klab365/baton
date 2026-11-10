@@ -45,6 +45,13 @@ impl WorkProcessLock {
     }
 }
 
+impl Drop for WorkProcessLock {
+    fn drop(&mut self) {
+        // A concurrently spawned child may briefly retain the same open file description.
+        let _ = self._file.unlock();
+    }
+}
+
 pub struct FilesystemWorkRepository(pub PathBuf);
 impl FilesystemWorkRepository {
     fn directory(&self) -> PathBuf {
@@ -130,5 +137,23 @@ impl RunRepository for FilesystemWorkRepository {
                 .then_with(|| b.id.cmp(&a.id))
         });
         Ok(runs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkProcessLock;
+
+    #[test]
+    fn lock_is_released_even_if_a_descriptor_is_inherited() {
+        let workspace = tempfile::tempdir().unwrap();
+        let lock = WorkProcessLock::acquire(workspace.path()).unwrap();
+        let inherited = lock._file.try_clone().unwrap();
+        assert!(WorkProcessLock::acquire(workspace.path()).is_err());
+        drop(lock);
+        let next = WorkProcessLock::acquire(workspace.path()).unwrap();
+        assert!(WorkProcessLock::acquire(workspace.path()).is_err());
+        drop(next);
+        drop(inherited);
     }
 }

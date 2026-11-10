@@ -19,7 +19,7 @@ The project must have a configured `.baton/config.json` pipeline. Use an explici
 
 - Run `baton work status` to find existing work sessions. Resume a requested run by its ID; if ambiguous, ask. Do not silently create a second run for an already active task.
 - Start a new run with `baton work start --issue '<user request>'`. Baton stores this value unchanged as text, including URLs or issue numbers. Add `--pipeline ID` when needed.
-- Pass explicit project/user check commands as `--check 'STEP_ID=COMMAND'`; Baton executes these gates itself on successful submissions for that step. Do not invent commands or omit configured requirements. Commands execute with local user permissions.
+- Pass explicit project/user check commands as `--check 'STEP_ID=COMMAND'`; Baton executes these gates itself on successful submissions for that step. Successful gate results, including command, exit code and output, are recorded in the session; failed gates reject submission and are reported to the caller but are not recorded as accepted submissions. Agent-reported checks are not gate results. Do not invent commands or omit configured requirements. Commands execute with local user permissions.
 - Record the returned run ID and always use `--run ID` afterward. If the request references an issue and its body is not already in this session, read it yourself with the available tools (for example `gh issue view <url>`). Do this during planning, before implementation, and retain the issue and its acceptance criteria in the session context. Baton does not fetch or resolve issues. Clarify an ambiguous issue number or inaccessible source with the user.
 
 ## Execute the pipeline
