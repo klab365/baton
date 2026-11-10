@@ -76,6 +76,10 @@ jobs:
       - name: Set up Mise, Rust, Bun and Pi
         uses: jdx/mise-action@v2
 
+      - name: Build Baton CLI
+        timeout-minutes: 10
+        run: cargo build -p baton-cli --bin baton
+
       - name: Run Ollama Cloud integration test
         env:
           OLLAMA_LIVE_TEST: "1"
