@@ -17,15 +17,21 @@ async function runDemo(live: boolean) {
 	let requests = 0;
 	let attempts = 0;
 	let builderReceivedPlan = false;
+	let builderReceivedMemory = false;
+	let memoryPath = "";
 	const scriptedOutcomes = ["completed", "progress", "progress", "progress", "progress", "completed", "revise_build", "completed", "approved"];
 	const server = Bun.serve({
 		port: 0,
 		fetch: async (request) => {
 			const body = (await request.json()) as { messages: { role: string }[] };
 			if (attempts === 1 && JSON.stringify(body.messages).includes("Implement the greeting and verify the README.")) builderReceivedPlan = true;
-			const isFinal = body.messages.some((message) => message.role === "tool");
+			const toolResults = body.messages.filter((message) => message.role === "tool");
+			const firstBuilderRead = attempts === 2 && toolResults.length === 1;
+			if (firstBuilderRead && JSON.stringify(toolResults).includes("Memory: preserve the greeting")) builderReceivedMemory = true;
+			const isFinal = toolResults.length > 0 && !firstBuilderRead;
 			requests++;
-			const outcome = isFinal ? undefined : scriptedOutcomes[attempts++];
+			const outcome = toolResults.length === 0 ? scriptedOutcomes[attempts++] : scriptedOutcomes[attempts - 1];
+			const shouldRead = attempts === 2 && toolResults.length === 0;
 			const delta = isFinal
 				? { content: attempts === 1 ? "Implement the greeting and verify the README." : "Step complete." }
 				: {
@@ -35,8 +41,8 @@ async function runDemo(live: boolean) {
 								id: "call_1",
 								type: "function",
 								function: {
-									name: "report_outcome",
-									arguments: JSON.stringify({
+									name: shouldRead ? "read" : "report_outcome",
+									arguments: JSON.stringify(shouldRead ? { path: memoryPath } : {
 										outcome,
 										summary: attempts === 1 ? "Detailed handoff follows." : `Attempt ${attempts}: ${outcome}; next continue`,
 										blocker_reason: "",
@@ -170,8 +176,10 @@ async function runDemo(live: boolean) {
 			resultFile,
 		]);
 		expect(next.currentStep).toBe("build");
-		expect((await command(["status", "--run", start.id])).steps[0].output).toContain("Implement the greeting and verify the README.");
+		expect((await command(["status", "--run", start.id])).steps[0].output).toBe(submission.summary);
 		if (!live) {
+			memoryPath = `.baton/work/${start.id}.md`;
+			await writeFile(join(workspace, memoryPath), "Memory: preserve the greeting\n");
 			for (const [expectedStep, expectedOutcome, nextStep] of [
 				["build", "progress", "build"], ["build", "progress", "build"],
 				["build", "progress", "build"], ["build", "progress", "build"],
@@ -188,6 +196,7 @@ async function runDemo(live: boolean) {
 				expect(state.currentStep).toBe(nextStep);
 			}
 			expect(builderReceivedPlan).toBe(true);
+			expect(builderReceivedMemory).toBe(true);
 			const status = await command(["status", "--run", start.id]);
 			expect(status.status).toBe("waitingHuman");
 		}

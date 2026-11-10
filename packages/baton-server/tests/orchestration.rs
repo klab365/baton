@@ -124,16 +124,17 @@ fn ordered_handoff_and_restart_safe_records() {
         &fixture.repo(),
     )
     .unwrap();
-    assert_eq!(
-        runtime.calls,
-        vec![
-            ("writer".into(), "task".into()),
-            (
-                "reviewer".into(),
-                "Original task:\ntask\n\nRun history (chronological):\n\n1. write · writer · Completed\nwriter: task".into()
-            )
-        ]
+    assert_eq!(runtime.calls.len(), 2);
+    assert_eq!(runtime.calls[0].0, "writer");
+    assert!(runtime.calls[0].1.starts_with("task\n\nRun working notes:"));
+    assert!(runtime.calls[0].1.contains(".baton/work/success.md"));
+    assert_eq!(runtime.calls[1].0, "reviewer");
+    assert!(
+        runtime.calls[1]
+            .1
+            .contains("1. write · writer · Completed\nwriter: task")
     );
+    assert!(runtime.calls[1].1.contains(".baton/work/success.md"));
     assert_eq!(run.status, Status::Succeeded);
     let workspace = run.worktree.as_ref().unwrap();
     assert_ne!(workspace.path, fixture.0);
@@ -278,7 +279,20 @@ fn restart_reader() {
         .unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.task, "task");
-    assert_eq!(run.steps[0].output.as_deref(), Some("writer: task"));
+    assert!(
+        run.steps[0]
+            .output
+            .as_deref()
+            .unwrap()
+            .starts_with("writer: task")
+    );
+    assert!(
+        run.steps[0]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(".baton/work/success.md")
+    );
     assert!(
         run.steps[1]
             .input
@@ -425,7 +439,9 @@ fn interrupted_execution_leaves_durable_running_state_without_retry() {
     assert!(run.ended_at.is_none());
     assert!(run.duration_ms.is_none());
     assert_eq!(run.steps[0].status, Status::Running);
-    assert_eq!(run.steps[0].input.as_deref(), Some("task"));
+    let input = run.steps[0].input.as_deref().unwrap();
+    assert!(input.starts_with("task\n\nRun working notes:"));
+    assert!(input.contains(".baton/work/interrupted.md"));
     assert_eq!(run.steps[1].status, Status::Pending);
 }
 

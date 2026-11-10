@@ -16,6 +16,10 @@ pub trait RunRepository: Send + Sync {
     fn worktree_manager(&self) -> Result<Box<dyn WorktreeManager>, String> {
         Err("Project worktree manager is not configured".into())
     }
+    /// Prepare local, non-authoritative agent notes in the run's working directory.
+    fn prepare_run_memory(&self, _run: &PipelineRun) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     fn create(&self, run: &PipelineRun) -> Result<(), String>;
     fn save(&self, run: &PipelineRun) -> Result<(), String>;
     fn load(&self, id: &str) -> Result<PipelineRun, String>;

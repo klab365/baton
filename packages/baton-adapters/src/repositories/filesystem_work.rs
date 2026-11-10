@@ -99,6 +99,10 @@ struct ActionLease {
 }
 impl RunActionLease for ActionLease {}
 impl RunRepository for FilesystemWorkRepository {
+    fn prepare_run_memory(&self, run: &PipelineRun) -> Result<Option<String>, String> {
+        super::run_memory::prepare(&self.0, &run.id, &run.task).map(Some)
+    }
+
     fn acquire_action_lease(&self, id: &str) -> Result<Box<dyn RunActionLease>, String> {
         self.path(id)?;
         let lock = super::locks::try_lock(self.directory().join("actions").join(id))

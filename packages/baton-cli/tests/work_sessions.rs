@@ -103,6 +103,77 @@ async fn progress_continues_same_step_and_is_bounded() {
 }
 
 #[tokio::test]
+async fn work_notes_survive_continuation_and_are_ignored() {
+    let f = Fixture::new();
+    let app = f.app();
+    let start = f.start(&app, 50, json!([])).await;
+    let path = f
+        .path
+        .join(".baton/work")
+        .join(format!("{}.md", start["id"].as_str().unwrap()));
+    assert!(path.is_file());
+    assert_eq!(
+        std::fs::read_to_string(f.path.join(".baton/work/.gitignore")).unwrap(),
+        "*\n"
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&f.path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .arg("check-ignore")
+            .arg(&path)
+            .current_dir(&f.path)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    std::fs::write(&path, "Integrated: initial parser\nNext: tests\n").unwrap();
+    let continued = f.submit(&app, &start, "progress").await.unwrap();
+    drop(app);
+    let app = f.app();
+    let restored = f
+        .call(&app, json!({"command":"status", "id":start["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(continued, restored);
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        "Integrated: initial parser\nNext: tests\n"
+    );
+}
+
+#[tokio::test]
+async fn oversized_work_notes_do_not_advance_the_run() {
+    let f = Fixture::new();
+    let app = f.app();
+    let start = f.start(&app, 50, json!([])).await;
+    let path = f
+        .path
+        .join(".baton/work")
+        .join(format!("{}.md", start["id"].as_str().unwrap()));
+    std::fs::write(path, vec![b'x'; 256 * 1024 + 1]).unwrap();
+    assert!(
+        f.submit(&app, &start, "progress")
+            .await
+            .unwrap_err()
+            .contains("256 KiB")
+    );
+    let current = f
+        .call(&app, json!({"command":"status", "id":start["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(current["session"]["revision"], 0);
+    assert_eq!(current["currentStep"], "build");
+}
+
+#[tokio::test]
 async fn progress_can_finish_and_advance_to_review() {
     let f = Fixture::new();
     let app = f.app();
