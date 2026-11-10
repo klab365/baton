@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "bun x --bun vite dev",
+		"test-browser": "playwright test",
 		"build": "bun x --bun vite build",
 		"check": "bun x --bun svelte-kit sync && bun x --bun svelte-check --tsconfig ./tsconfig.json",
 		"format": "bun x --bun biome format --write .",
@@ -15,6 +16,7 @@
 		"@biomejs/biome": "^2.6.2",
 		"@internationalized/date": "^3.12.0",
 		"@lucide/svelte": "^1.61.0",
+		"@playwright/test": "^1.65.0",
 		"@sveltejs/adapter-static": "^4.0.1",
 		"@sveltejs/kit": "^2.48.4",
 		"@tailwindcss/vite": "^4.3.3",
