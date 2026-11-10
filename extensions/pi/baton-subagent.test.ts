@@ -40,7 +40,7 @@ function fixture(
 									{ id: "assigned", content: "Assigned skill instructions" },
 								],
 								skillsDirectory: "/workspace/.agents/skills",
-								allowedOutcomes: ["approved", "revise_build"],
+								allowedOutcomes: ["approved", "revise_build", "blocked"],
 							}
 						: {
 								task: "Original issue",
@@ -107,8 +107,11 @@ function fixture(
 			if (!report) throw new Error("Missing report_outcome tool");
 			await expect(report.execute("1", { outcome: "invalid", summary: "x" })).rejects.toThrow("Invalid outcome");
 			await expect(report.execute("1", { outcome: "approved", summary: " " })).rejects.toThrow("Invalid outcome");
-			await report.execute("1", JSON.parse(answer));
-			await expect(report.execute("2", JSON.parse(answer))).rejects.toThrow("already been reported");
+			await expect(report.execute("1", { outcome: "blocked", summary: "Cannot continue", blocker_reason: "", human_action: "Provide access" })).rejects.toThrow("Blocked outcomes require");
+			await expect(report.execute("1", { outcome: "blocked", summary: "Cannot continue", blocker_reason: "Missing access", human_action: "" })).rejects.toThrow("Blocked outcomes require");
+			const value = { blocker_reason: "", human_action: "", ...JSON.parse(answer) };
+			await report.execute("1", value);
+			await expect(report.execute("2", value)).rejects.toThrow("already been reported");
 		} else {
 			await writeFile(JSON.parse(resultPath), answer);
 		}
@@ -174,6 +177,12 @@ test("report_outcome validates the decision and records it only once", async () 
 	const f = fixture(JSON.stringify({ outcome: "approved", summary: "Reviewed" }), { exerciseTool: true });
 	const result = await f.execute();
 	expect(JSON.parse(result.content[0].text).outcome).toBe("approved");
+});
+
+test("blocked outcome includes the reason and human action in the handoff", async () => {
+	const f = fixture(JSON.stringify({ outcome: "blocked", summary: "Cannot continue", blocker_reason: "Missing access", human_action: "Provide access" }), { exerciseTool: true });
+	const result = await f.execute();
+	expect(JSON.parse(result.content[0].text).summary).toBe("Cannot continue\n\nBlocker: Missing access\nHuman action needed: Provide access");
 });
 
 test("real Pi loads the generated report_outcome tool", async () => {
