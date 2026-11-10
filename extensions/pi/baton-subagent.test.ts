@@ -12,7 +12,7 @@ type TestTool = {
 
 function fixture(
 	answer: string,
-	options: { human?: boolean; code?: number; stale?: boolean; exerciseTool?: boolean; realPi?: boolean } = {},
+	options: { human?: boolean; code?: number; stale?: boolean; exerciseTool?: boolean; realPi?: boolean; finalText?: string } = {},
 ) {
 	let tool: TestTool | undefined;
 	const calls: string[][] = [];
@@ -123,7 +123,7 @@ function fixture(
 		expect(prompt).toContain("Prior result");
 		progress("→ read");
 		if (options.code) throw new Error("Subagent failed");
-		return answer;
+		return options.finalText ?? "";
 	};
 	createExtension(run)(pi as unknown as ExtensionAPI);
 	const updates: string[] = [];
@@ -171,6 +171,14 @@ test("passes current task and instructions to child and returns a submission", a
 	expect(f.updates.at(-1)).toContain("Result: approved");
 	expect(f.statuses.some((status) => status?.includes("attempt 3"))).toBe(true);
 	expect(f.statuses.at(-1)).toBeUndefined();
+});
+
+test("includes the final answer without bypassing outcome validation or the handoff limit", async () => {
+	const answer = JSON.stringify({ outcome: "approved", summary: "Detailed handoff follows" });
+	const result = await fixture(answer, { finalText: "Implement the API and test it." }).execute();
+	expect(JSON.parse(result.content[0].text).summary).toBe("Detailed handoff follows\n\nFinal response:\nImplement the API and test it.");
+	await expect(fixture(answer, { finalText: "x".repeat(16_384) }).execute()).rejects.toThrow("handoff exceeds");
+	await expect(fixture(JSON.stringify({ outcome: "invalid", summary: "x" }), { finalText: "details" }).execute()).rejects.toThrow("invalid outcome");
 });
 
 test("report_outcome validates the decision and records it only once", async () => {
