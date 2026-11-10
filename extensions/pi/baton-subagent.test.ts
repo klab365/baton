@@ -75,7 +75,6 @@ function fixture(
 		expect(prompt).toContain("Do not invoke baton work, delegate further, or make human decisions.");
 		expect(prompt).not.toContain("commit, or push");
 		expect(prompt).toContain("Original issue");
-		expect(prompt).toContain(".baton/work/abc.md");
 		expect(prompt).toContain("review carefully; call report_outcome exactly once");
 		const protocolIndex = args.indexOf("--append-system-prompt");
 		expect(protocolIndex).toBeGreaterThanOrEqual(0);

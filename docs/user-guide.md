@@ -83,8 +83,6 @@ Open **Runs** and select a run to see its status, configured steps, ordered atte
 
 When a run reaches a human step, it enters `waitingHuman`. In **Action required**, read the step context, optionally enter a response and select one of the configured outcomes. The chosen outcome determines the route; the response is the next handoff. Waiting has no automatic timeout or approval. A run can be cancelled while running or waiting; cancellation is cooperative for in-flight work, and a cancelled run cannot be resumed. Its task worktree remains until the task is done or deleted.
 
-Managed agent steps receive a local working note at `.baton/work/<run-id>.md` in the task worktree. Agents may update this non-authoritative note with progress and next actions; it is ignored by Git and removed with the worktree. Do not put secrets in it. Baton checks that the note is a regular file no larger than 256 KiB before each agent attempt; agent edits are not guaranteed atomic. Notes do not replace run decisions, history or independently executed checks.
-
 After a backend restart, a previously waiting run remains available for a human response. Baton attempts to resume interrupted managed agent steps with the saved pipeline snapshot and retained worktree; the previous attempt is marked failed and a fresh attempt is started. The agent is instructed to reconcile possible external side effects, but this is not an exactly-once guarantee. Interrupted shell steps, missing or invalid worktrees, and unavailable runtime configuration are not retried automatically and remain failed. See [directed workflows and human decisions](workflow-transitions.md).
 
 ## Files, configuration and security

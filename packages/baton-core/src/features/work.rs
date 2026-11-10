@@ -285,7 +285,6 @@ async fn start_work_handler(
         }),
     };
     prepare(&mut run)?;
-    resources.runs.prepare_run_memory(&run)?;
     resources.runs.create(&run)?;
     publish(
         resources.runs.as_ref(),
@@ -448,7 +447,6 @@ async fn submit_work_handler(
             &result.outcome,
         )?;
         bounded("Summary", &result.summary)?;
-        resources.runs.prepare_run_memory(&run)?;
         let mut routed = run.clone();
         if result.outcome != Outcome::Progress {
             let (_, pipeline) = graph(&run)?;

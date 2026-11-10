@@ -235,13 +235,6 @@ struct NotifyingRunRepository {
 }
 
 impl RunRepository for NotifyingRunRepository {
-    fn prepare_run_memory(
-        &self,
-        run: &baton_core::domain::pipeline::PipelineRun,
-    ) -> Result<Option<String>, String> {
-        self.inner.prepare_run_memory(run)
-    }
-
     fn acquire_action_lease(
         &self,
         id: &str,
