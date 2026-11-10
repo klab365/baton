@@ -414,18 +414,7 @@ pub(crate) fn execute_graph(
             .iter()
             .find(|s| Some(&s.id) == run.current_step.as_ref())
             .ok_or("Unknown current step")?;
-        let mut input = step_input(&run, pipeline);
-        if !step.human && step.command.is_none() {
-            match repository.prepare_run_memory(&run) {
-                Ok(Some(path)) => input.push_str(&format!("\n\nRun working notes: {path}. Read these non-authoritative notes before working. If your assigned step permits editing, keep them concise (at most 256 KiB): record integrated work, remaining work, relevant checks and the next concrete action. Update before reporting an outcome, do not record secrets, and never commit the notes. The notes do not replace the required outcome or human decisions.")),
-                Ok(None) => {}
-                Err(error) => {
-                    run.status = Status::Failed;
-                    publish(repository, &mut run, Some(format!("Run memory unavailable: {error}")))?;
-                    break;
-                }
-            }
-        }
+        let input = step_input(&run, pipeline);
         let index = if let Some(i) = run
             .steps
             .iter()

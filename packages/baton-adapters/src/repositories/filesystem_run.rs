@@ -148,13 +148,6 @@ struct FileRunActionLease {
 impl RunActionLease for FileRunActionLease {}
 
 impl RunRepository for FilesystemRunRepository {
-    fn prepare_run_memory(&self, run: &PipelineRun) -> Result<Option<String>, String> {
-        run.worktree
-            .as_ref()
-            .map(|worktree| super::run_memory::prepare(&worktree.path, &run.id, &run.task))
-            .transpose()
-    }
-
     fn acquire_action_lease(&self, id: &str) -> Result<Box<dyn RunActionLease>, String> {
         self.path(id)?;
         let lock = super::locks::try_lock(self.0.join(".baton/locks/run-actions").join(id))

@@ -43,23 +43,11 @@ async fn chat(
     Json(request): Json<Value>,
 ) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     let attempt = provider.requests.fetch_add(1, Ordering::SeqCst);
-    let request_text = request.to_string();
     provider.received.send(request).unwrap();
     if attempt == 0 {
         std::future::pending::<()>().await;
     }
-    let chunk = if attempt == 1 {
-        let suffix = request_text
-            .split(".baton/work/")
-            .nth(1)
-            .expect("run memory path");
-        let id = suffix.split(".md").next().unwrap();
-        let arguments =
-            json!({"path":format!(".baton/work/{id}.md"),"offset":null,"limit":null}).to_string();
-        json!({"id":"fake", "object":"chat.completion.chunk", "created":1, "model":"fake", "choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_memory","type":"function","function":{"name":"read","arguments":arguments}}]},"finish_reason":"tool_calls"}]})
-    } else {
-        json!({"id":"fake", "object":"chat.completion.chunk", "created":1, "model":"fake", "choices":[{"index":0,"delta":{"role":"assistant","content":"Work complete"},"finish_reason":"stop"}]})
-    };
+    let chunk = json!({"id":"fake", "object":"chat.completion.chunk", "created":1, "model":"fake", "choices":[{"index":0,"delta":{"role":"assistant","content":"Work complete"},"finish_reason":"stop"}]});
     (
         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
         format!("data: {chunk}\n\ndata: [DONE]\n\n"),
@@ -213,11 +201,6 @@ async fn api_resumes_interrupted_rig_run_after_server_restart() {
     assert_eq!(runs[0]["status"], "running");
     let worktree = runs[0]["worktree"]["path"].as_str().unwrap().to_owned();
     std::fs::write(Path::new(&worktree).join("preserved.txt"), "keep").unwrap();
-    std::fs::write(
-        Path::new(&worktree).join(format!(".baton/work/{run_id}.md")),
-        "Memory: continue parser integration",
-    )
-    .unwrap();
 
     server.0.kill().unwrap();
     server.0.wait().unwrap();
@@ -243,15 +226,6 @@ async fn api_resumes_interrupted_rig_run_after_server_restart() {
         resumed_request
             .to_string()
             .contains("do not repeat side effects blindly")
-    );
-    let after_read = tokio::time::timeout(Duration::from_secs(10), received.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        after_read
-            .to_string()
-            .contains("Memory: continue parser integration")
     );
     let run_url = format!("{base}/api/runs/{run_id}");
     wait_until(|| async {
