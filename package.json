@@ -4,6 +4,6 @@
 	"private": true,
 	"pi": {
 		"extensions": ["./extensions/pi/baton.ts"],
-		"skills": ["./skills"]
+		"skills": []
 	}
 }

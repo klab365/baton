@@ -15,6 +15,7 @@ use baton_core::{
     ports::runtime::AgentDecision,
 };
 use bevy_app::PluginGroup;
+use bevy_ecs::prelude::{Entity, With, Without};
 use rig::{
     catalog::Catalog,
     catalog::ModelSpec,
@@ -27,7 +28,11 @@ use rig_harness::{
         HeadlessPlugins, Home, Invoked, Name, ProjectRoot, ProjectWorkspace, RigHarnessPlugins,
         RigHome, SessionPaths, SystemPrompt, ToolAccess, TurnOutcome, WorkDir,
     },
-    rig_ecs::{agent::Conversation, effects::Handler, session_log::SessionLog},
+    rig_ecs::{
+        agent::{Conversation, SpawnedBy},
+        effects::Handler,
+        session_log::{SessionLog, SessionRestored},
+    },
     rig_tools::{
         self,
         process::Launcher,
@@ -35,13 +40,25 @@ use rig_harness::{
     },
 };
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 const MAX_PROJECT_INSTRUCTIONS_BYTES: u64 = 64 * 1024;
+const MAX_RESTORED_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
+
+fn validate_context_size(conversation: &Conversation) -> Result<(), String> {
+    let bytes =
+        serde_json::to_vec(&conversation.0).map_err(|e| format!("Serialize agent context: {e}"))?;
+    if bytes.len() > MAX_RESTORED_CONTEXT_BYTES {
+        return Err(
+            "Agent context exceeds 4 MiB; start a new run after reconciling the workspace".into(),
+        );
+    }
+    Ok(())
+}
 
 fn project_instructions(root: &Path) -> Result<Option<String>, String> {
     let path = root.join("AGENTS.md");
@@ -104,6 +121,9 @@ pub struct RigRuntime;
 
 pub struct RigAgentContext<'a> {
     pub agent: &'a BatonAgent,
+    pub run_id: &'a str,
+    pub session_root: &'a Path,
+    pub history_required: bool,
     pub credential: Option<(baton_core::domain::credentials::Credential, Option<String>)>,
     pub auth_store_dir: Option<std::path::PathBuf>,
 }
@@ -276,9 +296,60 @@ impl RigRuntime {
             handler: Handler(handler.layered(request_trace::RequestTrace(request_traces.clone()))),
         };
 
-        // Resume the same agent session for later pipeline attempts in this task worktree.
-        let session = root.join(".baton-rig").join(&baton_agent.id);
-        std::fs::create_dir_all(&session).map_err(|e| format!("Create Rig session: {e}"))?;
+        if agent_context.run_id.is_empty()
+            || !agent_context
+                .run_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err("Run ID contains invalid path characters".into());
+        }
+        if baton_agent.id.is_empty()
+            || !baton_agent
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        {
+            return Err("Agent ID contains invalid path characters".into());
+        }
+        let session = agent_context
+            .session_root
+            .join("runtime-sessions")
+            .join(agent_context.run_id)
+            .join(format!("agent-{}", baton_agent.id));
+        if agent_context.history_required && !session.join("saved").is_file() {
+            return Err("Agent session is missing; manual recovery required".into());
+        }
+        let mut directories = std::fs::DirBuilder::new();
+        directories.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            directories.mode(0o700);
+        }
+        directories
+            .create(&session)
+            .map_err(|e| format!("Create Rig session: {e}"))?;
+        let inflight = session.join("baton-inflight");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut marker = options.open(&inflight).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                "Previous agent execution was interrupted or failed; reconcile side effects and remove its baton-inflight marker before resuming".to_owned()
+            } else {
+                format!("Create Rig execution marker: {e}")
+            }
+        })?;
+        marker
+            .write_all(b"Agent execution requires reconciliation if interrupted.\n")
+            .and_then(|()| marker.sync_all())
+            .map_err(|e| format!("Write Rig execution marker: {e}"))?;
+        drop(marker);
         let workspace: Arc<dyn Workspace> = Arc::new(Local);
         let mut app = App::new();
         app.insert_resource(ProjectRoot(root.clone()))
@@ -365,6 +436,15 @@ impl RigRuntime {
         if app.should_exit().is_some() {
             return Err("Rig Harness startup failed".into());
         }
+        let restored = app
+            .world()
+            .get_resource::<SessionRestored>()
+            .ok_or("Rig session could not be restored; manual recovery required")?;
+        if !restored.repairs.is_empty() {
+            return Err(
+                "Rig session was repaired after an interruption; manual recovery required".into(),
+            );
+        }
         // Startup may report the interrupted previous turn; it is not the new turn's result.
         app.world_mut().resource_mut::<Completed>().0.take();
 
@@ -387,7 +467,7 @@ impl RigRuntime {
                 .collect::<Vec<_>>()
                 .join(", ");
             preamble.push_str(&format!(
-                "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these outcomes: {allowed}. If you have made concrete progress but cannot finish this step in this session, use progress and summarize changes, verification, and the next action; do not claim completion. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
+                "\n\nThis pipeline step requires a control decision. Work toward completing the entire step; do not stop after inspection or planning when you can continue. Call the report_outcome tool exactly once with one of these outcomes: {allowed}. Use progress only when useful work is incomplete and you cannot continue now; summarize concrete changes, verification, and the next action. Do not claim completion prematurely. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
             ));
         }
         let setup_trace = RunTraceEntry {
@@ -402,17 +482,34 @@ impl RigRuntime {
             })
             .to_string(),
         };
-        let entity = app
-            .world_mut()
-            .spawn((
-                Agent,
-                Name::new(baton_agent.id.clone()),
-                SystemPrompt(preamble),
-                connection,
-                WorkDir(root),
-                ToolAccess::All,
-            ))
-            .id();
+        let world = app.world_mut();
+        let agents = world
+            .query_filtered::<Entity, (With<Agent>, Without<SpawnedBy>)>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        let [entity] = agents.as_slice() else {
+            return Err(
+                "Rig session must contain exactly one root agent; manual recovery required".into(),
+            );
+        };
+        let entity = *entity;
+        if agent_context.history_required
+            && world
+                .get::<Conversation>(entity)
+                .is_none_or(|c| c.0.messages().is_empty())
+        {
+            return Err("Rig agent history could not be restored; manual recovery required".into());
+        }
+        if let Some(conversation) = world.get::<Conversation>(entity) {
+            validate_context_size(conversation)?;
+        }
+        world.entity_mut(entity).insert((
+            Name::new(baton_agent.id.clone()),
+            SystemPrompt(preamble),
+            connection,
+            WorkDir(root),
+            ToolAccess::All,
+        ));
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
@@ -490,10 +587,19 @@ impl RigRuntime {
                 trace.append(&mut transcript);
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
+                if let Some(failure) = app
+                    .world()
+                    .get_resource::<SessionLog>()
+                    .and_then(|log| log.failure())
+                {
+                    return Err(format!("Rig session save failed: {failure:?}"));
+                }
                 let decision = decision
                     .lock()
                     .map_err(|_| "Pipeline outcome state is unavailable".to_owned())?
                     .take();
+                std::fs::remove_file(&inflight)
+                    .map_err(|e| format!("Clear Rig execution marker: {e}"))?;
                 return Ok((answer, decision, trace));
             }
             if cancelled() {
@@ -546,6 +652,27 @@ mod compaction_tests {
                 .contains_resource::<rig_basics::compaction::CompactionDefault>()
         );
         assert!(app.should_exit().is_none());
+    }
+}
+
+#[cfg(test)]
+mod context_limit_tests {
+    use super::{Conversation, MAX_RESTORED_CONTEXT_BYTES, validate_context_size};
+
+    #[test]
+    fn rejects_oversized_restored_context() {
+        let small = Conversation(rig::conversation::Conversation::from_messages([
+            rig::completion::Message::user("hello"),
+        ]));
+        assert!(validate_context_size(&small).is_ok());
+        let large = Conversation(rig::conversation::Conversation::from_messages([
+            rig::completion::Message::user("x".repeat(MAX_RESTORED_CONTEXT_BYTES)),
+        ]));
+        assert!(
+            validate_context_size(&large)
+                .unwrap_err()
+                .contains("exceeds 4 MiB")
+        );
     }
 }
 

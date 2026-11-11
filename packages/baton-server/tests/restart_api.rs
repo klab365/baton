@@ -86,7 +86,7 @@ fn git(project: &Path, args: &[&str]) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn api_resumes_interrupted_rig_run_after_server_restart() {
+async fn api_stops_interrupted_rig_run_for_manual_reconciliation() {
     let temp = tempfile::tempdir().unwrap();
     let project: PathBuf = temp.path().join("project");
     std::fs::create_dir_all(project.join(".baton")).unwrap();
@@ -211,33 +211,19 @@ async fn api_resumes_interrupted_rig_run_after_server_restart() {
     drop(server);
     let _server = start_server(&project, &vault, port);
     wait_until(|| async { client.get(format!("{base}/api/runs")).send().await.is_ok() }).await;
-    let resumed_request = match tokio::time::timeout(Duration::from_secs(10), received.recv()).await
-    {
-        Ok(Some(request)) => request,
-        other => {
-            let body = client
-                .get(format!("{base}/api/runs/{run_id}"))
-                .send()
-                .await
-                .unwrap()
-                .text()
-                .await
-                .unwrap();
-            panic!("No resumed request: {other:?}; run: {body}");
-        }
-    };
-    assert!(
-        resumed_request
-            .to_string()
-            .contains("do not repeat side effects blindly")
-    );
     let run_url = format!("{base}/api/runs/{run_id}");
     wait_until(|| async {
         match client.get(&run_url).send().await {
-            Ok(response) => response
-                .json::<Value>()
-                .await
-                .is_ok_and(|run| run["status"] == "waitingHuman"),
+            Ok(response) => response.json::<Value>().await.is_ok_and(|run| {
+                run["status"] == "failed"
+                    && run["steps"].as_array().is_some_and(|steps| {
+                        steps.iter().any(|step| {
+                            step["error"]
+                                .as_str()
+                                .is_some_and(|error| error.contains("reconcile side effects"))
+                        })
+                    })
+            }),
             Err(_) => false,
         }
     })
@@ -257,28 +243,17 @@ async fn api_resumes_interrupted_rig_run_after_server_restart() {
         "keep"
     );
     assert_eq!(run["steps"][0]["status"], "failed");
-    assert_eq!(run["steps"][1]["status"], "waitingHuman");
+    assert!(run["steps"].as_array().unwrap().iter().any(|step| {
+        step["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("reconcile side effects"))
+    }));
     assert!(
-        run["steps"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["stepId"] == "build"
-                && step["attempt"] == 2
-                && step["status"] == "succeeded")
+        tokio::time::timeout(Duration::from_millis(500), received.recv())
+            .await
+            .is_err(),
+        "interrupted agent must not be replayed automatically"
     );
-    let completed: Value = client
-        .post(format!("{run_url}/actions"))
-        .json(&json!({"outcome":"approved", "response":"Approved by test"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(completed["status"], "succeeded");
     original_request.abort();
     provider_task.abort();
 }

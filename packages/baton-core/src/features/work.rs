@@ -5,7 +5,9 @@ use crate::{
         project::{Agent, ConfigState, Outcome, Pipeline, PipelineStep, ProjectConfig, Skill},
         work::*,
     },
-    features::pipeline_engine::{publish, utc_now},
+    features::pipeline_engine::{
+        MAX_CONSECUTIVE_PROGRESS, progress_limit_reached, publish, utc_now,
+    },
     ports::{
         project_config::ProjectConfigRepository, runs::RunRepository, runtime::MAX_HANDOFF_BYTES,
         skills::SkillRepository, work::WorkCheckRunner,
@@ -117,6 +119,15 @@ pub struct WorkItem {
     pub skills_directory: PathBuf,
     pub allowed_outcomes: Vec<Outcome>,
     pub checks: Vec<WorkCheck>,
+    pub last_result: Option<WorkResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkResult {
+    pub step_id: String,
+    pub attempt: u32,
+    pub output: String,
 }
 
 fn bounded(label: &str, text: &str) -> Result<(), String> {
@@ -354,6 +365,13 @@ async fn next_work_handler(
         } else {
             None
         },
+        last_result: run.steps.iter().rev().find_map(|s| {
+            s.output.as_ref().map(|output| WorkResult {
+                step_id: s.step_id.clone(),
+                attempt: s.attempt,
+                output: output.clone(),
+            })
+        }),
         checks: session
             .checks
             .iter()
@@ -499,16 +517,28 @@ async fn submit_work_handler(
             run.steps[index].output = Some(result.summary);
             run.steps[index].outcome = Some(Outcome::Progress);
             run.session.as_mut().ok_or("Missing session")?.revision += 1;
-            prepare(&mut run)?;
+            if progress_limit_reached(&run, &result.step_id) {
+                run.status = Status::LimitExhausted;
+                run.ended_at = Some(utc_now());
+            } else {
+                prepare(&mut run)?;
+            }
         } else {
             complete(&mut run, index, result.outcome, result.summary)?;
         }
         let message = if run.status == Status::LimitExhausted && is_progress {
-            "External work stopped after reaching the configured attempt limit"
+            if progress_limit_reached(&run, &result.step_id) {
+                format!(
+                    "Step {} stopped after {} consecutive progress submissions",
+                    result.step_id, MAX_CONSECUTIVE_PROGRESS
+                )
+            } else {
+                "External work stopped after reaching the configured attempt limit".into()
+            }
         } else {
-            "External worker submission accepted"
+            "External worker submission accepted".into()
         };
-        publish(resources.runs.as_ref(), &mut run, Some(message.into()))?;
+        publish(resources.runs.as_ref(), &mut run, Some(message))?;
         Ok(run)
     })
     .await
