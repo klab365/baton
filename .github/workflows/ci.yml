@@ -56,7 +56,9 @@ jobs:
         run: mise run test-extensions
 
       - name: Install browser
-        run: cd packages/baton-web && bunx playwright install --with-deps chromium
+        timeout-minutes: 5
+        # GitHub-hosted Ubuntu already has Chrome's system libraries.
+        run: cd packages/baton-web && bunx playwright install chromium
 
       - name: Run browser tests
         run: mise run test-browser
