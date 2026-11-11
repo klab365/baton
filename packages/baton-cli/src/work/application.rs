@@ -80,6 +80,24 @@ impl From<baton_core::domain::pipeline::PipelineRun> for WorkProgress {
     }
 }
 
+enum StepFailure {
+    Runtime(String),
+    InvalidOutcome {
+        message: &'static str,
+        trace: Vec<baton_core::domain::pipeline::RunTraceEntry>,
+    },
+}
+impl From<String> for StepFailure {
+    fn from(error: String) -> Self {
+        Self::Runtime(error)
+    }
+}
+impl From<&str> for StepFailure {
+    fn from(error: &str) -> Self {
+        Self::Runtime(error.to_owned())
+    }
+}
+
 pub struct WorkApplication {
     mediator: WorkMediator,
     workspace: PathBuf,
@@ -176,7 +194,7 @@ impl WorkApplication {
                 self.lock.lock().map_err(|e| e.to_string())?.take();
                 let repository = FilesystemWorkRepository(self.workspace.clone());
                 let cancellation_id = id.clone();
-                let execution = tokio::task::spawn_blocking(move || {
+                let execution = tokio::task::spawn_blocking(move || -> Result<_, StepFailure> {
                     let cancelled = || {
                         repository
                             .load(&cancellation_id)
@@ -220,17 +238,23 @@ impl WorkApplication {
                             trace,
                         ))
                     } else {
-                        let decision = runtime
-                            .take_decision()
-                            .ok_or("Agent completed without reporting a pipeline outcome")?;
+                        let Some(decision) = runtime.take_decision() else {
+                            return Err(StepFailure::InvalidOutcome {
+                                message: "Agent completed without reporting a pipeline outcome",
+                                trace,
+                            });
+                        };
                         if !allowed.contains(&decision.outcome) {
-                            return Err("Agent reported an invalid outcome".to_string());
+                            return Err(StepFailure::InvalidOutcome {
+                                message: "Agent reported an invalid outcome",
+                                trace,
+                            });
                         }
                         Ok((decision.outcome, decision.summary, trace))
                     }
                 })
                 .await
-                .map_err(|e| e.to_string());
+                .map_err(|e| StepFailure::Runtime(e.to_string()));
                 let workspace = self.workspace.clone();
                 let lock =
                     tokio::task::spawn_blocking(move || WorkProcessLock::acquire_wait(&workspace))
@@ -243,7 +267,23 @@ impl WorkApplication {
                     return serde_json::to_value(WorkProgress::from(current))
                         .map_err(|e| e.to_string());
                 }
-                let (outcome, summary, trace) = execution??;
+                let (outcome, summary, trace) = match execution.and_then(|result| result) {
+                    Ok(result) => result,
+                    Err(StepFailure::InvalidOutcome { message, trace }) => {
+                        self.mediator
+                            .send(FailWork {
+                                id: id.clone(),
+                                revision: item.revision,
+                                step_id: step.id.clone(),
+                                attempt,
+                                input: recorded_input,
+                                trace,
+                            })
+                            .await?;
+                        return Err(message.into());
+                    }
+                    Err(StepFailure::Runtime(error)) => return Err(error),
+                };
                 let result = serde_json::to_value(WorkProgress::from(
                     self.mediator
                         .send(SubmitWork {

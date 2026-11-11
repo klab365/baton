@@ -28,7 +28,13 @@ pub(crate) struct ReportOutcome {
 }
 impl ReportOutcome {
     pub(crate) fn new(allowed: Vec<Outcome>, decision: Arc<Mutex<Option<AgentDecision>>>) -> Self {
-        Self { allowed, decision }
+        Self {
+            allowed: allowed
+                .into_iter()
+                .filter(|outcome| *outcome != Outcome::Progress)
+                .collect(),
+            decision,
+        }
     }
 }
 
@@ -175,28 +181,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn report_outcome_records_progress_handoff() {
+    async fn report_outcome_rejects_legacy_progress() {
         let decision = Arc::new(Mutex::new(None));
-        let tool = ReportOutcome::new(vec![Outcome::Progress], decision.clone());
+        let tool = ReportOutcome::new(
+            vec![Outcome::Progress, Outcome::Completed],
+            decision.clone(),
+        );
         assert_eq!(
             tool.parameters()["properties"]["outcome"]["enum"],
-            serde_json::json!(["progress"])
+            serde_json::json!(["completed"])
         );
-        tool.call(
-            &mut ToolContext::default(),
-            super::ReportOutcomeArgs {
-                outcome: "progress".into(),
-                summary: "Implemented part; next run tests".into(),
-                blocker_reason: String::new(),
-                human_action: String::new(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            decision.lock().unwrap().as_ref().unwrap().outcome,
-            Outcome::Progress
+        assert!(
+            tool.call(
+                &mut ToolContext::default(),
+                super::ReportOutcomeArgs {
+                    outcome: "progress".into(),
+                    summary: "Partial work".into(),
+                    blocker_reason: String::new(),
+                    human_action: String::new(),
+                },
+            )
+            .await
+            .is_err()
         );
+        assert!(decision.lock().unwrap().is_none());
     }
 
     #[tokio::test]

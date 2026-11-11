@@ -61,7 +61,7 @@ In a step's **Routing** section, choose **Add conditional route**, select an out
 
 When an agent step has routes, Rig exposes `report_outcome` with only that step's configured outcomes. Tell the agent in its prompt when to call the tool, which outcome to use and what to include in its concise summary. Baton routes using the tool decision, not JSON in the final response. Missing or invalid decisions fail the attempt. The tool summary is the handoff to the next step. Without routes, no decision call is required.
 
-A route to **End run** ends successfully except for `failed`, `blocked` or `rejected`, which end as failed. Loops have **no automatic traversal or cost limit**: monitor runs and cancel one that is not making progress. The task, individual agent outputs and outcome summaries, and individual human responses are limited to 16,384 UTF-8 bytes each. The assembled step context can be larger. See [workflow transitions](workflow-transitions.md).
+A route to **End run** ends successfully except for `failed`, `blocked` or `rejected`, which end as failed. Managed loops have **no automatic traversal or cost limit**: monitor runs and cancel one that is not making progress. The task, individual agent outputs and outcome summaries, and individual human responses are limited to 16,384 UTF-8 bytes each. The assembled step context can be larger. See [workflow transitions](workflow-transitions.md).
 
 ### Ask a person for clarification
 

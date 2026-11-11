@@ -126,6 +126,29 @@ fn roundtrip_preserves_pipeline_step_order_and_configuration() {
 }
 
 #[test]
+fn legacy_progress_is_readable_but_not_a_pipeline_transition() {
+    use baton_core::domain::project::Outcome;
+    assert_eq!(
+        serde_json::from_str::<Outcome>("\"progress\"").unwrap(),
+        Outcome::Progress
+    );
+    let historical: baton_core::domain::pipeline::PipelineRun = serde_json::from_value(serde_json::json!({
+        "id":"old", "pipelineId":"draft", "task":"task", "startedAt":"then",
+        "endedAt":null, "durationMs":null, "status":"running",
+        "steps":[{"stepId":"build", "agentId":"writer", "status":"succeeded", "input":null, "output":"partial", "error":null, "outcome":"progress", "attempt":1}]
+    })).unwrap();
+    assert_eq!(historical.steps[0].outcome, Some(Outcome::Progress));
+    let mut value = example();
+    value["pipelines"][0]["steps"][0]["transitions"] =
+        serde_json::json!([{"outcome":"progress", "to":"plan"}]);
+    assert!(
+        parse_config(&value.to_string())
+            .unwrap_err()
+            .contains("only supported in historical run data")
+    );
+}
+
+#[test]
 fn actionable_validation_failures() {
     for (pointer, replacement, message) in [
         (

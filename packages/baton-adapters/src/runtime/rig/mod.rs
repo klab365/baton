@@ -467,7 +467,7 @@ impl RigRuntime {
                 .collect::<Vec<_>>()
                 .join(", ");
             preamble.push_str(&format!(
-                "\n\nThis pipeline step requires a control decision. Work toward completing the entire step; do not stop after inspection or planning when you can continue. Call the report_outcome tool exactly once with one of these outcomes: {allowed}. Use progress only when useful work is incomplete and you cannot continue now; summarize concrete changes, verification, and the next action. Do not claim completion prematurely. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
+                "\n\nThis pipeline step requires a control decision. Work toward completing the entire step; do not stop after inspection or planning when you can continue. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. Report actionable results and do not claim completion prematurely. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
             ));
         }
         let setup_trace = RunTraceEntry {
@@ -514,7 +514,6 @@ impl RigRuntime {
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
         let started = std::time::Instant::now();
-        let mut outcome_requested = false;
         loop {
             app.update();
             if let Some(outcome) = app.world_mut().resource_mut::<Completed>().0.take() {
@@ -535,24 +534,6 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
-                let missing_outcome = !allowed_outcomes.is_empty()
-                    && registered_tools.contains(&"report_outcome")
-                    && decision
-                        .lock()
-                        .map_err(|_| "Pipeline outcome state is unavailable")?
-                        .is_none();
-                if missing_outcome && !outcome_requested {
-                    outcome_requested = true;
-                    app.world_mut()
-                        .entity_mut(entity)
-                        .insert(ToolAccess::Only(vec!["report_outcome".into()]));
-                    app.world_mut().trigger(Deliver::new(
-                        entity,
-                        "You did not call report_outcome. Do not perform more work; call report_outcome now with your decision and summary.".to_owned(),
-                        DeliveryMode::Queue,
-                    ));
-                    continue;
-                }
                 let mut transcript: Vec<RunTraceEntry> = app
                     .world()
                     .get::<Conversation>(entity)

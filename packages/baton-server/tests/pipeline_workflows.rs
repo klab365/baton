@@ -265,20 +265,26 @@ fn interrupted_shell_is_not_replayed_automatically() {
 }
 
 #[test]
-fn routed_agent_progress_continues_with_handoff_before_completion() {
+fn routed_agent_rework_continues_with_handoff_before_completion() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[2].clone();
-    step.transitions = vec![baton_core::domain::project::Transition {
-        outcome: Outcome::Approved,
-        to: None,
-    }];
+    step.transitions = vec![
+        baton_core::domain::project::Transition {
+            outcome: Outcome::ReviseBuild,
+            to: Some(step.id.clone()),
+        },
+        baton_core::domain::project::Transition {
+            outcome: Outcome::Approved,
+            to: None,
+        },
+    ];
     config.pipelines[0].steps = vec![step];
     let mut runtime = Script::new(&[
-        r#"{"outcome":"progress","output":"Implemented part; next verify"}"#,
-        r#"{"outcome":"progress","output":"Second"}"#,
-        r#"{"outcome":"progress","output":"Third"}"#,
-        r#"{"outcome":"progress","output":"Fourth"}"#,
+        r#"{"outcome":"revise_build","output":"Implemented part; next verify"}"#,
+        r#"{"outcome":"revise_build","output":"Second"}"#,
+        r#"{"outcome":"revise_build","output":"Third"}"#,
+        r#"{"outcome":"revise_build","output":"Fourth"}"#,
         r#"{"outcome":"approved","output":"Verified"}"#,
     ]);
     let run = start_pipeline(
@@ -292,7 +298,7 @@ fn routed_agent_progress_continues_with_handoff_before_completion() {
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.steps.len(), 5);
-    assert_eq!(run.steps[0].outcome, Some(Outcome::Progress));
+    assert_eq!(run.steps[0].outcome, Some(Outcome::ReviseBuild));
     assert!(
         run.steps[1]
             .input
@@ -307,12 +313,12 @@ fn routed_agent_progress_continues_with_handoff_before_completion() {
         runtime
             .allowed
             .iter()
-            .all(|allowed| allowed.contains(&Outcome::Progress))
+            .all(|allowed| allowed.contains(&Outcome::ReviseBuild))
     );
 }
 
 #[test]
-fn routed_agent_progress_stops_at_safety_limit() {
+fn unconfigured_progress_fails_without_automatic_retry() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[2].clone();
@@ -321,7 +327,7 @@ fn routed_agent_progress_stops_at_safety_limit() {
         to: None,
     }];
     config.pipelines[0].steps = vec![step];
-    let mut runtime = Script::new(&[r#"{"outcome":"progress","output":"next"}"#; 100]);
+    let mut runtime = Script::new(&[r#"{"outcome":"progress","output":"next"}"#]);
     let run = start_pipeline(
         &config,
         "draft",
@@ -331,14 +337,47 @@ fn routed_agent_progress_stops_at_safety_limit() {
         &fixture.repo(),
     )
     .unwrap();
-    assert_eq!(run.status, Status::LimitExhausted);
-    assert_eq!(run.steps.len(), 100);
-    assert!(run.events.iter().any(|event| {
-        event
-            .message
+    assert_eq!(run.status, Status::Failed);
+    assert_eq!(runtime.directories.len(), 1);
+    assert!(!runtime.allowed[0].contains(&Outcome::Progress));
+    assert!(
+        run.steps[0]
+            .error
             .as_deref()
-            .is_some_and(|message| message.contains("100 consecutive progress"))
-    }));
+            .unwrap()
+            .contains("not allowed")
+    );
+}
+
+#[test]
+fn missing_configured_outcome_fails_without_automatic_retry() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: None,
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = Script::new(&["No structured outcome"]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "missing-outcome",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Failed);
+    assert_eq!(runtime.directories.len(), 1);
+    assert!(
+        run.steps[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("without reporting")
+    );
 }
 
 #[test]

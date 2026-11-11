@@ -141,7 +141,7 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             let deadline = Instant::now() + Duration::from_secs(30);
             let mut stream = loop {
                 match listener.accept() {
@@ -213,11 +213,21 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         "schemaVersion": 7,
         "agents": [
             {"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
-            {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]}
+            {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
+            {"id":"missing", "systemPrompt":"Work", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
         ],
-        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}, {"id":"human", "name":"Feedback", "human":true}, {"id":"continue", "name":"Continue", "agentId":"worker"}, {"id":"review", "name":"Review", "agentId":"reviewer"}]}]
+        "pipelines": [
+            {"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}, {"id":"human", "name":"Feedback", "human":true}, {"id":"continue", "name":"Continue", "agentId":"worker"}, {"id":"review", "name":"Review", "agentId":"reviewer"}]},
+            {"id":"missing", "steps":[{"id":"work", "name":"Work", "agentId":"missing", "transitions":[{"outcome":"completed", "to":null}]}]}
+        ]
     }).to_string()).unwrap();
-    let start = f.value(&["start", "--issue", "Implement feature"]);
+    let start = f.value(&[
+        "start",
+        "--issue",
+        "Implement feature",
+        "--pipeline",
+        "factory",
+    ]);
     let id = start["id"].as_str().unwrap();
     assert_eq!(f.value(&["execute", "--run", id])["status"], "waitingHuman");
     let response = f.path.join("human-response.json");
@@ -266,10 +276,31 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     fs::remove_file(session.join("baton-inflight")).unwrap();
     assert_eq!(f.value(&["execute", "--run", id])["status"], "running");
     assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
-    let second = f.value(&["start", "--issue", "Another task"]);
+    let second = f.value(&["start", "--issue", "Another task", "--pipeline", "factory"]);
     let second_id = second["id"].as_str().unwrap();
     f.value(&["execute", "--run", second_id]);
+    let missing = f.value(&[
+        "start",
+        "--issue",
+        "Missing outcome",
+        "--pipeline",
+        "missing",
+    ]);
+    let missing_id = missing["id"].as_str().unwrap();
+    let failed = f.work(&["execute", "--run", missing_id]);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("without reporting"));
+    let failed_run = f.value(&["status", "--run", missing_id]);
+    assert_eq!(failed_run["status"], "failed");
+    assert!(!failed_run["trace"].as_array().unwrap().is_empty());
+    assert!(
+        failed_run["steps"][0]["input"]
+            .as_str()
+            .unwrap()
+            .contains("Missing outcome")
+    );
     let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 5);
     assert!(requests[0].contains("Implement feature"));
     let assistant_messages = |request: &str| {
         let body = request.split_once("\r\n\r\n").unwrap().1;
