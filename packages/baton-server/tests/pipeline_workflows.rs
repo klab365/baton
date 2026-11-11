@@ -69,6 +69,8 @@ struct Script {
     outputs: VecDeque<String>,
     directories: Vec<PathBuf>,
     allowed: Vec<Vec<Outcome>>,
+    run_ids: Vec<String>,
+    history_required: Vec<bool>,
     decision: Option<AgentDecision>,
 }
 impl Script {
@@ -80,6 +82,13 @@ impl Script {
     }
 }
 impl AgentRuntime for Script {
+    fn set_run_id(&mut self, run_id: &str) -> Result<(), String> {
+        self.run_ids.push(run_id.to_owned());
+        Ok(())
+    }
+    fn set_history_required(&mut self, required: bool) {
+        self.history_required.push(required);
+    }
     fn execute_shell(
         &mut self,
         directory: &Path,
@@ -292,6 +301,8 @@ fn routed_agent_progress_continues_with_handoff_before_completion() {
             .contains("Implemented part; next verify")
     );
     assert_eq!(runtime.directories[0], runtime.directories[1]);
+    assert_eq!(runtime.run_ids, ["progress-test"]);
+    assert_eq!(runtime.history_required, [false, true, true, true, true]);
     assert!(
         runtime
             .allowed
@@ -310,7 +321,7 @@ fn routed_agent_progress_stops_at_safety_limit() {
         to: None,
     }];
     config.pipelines[0].steps = vec![step];
-    let mut runtime = Script::new(&vec![r#"{"outcome":"progress","output":"next"}"#; 50]);
+    let mut runtime = Script::new(&[r#"{"outcome":"progress","output":"next"}"#; 100]);
     let run = start_pipeline(
         &config,
         "draft",
@@ -321,12 +332,12 @@ fn routed_agent_progress_stops_at_safety_limit() {
     )
     .unwrap();
     assert_eq!(run.status, Status::LimitExhausted);
-    assert_eq!(run.steps.len(), 50);
+    assert_eq!(run.steps.len(), 100);
     assert!(run.events.iter().any(|event| {
         event
             .message
             .as_deref()
-            .is_some_and(|message| message.contains("50 consecutive progress"))
+            .is_some_and(|message| message.contains("100 consecutive progress"))
     }));
 }
 

@@ -234,6 +234,52 @@ async fn progress_continues_same_step_and_is_bounded() {
 }
 
 #[tokio::test]
+async fn next_returns_latest_handoff_without_replaying_large_traces() {
+    use baton_core::{domain::pipeline::RunTraceEntry, ports::runs::RunRepository};
+    let f = Fixture::new();
+    let app = f.app();
+    let run = f.start(&app, 50, json!([])).await;
+    let run = f.submit(&app, &run, "progress").await.unwrap();
+    let id = run["id"].as_str().unwrap();
+    let repo =
+        baton_adapters::repositories::filesystem_work::FilesystemWorkRepository(f.path.clone());
+    let mut stored = repo.load(id).unwrap();
+    stored.trace.push(RunTraceEntry {
+        attempt: Some(1),
+        occurred_at: "test".into(),
+        kind: "test".into(),
+        content: "x".repeat(17 * 1024 * 1024),
+    });
+    repo.save(&stored).unwrap();
+    let next = app
+        .execute(WorkCommand::Next { id: id.into() })
+        .await
+        .unwrap();
+    assert_eq!(
+        next["lastResult"]["output"],
+        "Result and acceptance criterion verification"
+    );
+    assert!(serde_json::to_vec(&next).unwrap().len() < 65536);
+}
+
+#[tokio::test]
+async fn repeated_progress_stops_before_the_overall_attempt_limit() {
+    let f = Fixture::new();
+    let app = f.app();
+    let mut run = f.start(&app, 200, json!([])).await;
+    for _ in 0..100 {
+        run = f.submit(&app, &run, "progress").await.unwrap();
+    }
+    assert_eq!(run["status"], "limitExhausted");
+    assert_eq!(run["steps"].as_array().unwrap().len(), 100);
+    assert!(run["events"].as_array().unwrap().iter().any(|event| {
+        event["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("100 consecutive progress"))
+    }));
+}
+
+#[tokio::test]
 async fn work_no_longer_creates_or_changes_markdown_notes() {
     let f = Fixture::new();
     let app = f.app();

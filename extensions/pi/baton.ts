@@ -13,8 +13,8 @@ type WorkItem = {
 	step: { id: string; name: string; human: boolean } | null;
 	attempt: number | null;
 	allowedOutcomes: string[];
+	lastResult: { stepId: string; attempt: number; output: string } | null;
 };
-type Run = { steps: { attempt: number; output: string | null }[] };
 type Progress = { id: string; status: string };
 type Exec = (args: string[]) => Promise<unknown>;
 type UI = Pick<
@@ -39,10 +39,7 @@ export async function drive(
 					item.allowedOutcomes.length === 0
 				)
 					throw new Error("Invalid human work item");
-				const run = (await exec(["status", "--run", runId])) as Run;
-				const context = [...run.steps]
-					.reverse()
-					.find((step) => step.output)?.output;
+				const context = item.lastResult?.output;
 				show(
 					`Baton ${runId}: human decision for ${item.step.name}\n\n${context ?? "No prior handoff."}`,
 				);
@@ -104,10 +101,11 @@ export async function drive(
 				`Baton ${runId}: executing ${item.step.name} (attempt ${item.attempt})`,
 			);
 			await exec(["execute", "--run", runId]);
-			const run = (await exec(["status", "--run", runId])) as Run;
-			const output = run.steps.find(
-				(step) => step.attempt === item.attempt,
-			)?.output;
+			const next = (await exec(["next", "--run", runId])) as WorkItem;
+			const output =
+				next.lastResult?.attempt === item.attempt
+					? next.lastResult.output
+					: undefined;
 			if (output) show(`Baton ${runId}: ${item.step.name} result\n\n${output}`);
 		}
 	} finally {

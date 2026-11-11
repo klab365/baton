@@ -335,7 +335,8 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
     input
 }
 
-// Managed runs need a safety limit even when no external Work budget exists.
+pub(crate) const MAX_CONSECUTIVE_PROGRESS: usize = 100;
+
 pub(crate) fn progress_limit_reached(run: &PipelineRun, step_id: &str) -> bool {
     let mut attempts: Vec<_> = run.steps.iter().filter(|step| step.attempt > 0).collect();
     attempts.sort_by_key(|step| std::cmp::Reverse(step.attempt));
@@ -343,7 +344,7 @@ pub(crate) fn progress_limit_reached(run: &PipelineRun, step_id: &str) -> bool {
         .into_iter()
         .take_while(|step| step.step_id == step_id && step.outcome == Some(Outcome::Progress))
         .count()
-        >= 50
+        >= MAX_CONSECUTIVE_PROGRESS
 }
 
 fn repeated_blocker(
@@ -400,6 +401,7 @@ pub(crate) fn execute_graph(
     repository: &dyn RunRepository,
 ) -> Result<PipelineRun, String> {
     let clock = Instant::now();
+    runtime.set_run_id(&run.id)?;
     let pipeline = config
         .pipelines
         .iter()
@@ -517,6 +519,9 @@ pub(crate) fn execute_graph(
             allowed_outcomes.push(Outcome::Progress);
         }
         let assigned = agent.clone();
+        runtime.set_history_required(run.steps.iter().any(|attempt| {
+            attempt.agent_id == agent.id && attempt.attempt > 0 && attempt.output.is_some()
+        }));
         let cancellation_id = run.id.clone();
         let cancelled = || {
             repository
@@ -591,8 +596,8 @@ pub(crate) fn execute_graph(
                             repository,
                             &mut run,
                             Some(format!(
-                                "Step {} stopped after 50 consecutive progress submissions",
-                                step.id
+                                "Step {} stopped after {} consecutive progress submissions",
+                                step.id, MAX_CONSECUTIVE_PROGRESS
                             )),
                         )?;
                     }

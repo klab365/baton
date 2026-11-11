@@ -31,13 +31,17 @@ baton work respond --run RUN_ID --result human-response.json
 baton work cancel --run RUN_ID
 ```
 
-If only one pipeline exists, `--pipeline` may be omitted. Start creates a new run; use its ID to resume. `next` returns the current step, attempt, revision, allowed outcomes and checks. `execute` runs one agent or shell step and submits its result through Baton. Repeat until completion, an error, or a human pause. Outputs are JSON; errors are JSON on stderr with a nonzero exit code. `status --run ID` returns the persisted run.
+If only one pipeline exists, `--pipeline` may be omitted. Start creates a new run; use its ID to resume. `next` returns the current step, attempt, revision, allowed outcomes, checks and latest handoff without replaying the full trace. `execute` runs one agent or shell step and submits its result through Baton. Repeat until completion, an error, or a human pause. Outputs are JSON; errors are JSON on stderr with a nonzero exit code. `status --run ID` returns the persisted run.
 
 Human steps require an explicit user decision via `respond`. Supply a JSON file containing the current `revision`, `stepId`, `attempt`, `outcome`, and `response`. This is a protocol distinction, not identity authentication: a process with shell access can invoke `respond`.
 
 `submit` remains available for explicit structured submissions. A result contains `revision`, `stepId`, `attempt`, `outcome`, and a nonempty `summary`. Stale or invalid results are rejected. The skill must not fabricate a result or human decision.
 
-For routed agent steps, the configured runtime reports a structured outcome. `progress` prepares another attempt of the same step without advancing or running success checks. Attempt limits apply; the default is 50 total attempts including human steps, configurable from 1 to 1000 via `--max-attempts`. A new runtime invocation receives the original task and prior handoffs, not a persistent model session. Per-agent memory within a run is separate future work.
+For routed agent steps, the configured runtime reports a structured outcome. `progress` prepares another attempt of the same step without advancing or running success checks. One hundred consecutive progress attempts for the same step stop the run with `limitExhausted`; the event records why. The overall limit defaults to 50 attempts including human steps and can be configured from 1 to 1000 via `--max-attempts`.
+
+Rig persists each agent's conversation under `runtime-sessions/<run-id>/agent-<agent-id>/` in the project's local credential-vault directory, outside the workspace. Subsequent attempts of the same agent in that run restore its conversation and receive the current task and handoffs; different agents and new runs do not share conversations. These files can contain conversation and tool output; keep secrets out of them and out of version control. Sessions from the former workspace-wide layout are not automatically imported, because their run ownership cannot be verified.
+
+Rig's compaction plugin manages model context near the provider's window. Before starting a turn, Baton additionally rejects a restored conversation larger than 4 MiB of serialized JSON; reconcile the workspace and start a new run if this limit is reached. Baton does not silently replace a missing or unreadable expected session with empty history.
 
 ## Checks and workspace ownership
 
@@ -45,4 +49,4 @@ Add explicit process gates at start, for example `--check 'build=cargo test'`. B
 
 Work records are stored under `.baton/work/`, independently of server records. The workspace remains externally owned; completion or cancellation never removes it. Configuration is snapshotted at start. Concurrent changes to the same workspace remain the user's responsibility.
 
-While an agent or command runs, status and cancellation commands may run concurrently. Only one Work execution can use the workspace at a time. Cancellation is cooperative and is checked by the runtime and shell runner; it does not undo changes already made. If execution is interrupted, inspect `status` and `next` before retrying: an unfinished step may already have modified files. There are no automatic commits, merges or issue updates.
+While an agent or command runs, status and cancellation commands may run concurrently. Only one Work execution can use the workspace at a time. Cancellation is cooperative and does not undo changes already made. A failed or interrupted Rig execution leaves `baton-inflight` in its agent session directory and cannot be retried automatically. Inspect the run, session and workspace and reconcile possible side effects (including commits and network actions) before manually removing that marker and retrying. If the expected session is missing, corrupt or repaired during restoration, stop and reconcile rather than assuming the prior context survived. In server mode an interrupted in-flight execution fails on restart instead of replaying automatically; after reconciliation, start a new run. There are no automatic commits, merges or issue updates.

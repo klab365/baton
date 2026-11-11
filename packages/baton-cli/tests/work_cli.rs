@@ -140,52 +140,58 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut stream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(e)
-                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(10))
+        let mut requests = Vec::new();
+        for _ in 0..4 {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(e) => panic!("provider accept failed: {e}"),
                 }
-                Err(e) => panic!("provider accept failed: {e}"),
-            }
-        };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut request = Vec::new();
-        let mut buf = [0; 4096];
-        loop {
-            let n = stream.read(&mut buf).unwrap();
-            if n == 0 {
-                break;
-            }
-            request.extend_from_slice(&buf[..n]);
-            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                let headers = String::from_utf8_lossy(&request[..end]);
-                let length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':')
-                            .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
-                            .and_then(|(_, v)| v.trim().parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                if request.len() >= end + 4 + length {
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
                     break;
                 }
+                request.extend_from_slice(&buf[..n]);
+                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':')
+                                .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                                .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
             }
+            let body = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            requests.push(String::from_utf8(request).unwrap());
         }
-        let body = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
-        String::from_utf8(request).unwrap()
+        requests
     });
     let store = baton_adapters::credentials::FilesystemCredentialRepository::for_project_in(
         &f.path, &f.vault,
     )
     .unwrap();
+    let session_root = store.root_path().to_path_buf();
     store
         .save(
             &Credential {
@@ -205,14 +211,91 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         .unwrap();
     fs::write(f.path.join(".baton/config.json"), json!({
         "schemaVersion": 7,
-        "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]}],
-        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}]}]
+        "agents": [
+            {"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
+            {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]}
+        ],
+        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}, {"id":"human", "name":"Feedback", "human":true}, {"id":"continue", "name":"Continue", "agentId":"worker"}, {"id":"review", "name":"Review", "agentId":"reviewer"}]}]
     }).to_string()).unwrap();
     let start = f.value(&["start", "--issue", "Implement feature"]);
     let id = start["id"].as_str().unwrap();
+    assert_eq!(f.value(&["execute", "--run", id])["status"], "waitingHuman");
+    let response = f.path.join("human-response.json");
+    fs::write(&response, json!({"revision":1,"stepId":"human","attempt":2,"outcome":"responded","response":"Include the human feedback"}).to_string()).unwrap();
+    assert_eq!(
+        f.value(&[
+            "respond",
+            "--run",
+            id,
+            "--result",
+            response.to_str().unwrap()
+        ])["status"],
+        "running"
+    );
+    let session = session_root
+        .join("runtime-sessions")
+        .join(id)
+        .join("agent-worker");
+    fs::write(session.join("baton-inflight"), "interrupted").unwrap();
+    let interrupted = f.work(&["execute", "--run", id]);
+    assert!(!interrupted.status.success());
+    assert!(String::from_utf8_lossy(&interrupted.stderr).contains("reconcile side effects"));
+    fs::remove_file(session.join("baton-inflight")).unwrap();
+    let backup = f.path.join("session-backup");
+    fs::rename(&session, &backup).unwrap();
+    let missing = f.work(&["execute", "--run", id]);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("session is missing"));
+    fs::rename(&backup, &session).unwrap();
+    let log = fs::read_dir(session.join("logs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .unwrap();
+    let saved_log = fs::read(&log).unwrap();
+    fs::write(&log, b"not a valid session\n").unwrap();
+    let corrupt = f.work(&["execute", "--run", id]);
+    assert!(
+        !corrupt.status.success(),
+        "corrupted session must not silently start fresh"
+    );
+    fs::write(&log, saved_log).unwrap();
+    let interrupted = f.work(&["execute", "--run", id]);
+    assert!(!interrupted.status.success());
+    assert!(String::from_utf8_lossy(&interrupted.stderr).contains("reconcile side effects"));
+    fs::remove_file(session.join("baton-inflight")).unwrap();
+    assert_eq!(f.value(&["execute", "--run", id])["status"], "running");
     assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
-    let request = server.join().unwrap();
-    assert!(request.contains("Implement feature"));
+    let second = f.value(&["start", "--issue", "Another task"]);
+    let second_id = second["id"].as_str().unwrap();
+    f.value(&["execute", "--run", second_id]);
+    let requests = server.join().unwrap();
+    assert!(requests[0].contains("Implement feature"));
+    let assistant_messages = |request: &str| {
+        let body = request.split_once("\r\n\r\n").unwrap().1;
+        let json: Value = serde_json::from_str(body).unwrap();
+        json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "assistant")
+            .count()
+    };
+    assert!(
+        assistant_messages(&requests[1]) > 0,
+        "agent must receive its own earlier response"
+    );
+    assert!(requests[1].contains("Include the human feedback"));
+    assert_eq!(
+        assistant_messages(&requests[2]),
+        0,
+        "other agent must not inherit conversation"
+    );
+    assert_eq!(
+        assistant_messages(&requests[3]),
+        0,
+        "new run must not inherit conversation"
+    );
     let status = f.value(&["status", "--run", id]);
     assert!(
         status["steps"][0]["output"]

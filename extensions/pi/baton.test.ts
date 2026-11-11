@@ -22,6 +22,7 @@ const human = {
 	step: { id: "help", name: "Help", human: true },
 	attempt: 3,
 	allowedOutcomes: ["approved", "rejected"],
+	lastResult: { stepId: "build", attempt: 2, output: "Please approve" },
 };
 
 test("runs steps through CLI and shows the result", async () => {
@@ -36,10 +37,11 @@ test("runs steps through CLI and shows the result", async () => {
 				completed = true;
 				return {};
 			}
-			if (args[0] === "status")
-				return { steps: [{ attempt: 1, output: "Done" }] };
 			return completed
-				? { status: "succeeded" }
+				? {
+						status: "succeeded",
+						lastResult: { stepId: "build", attempt: 1, output: "Done" },
+					}
 				: {
 						status: "running",
 						step: { id: "build", name: "Build" },
@@ -49,7 +51,7 @@ test("runs steps through CLI and shows the result", async () => {
 		ui(),
 		(text) => messages.push(text),
 	);
-	expect(commands).toEqual(["next", "execute", "status", "next"]);
+	expect(commands).toEqual(["next", "execute", "next", "next"]);
 	expect(messages.join("\n")).toContain("Done");
 });
 
@@ -59,14 +61,12 @@ test("does not submit a human decision when selection is cancelled", async () =>
 		"run",
 		async (args) => {
 			commands.push(args[0]);
-			return args[0] === "next"
-				? human
-				: { steps: [{ output: "What should I do?" }] };
+			return human;
 		},
 		ui(),
 		() => {},
 	);
-	expect(commands).toEqual(["next", "status"]);
+	expect(commands).toEqual(["next"]);
 });
 
 test("does not submit a decision when confirmation is declined", async () => {
@@ -75,9 +75,7 @@ test("does not submit a decision when confirmation is declined", async () => {
 		"run",
 		async (args) => {
 			commands.push(args[0]);
-			return args[0] === "next"
-				? human
-				: { steps: [{ output: "Please approve" }] };
+			return human;
 		},
 		ui({
 			select: async () => "approved",
@@ -86,7 +84,7 @@ test("does not submit a decision when confirmation is declined", async () => {
 		}),
 		() => {},
 	);
-	expect(commands).toEqual(["next", "status"]);
+	expect(commands).toEqual(["next"]);
 });
 
 test("submits only the explicitly confirmed human decision", async () => {
@@ -97,8 +95,6 @@ test("submits only the explicitly confirmed human decision", async () => {
 		"run",
 		async (args) => {
 			if (args[0] === "next") return waiting ? human : { status: "succeeded" };
-			if (args[0] === "status")
-				return { steps: [{ output: "Please approve" }] };
 			if (args[0] === "respond") {
 				submitted = JSON.parse(
 					await readFile(args[args.indexOf("--result") + 1], "utf8"),

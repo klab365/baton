@@ -12,6 +12,8 @@ use std::{path::Path, sync::Arc};
 /// Dispatch strictly by the agent's configured runtime. Never fall back.
 pub struct ConfiguredRuntime {
     skills: Vec<baton_core::domain::project::Skill>,
+    run_id: String,
+    history_required: bool,
     fake: super::FakeRuntime,
     decision: Option<AgentDecision>,
     trace: Vec<RunTraceEntry>,
@@ -27,6 +29,8 @@ impl ConfiguredRuntime {
     ) -> Self {
         Self {
             skills,
+            run_id: uuid::Uuid::now_v7().to_string(),
+            history_required: false,
             fake: super::FakeRuntime::default(),
             decision: None,
             trace: Vec::new(),
@@ -78,6 +82,22 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
 }
 
 impl AgentRuntime for ConfiguredRuntime {
+    fn set_run_id(&mut self, run_id: &str) -> Result<(), String> {
+        if run_id.is_empty()
+            || !run_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Err("Run ID must contain only ASCII letters, digits or hyphens".into());
+        }
+        self.run_id = run_id.to_owned();
+        Ok(())
+    }
+
+    fn set_history_required(&mut self, required: bool) {
+        self.history_required = required;
+    }
+
     fn execute_shell(
         &mut self,
         directory: &Path,
@@ -129,6 +149,9 @@ impl AgentRuntime for ConfiguredRuntime {
                     input,
                     super::rig::RigAgentContext {
                         agent,
+                        run_id: &self.run_id,
+                        session_root: &self.auth_root,
+                        history_required: self.history_required,
                         credential: runtime_credential,
                         auth_store_dir: agent
                             .credential_id

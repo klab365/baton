@@ -156,6 +156,14 @@ impl WorkApplication {
                     auth_root,
                 };
                 let mut runtime = factory.create(config, &run.pipeline_id)?;
+                runtime.set_run_id(&run.id)?;
+                if let Some(agent) = &agent {
+                    runtime.set_history_required(
+                        run.steps.iter().any(|attempt| {
+                            attempt.agent_id == agent.id && attempt.output.is_some()
+                        }),
+                    );
+                }
                 let workspace = self.workspace.clone();
                 let allowed = if step.transitions.is_empty() {
                     vec![]

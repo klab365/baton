@@ -17,6 +17,14 @@ pub struct AgentDecision {
 /// Executes one pipeline agent step. Implementations may expose the optional
 /// pipeline outcome control tool when `allowed_outcomes` is non-empty.
 pub trait AgentRuntime: Send {
+    /// Scope persisted runtime state to a single Baton run.
+    fn set_run_id(&mut self, _run_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Whether this agent previously completed an attempt in this run.
+    fn set_history_required(&mut self, _required: bool) {}
+
     fn execute_shell(
         &mut self,
         _directory: &std::path::Path,
