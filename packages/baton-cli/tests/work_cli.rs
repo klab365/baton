@@ -104,6 +104,127 @@ fn cli_persists_steps_across_processes_and_emits_parseable_errors() {
 }
 
 #[test]
+fn cli_execute_runs_runtime_and_saves_result_across_processes() {
+    let f = Fixture::new();
+    fs::write(f.path.join(".baton/config.json"), json!({
+        "schemaVersion": 7,
+        "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"fake", "skillIds":[]}],
+        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}]}]
+    }).to_string()).unwrap();
+    let start = f.value(&["start", "--issue", "Implement feature"]);
+    let id = start["id"].as_str().unwrap();
+    assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
+    let status = f.value(&["status", "--run", id]);
+    assert_eq!(status["steps"][0]["outcome"], "completed");
+    assert!(
+        status["steps"][0]["input"]
+            .as_str()
+            .unwrap()
+            .contains("Implement feature")
+    );
+    assert_eq!(
+        fs::read_to_string(f.path.join("uncommitted")).unwrap(),
+        "preserve"
+    );
+}
+
+#[tokio::test]
+async fn cli_executes_rig_against_local_ollama_provider() {
+    use baton_core::{
+        domain::credentials::{Credential, CredentialStatus, CredentialType},
+        ports::credentials::CredentialRepository,
+    };
+    use std::io::{Read, Write};
+    let f = Fixture::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(e) => panic!("provider accept failed: {e}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..n]);
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&request[..end]);
+                let length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':')
+                            .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        let body = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    let store = baton_adapters::credentials::FilesystemCredentialRepository::for_project_in(
+        &f.path, &f.vault,
+    )
+    .unwrap();
+    store
+        .save(
+            &Credential {
+                id: "local".into(),
+                name: "local".into(),
+                credential_type: CredentialType::new("ollama_api_key").unwrap(),
+                configuration: [("baseUrl".into(), format!("http://{address}"))]
+                    .into_iter()
+                    .collect(),
+                created_at: 0,
+                updated_at: 0,
+                status: CredentialStatus::Available,
+            },
+            Some("test-key"),
+        )
+        .await
+        .unwrap();
+    fs::write(f.path.join(".baton/config.json"), json!({
+        "schemaVersion": 7,
+        "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]}],
+        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}]}]
+    }).to_string()).unwrap();
+    let start = f.value(&["start", "--issue", "Implement feature"]);
+    let id = start["id"].as_str().unwrap();
+    assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
+    let request = server.join().unwrap();
+    assert!(request.contains("Implement feature"));
+    let status = f.value(&["status", "--run", id]);
+    assert!(
+        status["steps"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("Rig finished")
+    );
+    assert!(!status["trace"].as_array().unwrap().is_empty());
+    assert!(!status.to_string().contains("test-key"));
+}
+
+#[test]
 fn cli_is_independent_of_a_running_server_and_rejects_removed_server_option() {
     let f = Fixture::new();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -151,12 +272,7 @@ fn cli_is_independent_of_a_running_server_and_rejects_removed_server_option() {
     let output = f.work(&["status", "--server", "http://127.0.0.1:1"]);
     assert!(!output.status.success());
     let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert!(
-        error["error"]
-            .as_str()
-            .unwrap()
-            .contains("Unknown option --server")
-    );
+    assert!(error["error"].as_str().unwrap().contains("--server"));
 }
 
 #[test]

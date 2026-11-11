@@ -1,5 +1,7 @@
 .env
 
+.baton-rig
+
 # Baton machine-local and transient data (config.json remains versioned)
 **/.baton/config.lock
 **/.baton/config.*.tmp

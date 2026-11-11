@@ -44,6 +44,8 @@ pub struct NextWork {
 pub struct SubmitWork {
     pub id: String,
     pub result: WorkSubmission,
+    pub input: Option<String>,
+    pub trace: Vec<crate::domain::pipeline::RunTraceEntry>,
 }
 #[derive(MediCommand)]
 #[medi_command(return_type = PipelineRun, error_type = String)]
@@ -230,9 +232,6 @@ async fn start_work_handler(
         None if config.pipelines.len() == 1 => &config.pipelines[0],
         None => return Err("Select a pipeline with --pipeline (project must have exactly one pipeline to infer it)".into()),
     };
-    if pipeline.steps.iter().any(|step| step.command.is_some()) {
-        return Err("Shell steps are not supported in external work sessions".into());
-    }
     for check in &command.checks {
         bounded("Check command", &check.command)?;
         if !pipeline
@@ -245,7 +244,11 @@ async fn start_work_handler(
     }
     // Validate assigned skills before persisting the run; no model/provider credentials are needed.
     let skills = resources.skills.list()?;
-    for step in pipeline.steps.iter().filter(|s| !s.human) {
+    for step in pipeline
+        .steps
+        .iter()
+        .filter(|s| !s.human && s.command.is_none())
+    {
         let agent = config
             .agents
             .iter()
@@ -400,7 +403,10 @@ fn validate_submission(
     if run.steps[index].attempt != attempt {
         return Err("Stale attempt; fetch next again".into());
     }
-    if !outcomes(step).contains(outcome) && (human || *outcome != Outcome::Progress) {
+    if !outcomes(step).contains(outcome)
+        && (human || *outcome != Outcome::Progress)
+        && !(step.command.is_some() && *outcome == Outcome::Failed)
+    {
         return Err("Outcome is not allowed by this step".into());
     }
     Ok(index)
@@ -474,6 +480,11 @@ async fn submit_work_handler(
                 checks.push(checked);
             }
         }
+        run.steps[index].input = command.input;
+        run.trace.extend(command.trace.into_iter().map(|mut entry| {
+            entry.attempt = Some(result.attempt);
+            entry
+        }));
         run.session
             .as_mut()
             .ok_or("Missing session")?

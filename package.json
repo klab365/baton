@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"private": true,
 	"pi": {
-		"extensions": ["./extensions/pi/baton-subagent.ts"],
+		"extensions": ["./extensions/pi/baton.ts"],
 		"skills": ["./skills"]
 	}
 }

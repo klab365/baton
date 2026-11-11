@@ -14,6 +14,18 @@ pub struct WorkProcessLock {
 }
 impl WorkProcessLock {
     pub fn acquire(workspace: &Path) -> Result<Self, String> {
+        Self::acquire_named(workspace, "process.lock", false)
+    }
+
+    pub fn acquire_wait(workspace: &Path) -> Result<Self, String> {
+        Self::acquire_named(workspace, "process.lock", true)
+    }
+
+    pub fn acquire_execution(workspace: &Path) -> Result<Self, String> {
+        Self::acquire_named(workspace, "execution.lock", false)
+    }
+
+    fn acquire_named(workspace: &Path, name: &str, wait: bool) -> Result<Self, String> {
         let directory = workspace.join(".baton/work");
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let mut options = fs::OpenOptions::new();
@@ -24,9 +36,14 @@ impl WorkProcessLock {
             options.mode(0o600);
         }
         let file = options
-            .open(directory.join("process.lock"))
+            .open(directory.join(name))
             .map_err(|e| e.to_string())?;
-        file.try_lock().map_err(|e| {
+        let result = if wait {
+            file.lock().map_err(|e| e.to_string())
+        } else {
+            file.try_lock().map_err(|e| e.to_string())
+        };
+        result.map_err(|e| {
             format!(
                 "Another work command is using this workspace, or its lock cannot be acquired: {e}"
             )
