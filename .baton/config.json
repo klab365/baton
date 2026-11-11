@@ -8,7 +8,7 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "chatgpt",
-        "model": "gpt-6.1-sol"
+        "model": "gpt-6.1-terra"
       },
       "credentialId": "openai-default",
       "skillIds": [
@@ -51,7 +51,7 @@
       "runtimeKind": "rig",
       "model": {
         "provider": "chatgpt",
-        "model": "gpt-6.1-sol"
+        "model": "gpt-6.1-terra"
       },
       "credentialId": "openai-default",
       "skillIds": [
