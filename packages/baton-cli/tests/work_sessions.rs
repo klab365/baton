@@ -64,6 +64,137 @@ fn submission(run: &Value, outcome: &str) -> Value {
 }
 
 #[tokio::test]
+async fn execute_runs_configured_agent_in_existing_workspace() {
+    let f = Fixture::new();
+    let path = f.path.join(".baton/config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["runtimeKind"] = json!("fake");
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let app = f.app();
+    let run = f.start(&app, 5, json!([])).await;
+    let result = f
+        .call(&app, json!({"command":"execute", "id":run["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(result["currentStep"], "review");
+    assert_eq!(result["steps"][0]["outcome"], "completed");
+    assert!(
+        result["steps"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("Acceptance criteria")
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.path.join("uncommitted.txt")).unwrap(),
+        "keep me"
+    );
+}
+
+#[tokio::test]
+async fn execute_command_steps_record_success_and_failure() {
+    for (command, expected) in [
+        ("printf done", "succeeded"),
+        ("exit 1", "failed"),
+        ("yes x | head -c 20000", "succeeded"),
+    ] {
+        let f = Fixture::new();
+        std::fs::write(f.path.join(".baton/config.json"), json!({
+            "schemaVersion": 7, "agents": [],
+            "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "command":command}]}]
+        }).to_string()).unwrap();
+        let app = f.app();
+        let run = f.start(&app, 5, json!([])).await;
+        let result = f
+            .call(&app, json!({"command":"execute", "id":run["id"]}))
+            .await
+            .unwrap();
+        assert_eq!(result["status"], expected);
+        assert!(
+            result["steps"][0]["output"]
+                .as_str()
+                .unwrap()
+                .contains("Exit status:")
+        );
+    }
+}
+
+#[tokio::test]
+async fn running_step_allows_status_and_cancellation() {
+    let f = Fixture::new();
+    std::fs::write(f.path.join(".baton/config.json"), json!({
+        "schemaVersion": 7, "agents": [],
+        "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "command":"touch started; sleep 30; touch finished"}]}]
+    }).to_string()).unwrap();
+    let app = std::sync::Arc::new(f.app());
+    let run = f.start(&app, 5, json!([])).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let executing = {
+        let app = app.clone();
+        let id = id.clone();
+        tokio::spawn(async move { app.execute(WorkCommand::Execute { id }).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !f.path.join("started").exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let other = f.app();
+    assert_eq!(
+        other
+            .execute(WorkCommand::Status {
+                id: Some(id.clone())
+            })
+            .await
+            .unwrap()["status"],
+        "running"
+    );
+    assert!(
+        other
+            .execute(WorkCommand::Execute { id: id.clone() })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        other.execute(WorkCommand::Cancel { id }).await.unwrap()["status"],
+        "cancelled"
+    );
+    drop(other);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), executing)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["status"], "cancelled");
+    assert!(!f.path.join("finished").exists());
+}
+
+#[tokio::test]
+async fn execute_refuses_human_steps_without_advancing() {
+    let f = Fixture::new();
+    let app = f.app();
+    let run = f.start(&app, 5, json!([])).await;
+    let run = f.submit(&app, &run, "completed").await.unwrap();
+    let run = f.submit(&app, &run, "approved").await.unwrap();
+    let error = app
+        .execute(WorkCommand::Execute {
+            id: run["id"].as_str().unwrap().into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.contains("explicit response"));
+    let current = app
+        .execute(WorkCommand::Status {
+            id: Some(run["id"].as_str().unwrap().into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(current["status"], "waitingHuman");
+    assert_eq!(current["session"]["revision"], run["session"]["revision"]);
+}
+
+#[tokio::test]
 async fn progress_continues_same_step_and_is_bounded() {
     let f = Fixture::new();
     let app = f.app();

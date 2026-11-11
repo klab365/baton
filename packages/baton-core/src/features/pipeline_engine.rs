@@ -268,7 +268,7 @@ fn pending(step: &PipelineStep) -> StepRun {
     }
 }
 
-fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
+pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
     let previous_output = run.handoff.as_deref().unwrap_or(&run.task);
     if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task {
         return run.task.clone();

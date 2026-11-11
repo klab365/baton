@@ -8,17 +8,18 @@ use std::{
     process::Command,
 };
 
-const HELP: &str = "Usage: baton work <start|next|submit|status|respond|cancel> [options]
+const HELP: &str = "Usage: baton work <start|next|execute|submit|status|respond|cancel> [options]
   start --issue <task text> [--pipeline ID]
         [--max-attempts 50] [--check STEP=COMMAND ...]
   next --run ID
+  execute --run ID
   submit --run ID --result FILE
   status [--run ID]
   respond --run ID --result FILE  (explicit human decision only)
   cancel --run ID
 Common: --workspace PATH (current Git worktree by default)
 Output: JSON on stdout; errors are JSON on stderr with a nonzero exit status.
-Baton never starts a coding agent or creates/deletes a worktree in this mode.";
+Baton executes configured agents in the existing worktree; it does not create or delete it.";
 
 struct Options {
     action: String,
@@ -27,41 +28,59 @@ struct Options {
 }
 impl Options {
     fn parse(args: Vec<String>) -> anyhow::Result<Self> {
-        let mut iter = args.into_iter();
-        let action = iter.next().context(HELP)?;
-        if !["start", "next", "submit", "status", "respond", "cancel"].contains(&action.as_str()) {
-            bail!("{HELP}");
-        }
-        let mut options = Self {
-            action,
-            values: HashMap::new(),
-            checks: vec![],
-        };
-        while let Some(key) = iter.next() {
-            let allowed = match key.as_str() {
-                "--workspace" | "--run" => true,
-                "--issue" | "--pipeline" | "--max-attempts" | "--check" => {
-                    options.action == "start"
-                }
-                "--result" => matches!(options.action.as_str(), "submit" | "respond"),
-                _ => false,
-            };
-            if !allowed {
-                bail!("Unknown option {key}\n{HELP}");
+        use clap::{Arg, ArgAction, Command};
+        let option = |name: &'static str| Arg::new(name).long(name).value_name("VALUE");
+        let common = |command: Command| command.arg(option("workspace"));
+        let matches = Command::new("work")
+            .disable_help_flag(true)
+            .subcommand_required(true)
+            .subcommand(
+                common(Command::new("start"))
+                    .arg(option("issue"))
+                    .arg(option("pipeline"))
+                    .arg(option("max-attempts"))
+                    .arg(option("check").action(ArgAction::Append)),
+            )
+            .subcommand(common(Command::new("next")).arg(option("run")))
+            .subcommand(common(Command::new("execute")).arg(option("run")))
+            .subcommand(common(Command::new("status")).arg(option("run")))
+            .subcommand(common(Command::new("cancel")).arg(option("run")))
+            .subcommand(
+                common(Command::new("submit"))
+                    .arg(option("run"))
+                    .arg(option("result")),
+            )
+            .subcommand(
+                common(Command::new("respond"))
+                    .arg(option("run"))
+                    .arg(option("result")),
+            )
+            .try_get_matches_from(std::iter::once("work".to_string()).chain(args))?;
+        let (action, matches) = matches.subcommand().context(HELP)?;
+        let mut values = HashMap::new();
+        for name in [
+            "workspace",
+            "run",
+            "issue",
+            "pipeline",
+            "max-attempts",
+            "result",
+        ] {
+            if let Ok(Some(value)) = matches.try_get_one::<String>(name) {
+                values.insert(format!("--{name}"), value.clone());
             }
-            let value = iter
-                .next()
-                .with_context(|| format!("Missing value for {key}"))?;
-            if key == "--check" {
-                options.checks.push(value);
-            } else if options.values.insert(key.clone(), value).is_some() {
-                bail!("Duplicate option {key}");
-            }
         }
-        if options.action == "start" && options.values.contains_key("--run") {
-            bail!("start creates a new run; use next --run ID to resume");
-        }
-        Ok(options)
+        let checks = matches
+            .try_get_many::<String>("check")
+            .ok()
+            .flatten()
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default();
+        Ok(Self {
+            action: action.to_string(),
+            values,
+            checks,
+        })
     }
     fn required(&self, key: &str) -> anyhow::Result<String> {
         self.values
@@ -134,6 +153,9 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
             }
         }
         "next" => WorkCommand::Next {
+            id: options.required("--run")?,
+        },
+        "execute" => WorkCommand::Execute {
             id: options.required("--run")?,
         },
         "status" => WorkCommand::Status {

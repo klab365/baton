@@ -162,7 +162,7 @@ impl FilesystemCredentialRepository {
         Self::for_project_in(project, &base)
     }
 
-    fn for_project_in(project: &Path, base: &Path) -> Result<Self, String> {
+    pub fn for_project_in(project: &Path, base: &Path) -> Result<Self, String> {
         let project = project
             .canonicalize()
             .map_err(|_| "Project directory is unavailable")?;

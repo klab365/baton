@@ -13,6 +13,13 @@ postinstall = "cd packages/baton-web && bun install --frozen-lockfile"
 description = "Run the SvelteKit UI and Rust API in the demo project"
 run = "bash -c 'BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server & server=$!; trap \"kill $server 2>/dev/null || true\" EXIT INT TERM; cd packages/baton-web && bun run dev -- --host 127.0.0.1 --port 5174'"
 
+[tasks.dev-pi]
+description = "Build Baton and start Pi with the local Baton extension"
+run = [
+  "cargo build -p baton-cli --bin baton",
+  'PATH="$PWD/target/debug:$PATH" pi --no-extensions -e "$PWD/extensions/pi/baton.ts"',
+]
+
 [tasks.server]
 description = "Run the Rust API server for the demo project"
 run = "BATON_PROJECT_DIR=examples/demo cargo run -p baton-server --bin baton-server"

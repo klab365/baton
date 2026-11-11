@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
 baton-core = { path = "../baton-core" }
 baton-adapters = { path = "../baton-adapters" }
 serde_json.workspace = true
