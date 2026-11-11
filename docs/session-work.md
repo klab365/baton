@@ -1,20 +1,20 @@
 # Work in an existing coding-agent session
 
-`baton work` runs a configured Baton pipeline in an existing Git worktree without a server. A coding-agent TUI, such as Pi, Claude Code or Codex, can use the Baton skill as an interface; the CLI executes configured agents through Baton adapters and the configured runtime. Baton does not allocate or remove this worktree.
+`baton work` runs a configured Baton pipeline in an existing Git worktree without a server. A coding-agent TUI can use the CLI as an interface; Pi has a dedicated extension. The CLI executes configured agents through Baton adapters and the configured runtime. Baton does not allocate or remove this worktree.
 
 Work and server runs use shared pipeline models and runtime adapters but have separate records, composition and workspace ownership. Work sessions are not shown in the server Runs UI.
 
 ## Install and configure
 
-For Pi, install an official Baton release and Pi, then run `baton install pi` and restart or reload Pi. The package installs the skill and optional UI extension from the CLI's release tag; repeat after upgrading Baton. For a development build use `pi install /absolute/path/to/baton` instead. Use `/baton` to enter a task and start a run, or `/baton RUN_ID` to resume. The extension shows steps and asks for an explicit decision and confirmation at human pauses. It invokes the CLI; it does not start Pi subagents. Alternatively invoke `/skill:baton <task>` explicitly.
+For Pi, install an official Baton release and Pi, then run `baton install pi` and restart or reload Pi. The package installs the UI extension from the CLI's release tag; repeat after upgrading Baton. For a development build use `pi install /absolute/path/to/baton` instead. Use `/baton` to enter a task and start a run, or `/baton RUN_ID` to resume. The extension shows steps and asks for an explicit decision and confirmation at human pauses. It invokes the CLI; it does not start Pi subagents.
 
 The Pi extension shows the current step and completed results, not live Rig tool activity. It stops on a CLI error; inspect the run before retrying. To cancel a running step, invoke `baton work cancel --run RUN_ID` from another terminal.
 
 To test the local checkout, run `mise run dev-pi` from the repository root. It builds the CLI and starts Pi with the local Baton extension; other Pi extensions are disabled for that session.
 
-For other coding-agent TUIs, install `skills/baton` using the host's skill conventions, for example under `~/.claude/skills/baton` for Claude Code or `~/.agents/skills/baton` for Codex. Invocation and frontmatter support depend on the host.
+Other coding-agent TUIs, such as Claude Code and Codex, can invoke the CLI directly. They do not yet have a dedicated Baton UI integration.
 
-Configure agents and a pipeline in `.baton/config.json`. Rig agents use their configured provider, model, tool permissions and credential ID; credentials must exist in Baton's local credential vault. Assigned project skills and project instructions are provided by the runtime. The skill and tools are not a security boundary: commands run with local user permissions and a worktree is not a sandbox.
+Configure agents and a pipeline in `.baton/config.json`. Rig agents use their configured provider, model, tool permissions and credential ID; credentials must exist in Baton's local credential vault. Assigned project skills and project instructions are provided by the runtime. Agent skills and tools are not a security boundary: commands run with local user permissions and a worktree is not a sandbox.
 
 Baton stores the task text literally and does not fetch issue URLs. Resolve an issue and include its requirements and acceptance criteria in the task text before starting.
 
@@ -35,7 +35,7 @@ If only one pipeline exists, `--pipeline` may be omitted. Start creates a new ru
 
 Human steps require an explicit user decision via `respond`. Supply a JSON file containing the current `revision`, `stepId`, `attempt`, `outcome`, and `response`. This is a protocol distinction, not identity authentication: a process with shell access can invoke `respond`.
 
-`submit` remains available for explicit structured submissions. A result contains `revision`, `stepId`, `attempt`, `outcome`, and a nonempty `summary`. Stale or invalid results are rejected. The skill must not fabricate a result or human decision.
+`submit` remains available for explicit structured submissions. A result contains `revision`, `stepId`, `attempt`, `outcome`, and a nonempty `summary`. Stale or invalid results are rejected. Integrations must not fabricate a result or human decision.
 
 For routed agent steps, the configured runtime reports a structured outcome. `progress` prepares another attempt of the same step without advancing or running success checks. One hundred consecutive progress attempts for the same step stop the run with `limitExhausted`; the event records why. The overall limit defaults to 50 attempts including human steps and can be configured from 1 to 1000 via `--max-attempts`.
 
