@@ -90,6 +90,7 @@ pub struct PipelineStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
+    /// Retained only to deserialize outcomes recorded by older runs.
     Progress,
     Completed,
     Approved,
@@ -225,7 +226,7 @@ impl ProjectConfig {
                 for transition in &step.transitions {
                     if transition.outcome == Outcome::Progress {
                         return Err(format!(
-                            "{step_path}: progress is reserved for external work continuation"
+                            "{step_path}: progress is only supported in historical run data"
                         ));
                     }
                     if step.command.is_some()

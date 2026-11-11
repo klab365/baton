@@ -7,7 +7,7 @@ use std::{path::PathBuf, sync::Arc};
 
 #[test]
 #[ignore = "requires BATON_LIVE_PROJECT with an authenticated provider; incurs model costs"]
-fn provider_recovers_missing_outcome_in_same_session() {
+fn missing_outcome_is_not_retried_automatically() {
     let project =
         PathBuf::from(std::env::var_os("BATON_LIVE_PROJECT").expect("set BATON_LIVE_PROJECT"));
     let config =
@@ -21,7 +21,7 @@ fn provider_recovers_missing_outcome_in_same_session() {
     let auth_root = credentials.root_path().to_path_buf();
     let mut runtime = ConfiguredRuntime::new(Arc::new(credentials), auth_root, vec![]);
     let dir = tempfile::tempdir().unwrap();
-    let output = runtime
+    let _output = runtime
         .execute_pipeline_step(
             dir.path(),
             &agent,
@@ -32,14 +32,11 @@ fn provider_recovers_missing_outcome_in_same_session() {
         .expect("provider call failed");
     let decision = runtime.take_decision();
     let trace = runtime.take_trace();
+    assert!(decision.is_none(), "model unexpectedly reported an outcome");
     assert!(
-        trace
+        !trace
             .iter()
             .any(|entry| entry.content.contains("You did not call report_outcome")),
-        "model called report_outcome immediately; recovery was not exercised: {output}"
-    );
-    assert_eq!(
-        decision.expect("missing recovered outcome").outcome,
-        Outcome::Completed
+        "missing outcomes must not trigger another model turn"
     );
 }

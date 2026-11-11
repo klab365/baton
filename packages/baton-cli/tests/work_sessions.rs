@@ -13,7 +13,10 @@ impl Fixture {
             "schemaVersion": 7,
             "agents": [{"id":"worker", "systemPrompt":"Follow the original issue and its acceptance criteria", "skillIds":[]}],
             "pipelines": [{"id":"factory", "steps":[
-                {"id":"build", "name":"Build", "agentId":"worker"},
+                {"id":"build", "name":"Build", "agentId":"worker", "transitions":[
+                    {"outcome":"revise_build", "to":"build"},
+                    {"outcome":"completed", "to":"review"}
+                ]},
                 {"id":"review", "name":"Review", "agentId":"worker", "transitions":[
                     {"outcome":"approved", "to":"human"},
                     {"outcome":"revise_build", "to":"build"}
@@ -69,6 +72,7 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
     let path = f.path.join(".baton/config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config["agents"][0]["runtimeKind"] = json!("fake");
+    config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
     std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
     let app = f.app();
     let run = f.start(&app, 5, json!([])).await;
@@ -87,6 +91,35 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
     assert_eq!(
         std::fs::read_to_string(f.path.join("uncommitted.txt")).unwrap(),
         "keep me"
+    );
+}
+
+#[tokio::test]
+async fn missing_agent_outcome_stops_the_run() {
+    let f = Fixture::new();
+    let path = f.path.join(".baton/config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["agents"][0]["runtimeKind"] = json!("fake");
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let app = f.app();
+    let run = f.start(&app, 50, json!([])).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    let error = app
+        .execute(WorkCommand::Execute { id: id.clone() })
+        .await
+        .unwrap_err();
+    assert!(error.contains("without reporting"));
+    let status = app
+        .execute(WorkCommand::Status { id: Some(id) })
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "failed");
+    assert_eq!(status["steps"].as_array().unwrap().len(), 1);
+    assert!(
+        status["steps"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("valid configured outcome")
     );
 }
 
@@ -195,7 +228,43 @@ async fn execute_refuses_human_steps_without_advancing() {
 }
 
 #[tokio::test]
-async fn progress_continues_same_step_and_is_bounded() {
+async fn unconfigured_progress_is_rejected_without_advancing() {
+    let f = Fixture::new();
+    let path = f.path.join(".baton/config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let app = f.app();
+    let run = f.start(&app, 50, json!([])).await;
+    let id = run["id"].as_str().unwrap();
+    let next = app
+        .execute(WorkCommand::Next { id: id.into() })
+        .await
+        .unwrap();
+    assert!(
+        !next["allowedOutcomes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("progress"))
+    );
+    assert!(
+        f.submit(&app, &run, "progress")
+            .await
+            .unwrap_err()
+            .contains("not allowed")
+    );
+    let current = app
+        .execute(WorkCommand::Status {
+            id: Some(id.into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(current["session"]["revision"], 0);
+    assert_eq!(current["steps"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn configured_rework_continues_same_step_and_is_bounded() {
     let f = Fixture::new();
     let app = f.app();
     let start = f
@@ -209,25 +278,25 @@ async fn progress_continues_same_step_and_is_bounded() {
         next["allowedOutcomes"]
             .as_array()
             .unwrap()
-            .contains(&json!("progress"))
+            .contains(&json!("revise_build"))
     );
-    let first = f.submit(&app, &start, "progress").await.unwrap();
+    let first = f.submit(&app, &start, "revise_build").await.unwrap();
     assert_eq!(first["currentStep"], "build");
     assert_eq!(first["session"]["revision"], 1);
-    assert_eq!(first["steps"][0]["outcome"], "progress");
+    assert_eq!(first["steps"][0]["outcome"], "revise_build");
     assert_eq!(first["steps"][1]["attempt"], 2);
-    assert!(f.submit(&app, &start, "progress").await.is_err());
+    assert!(f.submit(&app, &start, "revise_build").await.is_err());
     assert!(
         f.submit(&app, &first, "completed")
             .await
             .unwrap_err()
             .contains("Configured check failed")
     );
-    let second = f.submit(&app, &first, "progress").await.unwrap();
-    let third = f.submit(&app, &second, "progress").await.unwrap();
+    let second = f.submit(&app, &first, "revise_build").await.unwrap();
+    let third = f.submit(&app, &second, "revise_build").await.unwrap();
     assert_eq!(third["status"], "running");
-    let fourth = f.submit(&app, &third, "progress").await.unwrap();
-    let fifth = f.submit(&app, &fourth, "progress").await.unwrap();
+    let fourth = f.submit(&app, &third, "revise_build").await.unwrap();
+    let fifth = f.submit(&app, &fourth, "revise_build").await.unwrap();
     assert_eq!(fifth["status"], "limitExhausted");
     assert_eq!(fifth["steps"].as_array().unwrap().len(), 5);
     assert!(!fifth["endedAt"].is_null());
@@ -239,7 +308,7 @@ async fn next_returns_latest_handoff_without_replaying_large_traces() {
     let f = Fixture::new();
     let app = f.app();
     let run = f.start(&app, 50, json!([])).await;
-    let run = f.submit(&app, &run, "progress").await.unwrap();
+    let run = f.submit(&app, &run, "revise_build").await.unwrap();
     let id = run["id"].as_str().unwrap();
     let repo =
         baton_adapters::repositories::filesystem_work::FilesystemWorkRepository(f.path.clone());
@@ -263,20 +332,15 @@ async fn next_returns_latest_handoff_without_replaying_large_traces() {
 }
 
 #[tokio::test]
-async fn repeated_progress_stops_before_the_overall_attempt_limit() {
+async fn explicit_rework_loop_obeys_the_overall_attempt_limit() {
     let f = Fixture::new();
     let app = f.app();
-    let mut run = f.start(&app, 200, json!([])).await;
-    for _ in 0..100 {
-        run = f.submit(&app, &run, "progress").await.unwrap();
+    let mut run = f.start(&app, 5, json!([])).await;
+    for _ in 0..5 {
+        run = f.submit(&app, &run, "revise_build").await.unwrap();
     }
     assert_eq!(run["status"], "limitExhausted");
-    assert_eq!(run["steps"].as_array().unwrap().len(), 100);
-    assert!(run["events"].as_array().unwrap().iter().any(|event| {
-        event["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("100 consecutive progress"))
-    }));
+    assert_eq!(run["steps"].as_array().unwrap().len(), 5);
 }
 
 #[tokio::test]
@@ -290,17 +354,17 @@ async fn work_no_longer_creates_or_changes_markdown_notes() {
         .join(format!("{}.md", start["id"].as_str().unwrap()));
     assert!(!path.exists());
     std::fs::write(&path, "existing notes").unwrap();
-    let continued = f.submit(&app, &start, "progress").await.unwrap();
+    let continued = f.submit(&app, &start, "revise_build").await.unwrap();
     assert_eq!(continued["currentStep"], "build");
     assert_eq!(std::fs::read_to_string(path).unwrap(), "existing notes");
 }
 
 #[tokio::test]
-async fn progress_can_finish_and_advance_to_review() {
+async fn rework_can_finish_and_advance_to_review() {
     let f = Fixture::new();
     let app = f.app();
     let start = f.start(&app, 50, json!([])).await;
-    let continued = f.submit(&app, &start, "progress").await.unwrap();
+    let continued = f.submit(&app, &start, "revise_build").await.unwrap();
     drop(app);
     let app = f.app();
     let restored = f

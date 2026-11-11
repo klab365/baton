@@ -335,18 +335,6 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
     input
 }
 
-pub(crate) const MAX_CONSECUTIVE_PROGRESS: usize = 100;
-
-pub(crate) fn progress_limit_reached(run: &PipelineRun, step_id: &str) -> bool {
-    let mut attempts: Vec<_> = run.steps.iter().filter(|step| step.attempt > 0).collect();
-    attempts.sort_by_key(|step| std::cmp::Reverse(step.attempt));
-    attempts
-        .into_iter()
-        .take_while(|step| step.step_id == step_id && step.outcome == Some(Outcome::Progress))
-        .count()
-        >= MAX_CONSECUTIVE_PROGRESS
-}
-
 fn repeated_blocker(
     run: &PipelineRun,
     pipeline: &crate::domain::project::Pipeline,
@@ -509,15 +497,11 @@ pub(crate) fn execute_graph(
             .iter()
             .find(|a| a.id == step.agent_id)
             .ok_or("Unknown agent")?;
-        let mut allowed_outcomes = step
+        let allowed_outcomes = step
             .transitions
             .iter()
             .map(|transition| transition.outcome.clone())
             .collect::<Vec<_>>();
-        // Unrouted legacy steps do not require a control decision.
-        if !allowed_outcomes.is_empty() {
-            allowed_outcomes.push(Outcome::Progress);
-        }
         let assigned = agent.clone();
         runtime.set_history_required(run.steps.iter().any(|attempt| {
             attempt.agent_id == agent.id && attempt.attempt > 0 && attempt.output.is_some()
@@ -589,21 +573,7 @@ pub(crate) fn execute_graph(
                 run.steps[index].output = Some(output);
                 run.steps[index].outcome = Some(outcome.clone());
                 run.steps[index].status = Status::Succeeded;
-                if outcome == Outcome::Progress {
-                    if progress_limit_reached(&run, &step.id) {
-                        run.status = Status::LimitExhausted;
-                        publish(
-                            repository,
-                            &mut run,
-                            Some(format!(
-                                "Step {} stopped after {} consecutive progress submissions",
-                                step.id, MAX_CONSECUTIVE_PROGRESS
-                            )),
-                        )?;
-                    }
-                } else {
-                    route(&mut run, pipeline, index, outcome)?;
-                }
+                route(&mut run, pipeline, index, outcome)?;
                 if repeated {
                     publish(
                         repository,

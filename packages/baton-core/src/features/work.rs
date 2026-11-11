@@ -5,9 +5,7 @@ use crate::{
         project::{Agent, ConfigState, Outcome, Pipeline, PipelineStep, ProjectConfig, Skill},
         work::*,
     },
-    features::pipeline_engine::{
-        MAX_CONSECUTIVE_PROGRESS, progress_limit_reached, publish, utc_now,
-    },
+    features::pipeline_engine::{publish, utc_now},
     ports::{
         project_config::ProjectConfigRepository, runs::RunRepository, runtime::MAX_HANDOFF_BYTES,
         skills::SkillRepository, work::WorkCheckRunner,
@@ -47,6 +45,16 @@ pub struct SubmitWork {
     pub id: String,
     pub result: WorkSubmission,
     pub input: Option<String>,
+    pub trace: Vec<crate::domain::pipeline::RunTraceEntry>,
+}
+#[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct FailWork {
+    pub id: String,
+    pub revision: u64,
+    pub step_id: String,
+    pub attempt: u32,
+    pub input: String,
     pub trace: Vec<crate::domain::pipeline::RunTraceEntry>,
 }
 #[derive(MediCommand)]
@@ -350,16 +358,7 @@ async fn next_work_handler(
         revision: session.revision,
         status: run.status.clone(),
         workspace: session.workspace.clone(),
-        allowed_outcomes: step
-            .as_ref()
-            .map(|step| {
-                let mut allowed = outcomes(step);
-                if !step.human {
-                    allowed.push(Outcome::Progress);
-                }
-                allowed
-            })
-            .unwrap_or_default(),
+        allowed_outcomes: step.as_ref().map(outcomes).unwrap_or_default(),
         attempt: if active {
             run.steps.last().map(|s| s.attempt)
         } else {
@@ -421,9 +420,7 @@ fn validate_submission(
     if run.steps[index].attempt != attempt {
         return Err("Stale attempt; fetch next again".into());
     }
-    if !outcomes(step).contains(outcome)
-        && (human || *outcome != Outcome::Progress)
-        && !(step.command.is_some() && *outcome == Outcome::Failed)
+    if !outcomes(step).contains(outcome) && !(step.command.is_some() && *outcome == Outcome::Failed)
     {
         return Err("Outcome is not allowed by this step".into());
     }
@@ -472,10 +469,8 @@ async fn submit_work_handler(
         )?;
         bounded("Summary", &result.summary)?;
         let mut routed = run.clone();
-        if result.outcome != Outcome::Progress {
-            let (_, pipeline) = graph(&run)?;
-            route(&mut routed, pipeline, index, result.outcome.clone())?;
-        }
+        let (_, pipeline) = graph(&run)?;
+        route(&mut routed, pipeline, index, result.outcome.clone())?;
         let session = run.session.as_ref().ok_or("Missing session")?;
         let mut checks = vec![];
         if matches!(
@@ -511,38 +506,60 @@ async fn submit_work_handler(
                 attempt: result.attempt,
                 checks,
             });
-        let is_progress = result.outcome == Outcome::Progress;
-        if is_progress {
-            run.steps[index].status = Status::Succeeded;
-            run.steps[index].output = Some(result.summary);
-            run.steps[index].outcome = Some(Outcome::Progress);
-            run.session.as_mut().ok_or("Missing session")?.revision += 1;
-            if progress_limit_reached(&run, &result.step_id) {
-                run.status = Status::LimitExhausted;
-                run.ended_at = Some(utc_now());
-            } else {
-                prepare(&mut run)?;
-            }
-        } else {
-            complete(&mut run, index, result.outcome, result.summary)?;
-        }
-        let message = if run.status == Status::LimitExhausted && is_progress {
-            if progress_limit_reached(&run, &result.step_id) {
-                format!(
-                    "Step {} stopped after {} consecutive progress submissions",
-                    result.step_id, MAX_CONSECUTIVE_PROGRESS
-                )
-            } else {
-                "External work stopped after reaching the configured attempt limit".into()
-            }
-        } else {
-            "External worker submission accepted".into()
-        };
-        publish(resources.runs.as_ref(), &mut run, Some(message))?;
+        complete(&mut run, index, result.outcome, result.summary)?;
+        publish(
+            resources.runs.as_ref(),
+            &mut run,
+            Some("External worker submission accepted".into()),
+        )?;
         Ok(run)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[medi_handler]
+async fn fail_work_handler(
+    resources: WorkResources,
+    command: FailWork,
+) -> Result<PipelineRun, String> {
+    let _lease = resources.runs.acquire_action_lease(&command.id)?;
+    let mut run = resources.runs.load(&command.id)?;
+    validate_workspace(&run, &resources.workspace)?;
+    let (_, pipeline) = graph(&run)?;
+    let step = pipeline
+        .steps
+        .iter()
+        .find(|s| Some(&s.id) == run.current_step.as_ref())
+        .ok_or("Unknown current step")?;
+    let permitted = outcomes(step)
+        .into_iter()
+        .next()
+        .ok_or("No permitted outcomes")?;
+    let index = validate_submission(
+        &run,
+        command.revision,
+        &command.step_id,
+        command.attempt,
+        false,
+        &permitted,
+    )?;
+    run.steps[index].status = Status::Failed;
+    run.steps[index].input = Some(command.input);
+    run.trace.extend(command.trace.into_iter().map(|mut entry| {
+        entry.attempt = Some(command.attempt);
+        entry
+    }));
+    run.steps[index].error = Some("Agent did not report a valid configured outcome".into());
+    run.status = Status::Failed;
+    run.ended_at = Some(utc_now());
+    run.session.as_mut().ok_or("Missing session")?.revision += 1;
+    publish(
+        resources.runs.as_ref(),
+        &mut run,
+        Some("Agent did not report a valid configured outcome".into()),
+    )?;
+    Ok(run)
 }
 
 #[medi_handler]
@@ -584,6 +601,7 @@ medi_module! {
         crate::features::work::StartWork => crate::features::work::start_work_handler;
         crate::features::work::NextWork => crate::features::work::next_work_handler;
         crate::features::work::SubmitWork => crate::features::work::submit_work_handler;
+        crate::features::work::FailWork => crate::features::work::fail_work_handler;
         crate::features::work::RespondWork => crate::features::work::respond_work_handler;
     }
 }
