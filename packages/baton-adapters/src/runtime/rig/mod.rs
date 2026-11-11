@@ -60,6 +60,20 @@ fn validate_context_size(conversation: &Conversation) -> Result<(), String> {
     Ok(())
 }
 
+fn append_outcome_instruction(preamble: &mut String, allowed_outcomes: &[Outcome]) {
+    if allowed_outcomes.is_empty() {
+        return;
+    }
+    let allowed = allowed_outcomes
+        .iter()
+        .map(outcome_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    preamble.push_str(&format!(
+        "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. Then answer naturally. Do not encode the decision as JSON in your final answer."
+    ));
+}
+
 fn project_instructions(root: &Path) -> Result<Option<String>, String> {
     let path = root.join("AGENTS.md");
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -460,16 +474,7 @@ impl RigRuntime {
                 .ok_or_else(|| format!("Unknown skill {skill_id:?}"))?;
             preamble.push_str(&format!("\n\nSkill {}:\n{}", skill.id, skill.instructions));
         }
-        if !allowed_outcomes.is_empty() {
-            let allowed = allowed_outcomes
-                .iter()
-                .map(outcome_name)
-                .collect::<Vec<_>>()
-                .join(", ");
-            preamble.push_str(&format!(
-                "\n\nThis pipeline step requires a control decision. Work toward completing the entire step; do not stop after inspection or planning when you can continue. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. Report actionable results and do not claim completion prematurely. Use blocked only when human intervention is required. Then answer naturally. Do not encode the decision as JSON in your final answer."
-            ));
-        }
+        append_outcome_instruction(&mut preamble, allowed_outcomes);
         let setup_trace = RunTraceEntry {
             attempt: None,
             occurred_at: baton_core::features::pipeline_engine::utc_now(),
@@ -590,6 +595,37 @@ impl RigRuntime {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+#[cfg(test)]
+mod outcome_prompt_tests {
+    use super::append_outcome_instruction;
+    use baton_core::domain::project::Outcome;
+
+    #[test]
+    fn outcome_prompt_uses_only_configured_choices_without_global_blocked_policy() {
+        let mut prompt = "Continue implementation and verification when possible.".to_owned();
+        append_outcome_instruction(&mut prompt, &[Outcome::Completed, Outcome::Blocked]);
+        assert!(prompt.contains("Continue implementation and verification when possible."));
+        assert!(prompt.contains("completed, blocked"));
+        assert!(!prompt.contains("Work toward completing"));
+        assert!(!prompt.contains("do not stop after inspection"));
+        assert!(!prompt.contains("Report actionable results"));
+        assert!(!prompt.contains("Use blocked only"));
+
+        let mut other_policy = "Plan only; do not modify files.".to_owned();
+        append_outcome_instruction(&mut other_policy, &[Outcome::Approved, Outcome::Rejected]);
+        assert!(other_policy.contains("Plan only; do not modify files."));
+        assert!(other_policy.contains("approved, rejected"));
+        assert!(!other_policy.contains("completed"));
+    }
+
+    #[test]
+    fn no_outcome_prompt_is_added_without_choices() {
+        let mut prompt = "Agent-specific policy.".to_owned();
+        append_outcome_instruction(&mut prompt, &[]);
+        assert_eq!(prompt, "Agent-specific policy.");
     }
 }
 
