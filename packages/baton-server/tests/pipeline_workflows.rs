@@ -145,19 +145,19 @@ fn config() -> ProjectConfig {
     let mut json: serde_json::Value =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     json["pipelines"][0]["steps"] = serde_json::json!([
-        {"id":"plan", "name":"Plan", "agentId":"writer"},
-        {"id":"build", "name":"Build", "agentId":"writer"},
-        {"id":"review", "name":"Review", "agentId":"reviewer", "transitions":[
+        {"id":"plan", "name":"Plan", "type":"agent", "agentId":"writer"},
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
+        {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer", "transitions":[
             {"outcome":"approved", "to":"human", "maxTraversals":1},
             {"outcome":"revise_build", "to":"build", "maxTraversals":1},
             {"outcome":"revise_plan", "to":"plan", "maxTraversals":1}
         ]},
-        {"id":"human", "name":"Human approval", "human":true, "transitions":[
+        {"id":"human", "name":"Human approval", "type":"human", "transitions":[
             {"outcome":"approved", "to":"finish", "maxTraversals":1},
             {"outcome":"rejected", "to":null, "maxTraversals":1},
             {"outcome":"responded", "to":"build", "maxTraversals":1}
         ]},
-        {"id":"finish", "name":"Finish", "agentId":"writer"}
+        {"id":"finish", "name":"Finish", "type":"agent", "agentId":"writer"}
     ]);
     parse_config(&json.to_string()).unwrap()
 }
@@ -234,8 +234,10 @@ fn interrupted_shell_is_not_replayed_automatically() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[0].clone();
-    step.agent_id.clear();
-    step.command = Some("true".into());
+    step.kind = baton_core::domain::project::PipelineStepKind::Shell {
+        command: "true".into(),
+        timeout_seconds: None,
+    };
     config.pipelines[0].steps = vec![step];
     let repo = fixture.repo();
     let mut run = start_pipeline(
@@ -386,8 +388,10 @@ fn shell_success_runs_in_task_worktree() {
     let mut config = config();
     let pipeline = &mut config.pipelines[0];
     let mut shell = pipeline.steps[0].clone();
-    shell.agent_id.clear();
-    shell.command = Some("test -e .git && echo ok".into());
+    shell.kind = baton_core::domain::project::PipelineStepKind::Shell {
+        command: "test -e .git && echo ok".into(),
+        timeout_seconds: None,
+    };
     shell.transitions.clear();
     pipeline.steps = vec![shell];
     let run = start_pipeline(
@@ -409,9 +413,10 @@ fn shell_timeout_routes_as_failure() {
     let mut config = config();
     let pipeline = &mut config.pipelines[0];
     let mut shell = pipeline.steps[0].clone();
-    shell.agent_id.clear();
-    shell.command = Some("sleep 30".into());
-    shell.timeout_seconds = Some(1);
+    shell.kind = baton_core::domain::project::PipelineStepKind::Shell {
+        command: "sleep 30".into(),
+        timeout_seconds: Some(1),
+    };
     shell.transitions = vec![baton_core::domain::project::Transition {
         outcome: Outcome::Failed,
         to: Some("build".into()),
@@ -443,8 +448,10 @@ fn shell_failure_routes_with_output_to_next_step() {
     let pipeline = &mut config.pipelines[0];
     let mut shell = pipeline.steps[0].clone();
     shell.id = "check".into();
-    shell.agent_id.clear();
-    shell.command = Some("echo diagnostic >&2; exit 7".into());
+    shell.kind = baton_core::domain::project::PipelineStepKind::Shell {
+        command: "echo diagnostic >&2; exit 7".into(),
+        timeout_seconds: None,
+    };
     shell.transitions = vec![baton_core::domain::project::Transition {
         outcome: Outcome::Failed,
         to: Some("build".into()),
@@ -746,8 +753,8 @@ async fn human_action_api_exposes_graph_history_and_explicit_abort() {
     assert_eq!(json["status"], "waitingHuman");
     assert_eq!(json["steps"][0]["input"], "task");
     assert_eq!(
-        json["configSnapshot"]["pipelines"][0]["steps"][0]["human"],
-        true
+        json["configSnapshot"]["pipelines"][0]["steps"][0]["type"],
+        "human"
     );
     for (outcome, status) in [
         ("responded", StatusCode::BAD_REQUEST),

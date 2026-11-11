@@ -287,17 +287,18 @@ fn validate_task_readiness(
         .list()
         .map_err(|error| format!("Could not validate skills: {error}"))?;
     for step in &pipeline.steps {
-        if step.human || step.command.is_some() {
+        if step.is_human() || step.command().is_some() {
             continue;
         }
         let agent = config
             .agents
             .iter()
-            .find(|agent| agent.id == step.agent_id)
+            .find(|agent| agent.id == step.agent_id())
             .ok_or_else(|| {
                 format!(
                     "Pipeline step {:?} references missing agent {:?}",
-                    step.id, step.agent_id
+                    step.id,
+                    step.agent_id()
                 )
             })?;
         for skill_id in &agent.skill_ids {

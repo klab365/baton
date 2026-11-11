@@ -59,7 +59,7 @@ const navigation = [
 		<h1>{data.project.name}</h1>
 		<p class="lead">This project does not have a Baton configuration yet.</p>
 		<dl><dt>Project directory</dt><dd>{data.project.directory}</dd></dl>
-		<p class="muted">Setup creates a minimal versioned configuration at <code>.baton/config.json</code>.</p>
+		<p class="muted">Setup creates project metadata at <code>.baton/project.yml</code>.</p>
 		{#if setupError}<StatusMessage tone="error">{setupError}</StatusMessage>{/if}
 		<Button onclick={initializeProject} disabled={settingUp}>{settingUp ? "Setting up…" : "Set up project"}</Button>
 	</main>

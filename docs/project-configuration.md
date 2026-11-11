@@ -1,17 +1,32 @@
 # Project configuration
 
-Baton stores project-owned configuration in `.baton/config.json`. The configuration is versioned, validated before writes and updated with a revision token to prevent stale overwrites.
+Project configuration lives in `.baton/`:
 
-## Agents and runtime selection
+- `project.yml` holds the schema version and non-secret project ID.
+- `agents/<id>.yml` holds one agent per file.
+- `pipelines/<id>.yml` holds one pipeline per file.
 
-Agents contain `id`, `systemPrompt`, `runtimeKind` (`rig` or explicitly selected `fake`), optional `model` (`provider` and `model`), optional `credentialId`, `rules`, and `skillIds`. Provider/model and credential selection live directly on each agent; there is no runtime-profile layer. Credential IDs are references only. Secret values and OAuth records are held in the local credential vault, never in project configuration or run snapshots.
+The filename must match the object's `id`. Files are validated together before changes are saved; the revision token detects changes to any configuration file. Unchanged definitions retain their original formatting. Agent and pipeline files can be copied between projects, provided their references are available in the destination.
 
-Pipelines have `id`, `name`, and a nonempty ordered `steps` array. Steps select an agent (or a human decision) and do not contain runtime, model, provider, or credential configuration.
+Agents contain `id`, `systemPrompt`, `runtimeKind`, optional `model` (`provider` and `model`), optional `credentialId`, `skillIds`, and optional `allowedTools`. Credential IDs are references only; secrets and OAuth records remain in the local credential vault.
 
-## Migration
+Pipelines contain an `id` and a nonempty ordered `steps` array. Each step has a `type`: `agent` requires `agentId`, `human` waits for a decision, and `shell` requires `command` and optionally accepts `timeoutSeconds`. Steps do not contain runtime or credential configuration. Transitions refer to step IDs within the pipeline.
 
-Schema version 7 is current. Schema-v6 `runtimeProfiles` are migrated into each referencing agent's `runtimeKind`, `model`, and `credentialId`, then removed. Shared profiles are copied to every referencing agent. The schema-v1 bootstrap marker `{"schemaVersion":1}` migrates to an empty v7 configuration. Agent-based v2/v3/v4 configurations migrate to direct agent runtime settings without copying credentials.
+```yaml
+steps:
+  - id: build
+    name: Build
+    type: agent
+    agentId: builder
+  - id: approval
+    name: Approval
+    type: human
+  - id: test
+    name: Test
+    type: shell
+    command: cargo test
+```
 
-Schema-v5 Pi configurations remain unsupported because Pi runtime selections and authentication assumptions cannot safely be inferred as Rig settings.
+Stored run snapshots use these step types. Older snapshots with implicit step types are converted when read and written in the new format on their next update.
 
-Reading migrates in memory only; original bytes remain the revision token. An explicit successful mutation persists the current schema atomically. Missing/unsupported versions and unknown fields fail closed.
+Schema version 7 is current. The previous `.baton/config.json` format is not loaded automatically.

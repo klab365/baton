@@ -74,7 +74,7 @@ async function save(event: SubmitEvent) {
 		<Field label="Pipeline" for="pipeline" hint="The selected pipeline is captured with this task." required>
 			{#snippet children({ describedBy, invalid })}<ResourceSelect id="pipeline" bind:value={pipelineId} items={pipelines.map((pipeline) => ({ id: pipeline.id, name: pipeline.id }))} placeholder="Select a pipeline" kind="pipeline" {describedBy} {invalid} name="pipeline" required />{/snippet}
 		</Field>
-		{#if !pipelines.length}<StatusMessage tone="warning" title="No pipelines available">Add a pipeline to <code>.baton/config.json</code> before creating a task.</StatusMessage>{/if}
+		{#if !pipelines.length}<StatusMessage tone="warning" title="No pipelines available">Add a pipeline under <code>.baton/pipelines/</code> before creating a task.</StatusMessage>{/if}
 	</div>
 	<footer class="task-form-actions" class:task-form-actions-plain={!task}><Button type="submit" {loading} disabled={!title.trim() || !description.trim() || !pipelines.some((p) => p.id === pipelineId)}>{task ? "Save changes" : "Create task"}</Button></footer>
 </form>

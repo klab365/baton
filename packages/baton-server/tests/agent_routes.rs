@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -16,11 +18,10 @@ fn fixture() -> std::path::PathBuf {
             .as_nanos()
     ));
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
-    std::fs::write(
-        directory.join(".baton/config.json"),
-        include_str!("../../baton-core/tests/fixture_config.json"),
-    )
-    .unwrap();
+    common::write_config(
+        &directory,
+        &serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap(),
+    );
     directory
 }
 async fn json(response: axum::response::Response) -> serde_json::Value {

@@ -1,11 +1,12 @@
 # Directed workflows and human decisions
 
-Pipelines remain sequential by default. Schema-v3 steps may additionally specify `human` (default `false`) and `transitions` (default `[]`). The pipeline editor supports both. The first listed step is the entry point. Only one step executes at a time; there are no parallel branches or free-form orchestrator agents.
+Pipelines remain sequential by default. Each step specifies `type` (`agent`, `human`, or `shell`) and optional `transitions` (default `[]`). The first listed step is the entry point. Only one step executes at a time; there are no parallel branches or free-form orchestrator agents.
 
 ```json
 {
 	"id": "review",
 	"name": "Review",
+	"type": "agent",
 	"agentId": "reviewer",
 	"transitions": [
 		{ "outcome": "approved", "to": "human" },
@@ -33,7 +34,7 @@ A configured terminal edge succeeds except for `failed`, `blocked`, or `rejected
 {
 	"id": "human",
 	"name": "Human PR decision",
-	"human": true,
+	"type": "human",
 	"transitions": [
 		{ "outcome": "approved", "to": null },
 		{ "outcome": "rejected", "to": "build" },
@@ -42,7 +43,7 @@ A configured terminal edge succeeds except for `failed`, `blocked`, or `rejected
 }
 ```
 
-Human steps have no agent (`agentId` omitted or empty). Their predicates must be `approved`, `rejected`, or `responded`. An empty transition list uses sequential continuation on approval/response and terminal failure on rejection. Reaching the step durably writes `waitingHuman`, its input, attempt number, current step, and `pendingActions`. No agent is invoked. The wait has **no automatic timeout or approval**; explicitly cancel to abort. Cancellation is also the cooperative abort mechanism for in-flight agent work. There is no automatic merge or destructive action attached to approval.
+Human steps do not accept `agentId`. Their predicates must be `approved`, `rejected`, or `responded`. An empty transition list uses sequential continuation on approval/response and terminal failure on rejection. Reaching the step durably writes `waitingHuman`, its input, attempt number, current step, and `pendingActions`. No agent is invoked. The wait has **no automatic timeout or approval**; explicitly cancel to abort. Cancellation is also the cooperative abort mechanism for in-flight agent work. There is no automatic merge or destructive action attached to approval.
 
 Each run owns a frozen configuration snapshot and references its task's retained Git worktree. Startup recovery fails interrupted `running` runs without retrying, but leaves human waits unchanged. A response explicitly resumes using the saved graph and same worktree; ownership and branch identity are checked before resumption. Repeated or conflicting actions are rejected. Provider availability is checked before an action is accepted. A human response (including an empty response) becomes the next handoff.
 
@@ -52,4 +53,4 @@ Each run owns a frozen configuration snapshot and references its task's retained
 - `POST /api/runs/{id}/actions` accepts `{ "outcome": "approved", "response": "Reviewed PR #123" }`. `response` defaults to empty. Only a waiting run and a configured human action are accepted. Invalid actions do not mutate the wait. The endpoint executes subsequent steps until the next wait or terminal state.
 - `POST /api/runs/{id}/cancel` explicitly aborts running or waiting runs and retains their worktree. A cancelled run cannot be resumed; its task worktree remains until the task is done or deleted.
 
-The run detail UI shows the graph, current step, ordered attempts/handoffs, events, and pending human action buttons. Task modification, deletion, duplicate execution, and CLI worktree cleanup are blocked while a run is waiting. Legacy task files may contain an ignored `configSnapshot`; legacy sequential runs remain readable.
+The run detail UI shows the graph, current step, ordered attempts/handoffs, events, and pending human action buttons. Task modification, deletion, duplicate execution, and CLI worktree cleanup are blocked while a run is waiting. Older run snapshots with implicit step types are converted when read.

@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{
     body::{Body, to_bytes},
     http::Request,
@@ -6,14 +8,19 @@ use baton_server::{AppState, router};
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn skills_migrate_to_files_and_crud_protects_assignments() {
+async fn skills_crud_protects_assignments() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".baton")).unwrap();
     let mut config: serde_json::Value =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
-    config["skills"] = serde_json::json!([{"id":"style","instructions":"Be concise"}]);
     config["agents"][0]["skillIds"] = serde_json::json!(["style"]);
-    std::fs::write(dir.path().join(".baton/config.json"), config.to_string()).unwrap();
+    common::write_config(dir.path(), &config);
+    std::fs::create_dir_all(dir.path().join(".agents/skills/style")).unwrap();
+    std::fs::write(
+        dir.path().join(".agents/skills/style/SKILL.md"),
+        "---\nname: style\ndescription: Style\n---\nBe concise\n",
+    )
+    .unwrap();
     let app = router(AppState::new(dir.path().into()));
     let response = app
         .clone()
@@ -25,11 +32,6 @@ async fn skills_migrate_to_files_and_crud_protects_assignments() {
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(body["skills"][0]["id"], "style");
     assert!(dir.path().join(".agents/skills/style/SKILL.md").exists());
-    let persisted: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.path().join(".baton/config.json")).unwrap(),
-    )
-    .unwrap();
-    assert!(persisted.get("skills").is_none());
     let response = app
         .clone()
         .oneshot(

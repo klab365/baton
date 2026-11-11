@@ -6,7 +6,7 @@ This guide is for a coding agent helping a user set up Baton in their repository
 
 ## Setup checklist
 
-1. Inspect the repository and environment: check Git, the installed `baton` version, and any existing `.baton/config.json` and project instructions. Do not overwrite existing configuration or discard changes. Ask before installing software or modifying the project.
+1. Inspect the repository and environment: check Git, the installed `baton` version, and any existing `.baton/` configuration and project instructions. Do not overwrite existing configuration or discard changes. Ask before installing software or modifying the project.
 2. If needed, install the CLI using the current [installation instructions](../README.md#install-the-cli). Check platform support and verify that `baton` is on `PATH`. For `baton work`, ensure the installed binary supports it; follow the source-build instructions in the session guide if necessary.
 3. Help the user initialize and configure their chosen workflow. Use the existing configuration if present. For a new pipeline, adapt the appropriate example in the linked guide to the user's project and preferences; do not assume example model or credential IDs work locally. Explain any changes before applying them.
 4. For managed agents, have the user add provider credentials through Baton Settings and select available models. Never request secrets in chat or put them in configuration, prompts, logs or version control. See [provider credentials](local-provider-storage.md). The `fake` runtime can be used for offline testing.

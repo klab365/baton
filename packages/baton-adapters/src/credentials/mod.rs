@@ -169,10 +169,10 @@ impl FilesystemCredentialRepository {
         if !project.is_dir() {
             return Err("Project path is not a directory".into());
         }
-        let config_path = project.join(".baton/config.json");
+        let config_path = project.join(".baton/project.yml");
         match fs::read_to_string(config_path) {
             Ok(contents) => {
-                let config: serde_json::Value = serde_json::from_str(&contents)
+                let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&contents)
                     .map_err(|_| "Project configuration is invalid")?;
                 if let Some(id) = config.get("projectId") {
                     let id = id

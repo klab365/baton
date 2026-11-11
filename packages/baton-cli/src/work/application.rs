@@ -1,8 +1,8 @@
 //! Standalone Work composition: only the worker's repositories, checks, and mediator.
 use baton_adapters::{
     repositories::{
-        filesystem_project_config::FilesystemProjectConfigRepository,
         filesystem_work::{FilesystemWorkRepository, WorkProcessLock},
+        yaml_project_config::YamlProjectConfigRepository as FilesystemProjectConfigRepository,
     },
     skills::FilesystemSkillRepository,
     work::ShellWorkChecks,
@@ -147,7 +147,7 @@ impl WorkApplication {
                 let item = self.mediator.send(NextWork { id: id.clone() }).await?;
                 let run = self.mediator.send(GetWork { id: id.clone() }).await?;
                 let step = item.step.ok_or("No active step")?;
-                if step.human {
+                if step.is_human() {
                     return Err("Human steps require an explicit response".into());
                 }
                 let agent = item.agent;
@@ -188,8 +188,8 @@ impl WorkApplication {
                 } else {
                     item.allowed_outcomes
                 };
-                let command = step.command.clone();
-                let timeout = step.timeout_seconds.unwrap_or(300);
+                let command = step.command().map(str::to_owned);
+                let timeout = step.timeout_seconds().unwrap_or(300);
                 let execution_lock = WorkProcessLock::acquire_execution(&self.workspace)?;
                 self.lock.lock().map_err(|e| e.to_string())?.take();
                 let repository = FilesystemWorkRepository(self.workspace.clone());

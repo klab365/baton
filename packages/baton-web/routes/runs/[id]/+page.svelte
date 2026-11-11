@@ -78,8 +78,8 @@ const failure = $derived(runFailure(data.run));
 function isHuman(stepId: string) {
 	return (
 		pipeline?.steps.some(
-			(step: { id: string; human: boolean }) =>
-				step.id === stepId && step.human,
+			(step: { id: string; type: string }) =>
+				step.id === stepId && step.type === "human",
 		) ?? false
 	);
 }

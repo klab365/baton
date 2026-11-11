@@ -1,3 +1,5 @@
+mod common;
+
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -18,11 +20,20 @@ impl Fixture {
         let output = Command::new("git").arg("init").arg(&path).output().unwrap();
         assert!(output.status.success());
         fs::create_dir(path.join(".baton")).unwrap();
-        fs::write(
-            path.join(".baton/config.json"),
-            include_str!("../../../examples/session-factory/.baton/config.json"),
-        )
-        .unwrap();
+        let example =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/session-factory/.baton");
+        fs::copy(example.join("project.yml"), path.join(".baton/project.yml")).unwrap();
+        for name in ["agents", "pipelines"] {
+            fs::create_dir(path.join(".baton").join(name)).unwrap();
+            for entry in fs::read_dir(example.join(name)).unwrap() {
+                let entry = entry.unwrap();
+                fs::copy(
+                    entry.path(),
+                    path.join(".baton").join(name).join(entry.file_name()),
+                )
+                .unwrap();
+            }
+        }
         fs::write(path.join("uncommitted"), "preserve").unwrap();
         let vault = path.join("vault");
         Self {
@@ -106,11 +117,14 @@ fn cli_persists_steps_across_processes_and_emits_parseable_errors() {
 #[test]
 fn cli_execute_runs_runtime_and_saves_result_across_processes() {
     let f = Fixture::new();
-    fs::write(f.path.join(".baton/config.json"), json!({
-        "schemaVersion": 7,
-        "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"fake", "skillIds":[]}],
-        "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}]}]
-    }).to_string()).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7,
+            "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"fake", "skillIds":[]}],
+            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}]}]
+        }),
+    );
     let start = f.value(&["start", "--issue", "Implement feature"]);
     let id = start["id"].as_str().unwrap();
     assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
@@ -155,6 +169,7 @@ async fn cli_executes_rig_against_local_ollama_provider() {
                     Err(e) => panic!("provider accept failed: {e}"),
                 }
             };
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -209,18 +224,21 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         )
         .await
         .unwrap();
-    fs::write(f.path.join(".baton/config.json"), json!({
-        "schemaVersion": 7,
-        "agents": [
-            {"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
-            {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
-            {"id":"missing", "systemPrompt":"Work", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
-        ],
-        "pipelines": [
-            {"id":"factory", "steps":[{"id":"build", "name":"Build", "agentId":"worker"}, {"id":"human", "name":"Feedback", "human":true}, {"id":"continue", "name":"Continue", "agentId":"worker"}, {"id":"review", "name":"Review", "agentId":"reviewer"}]},
-            {"id":"missing", "steps":[{"id":"work", "name":"Work", "agentId":"missing", "transitions":[{"outcome":"completed", "to":null}]}]}
-        ]
-    }).to_string()).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7,
+            "agents": [
+                {"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
+                {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
+                {"id":"missing", "systemPrompt":"Work", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
+            ],
+            "pipelines": [
+                {"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}, {"id":"human", "name":"Feedback", "type":"human"}, {"id":"continue", "name":"Continue", "type":"agent", "agentId":"worker"}, {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer"}]},
+                {"id":"missing", "steps":[{"id":"work", "name":"Work", "type":"agent", "agentId":"missing", "transitions":[{"outcome":"completed", "to":null}]}]}
+            ]
+        }),
+    );
     let start = f.value(&[
         "start",
         "--issue",

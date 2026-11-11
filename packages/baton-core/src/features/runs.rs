@@ -156,7 +156,7 @@ pub fn resume_interrupted_run(
         .iter()
         .find(|step| Some(&step.id) == run.current_step.as_ref())
         .ok_or("Unknown current step")?;
-    if step.human || step.command.is_some() {
+    if step.is_human() || step.command().is_some() {
         return Err("Interrupted human or shell step requires manual reconciliation".into());
     }
     let workspace = run.worktree.as_ref().ok_or("Missing isolated worktree")?;

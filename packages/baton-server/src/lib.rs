@@ -71,8 +71,8 @@ use baton_adapters::{
         copilot_auth::CopilotAuthManager, model_catalog::RigCredentialModelCatalog,
     },
     repositories::{
-        filesystem_project_config::FilesystemProjectConfigRepository,
         filesystem_run::FilesystemRunRepository, filesystem_task::FilesystemTaskRepository,
+        yaml_project_config::YamlProjectConfigRepository as FilesystemProjectConfigRepository,
     },
     runtime::ConfiguredRuntimeFactory,
 };
@@ -313,9 +313,8 @@ pub fn lock_project_process(project_dir: &std::path::Path) -> anyhow::Result<Pro
         ),
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
-    let id =
-        baton_adapters::repositories::filesystem_project_config::ensure_project_identity(&project)
-            .map_err(anyhow::Error::msg)?;
+    let id = baton_adapters::repositories::yaml_project_config::ensure_project_identity(&project)
+        .map_err(anyhow::Error::msg)?;
     let base = match std::env::var_os("BATON_CREDENTIAL_DIR") {
         Some(base) => PathBuf::from(base),
         None => PathBuf::from(
@@ -704,8 +703,8 @@ mod web_tests {
         let lock = lock_project_process(first.path()).unwrap();
         std::fs::create_dir_all(second.path().join(".baton")).unwrap();
         std::fs::copy(
-            first.path().join(".baton/config.json"),
-            second.path().join(".baton/config.json"),
+            first.path().join(".baton/project.yml"),
+            second.path().join(".baton/project.yml"),
         )
         .unwrap();
         assert!(lock_project_process(second.path()).is_err());

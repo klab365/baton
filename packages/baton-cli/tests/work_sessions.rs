@@ -1,3 +1,5 @@
+mod common;
+
 use baton_cli::work::application::{WorkApplication, WorkCommand};
 use serde_json::{Value, json};
 struct Fixture {
@@ -9,21 +11,24 @@ impl Fixture {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().canonicalize().unwrap();
         std::fs::create_dir(path.join(".baton")).unwrap();
-        std::fs::write(path.join(".baton/config.json"), json!({
-            "schemaVersion": 7,
-            "agents": [{"id":"worker", "systemPrompt":"Follow the original issue and its acceptance criteria", "skillIds":[]}],
-            "pipelines": [{"id":"factory", "steps":[
-                {"id":"build", "name":"Build", "agentId":"worker", "transitions":[
-                    {"outcome":"revise_build", "to":"build"},
-                    {"outcome":"completed", "to":"review"}
-                ]},
-                {"id":"review", "name":"Review", "agentId":"worker", "transitions":[
-                    {"outcome":"approved", "to":"human"},
-                    {"outcome":"revise_build", "to":"build"}
-                ]},
-                {"id":"human", "name":"Human decision", "human":true}
-            ]}]
-        }).to_string()).unwrap();
+        common::write_config(
+            &path,
+            &json!({
+                "schemaVersion": 7,
+                "agents": [{"id":"worker", "systemPrompt":"Follow the original issue and its acceptance criteria", "skillIds":[]}],
+                "pipelines": [{"id":"factory", "steps":[
+                    {"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "transitions":[
+                        {"outcome":"revise_build", "to":"build"},
+                        {"outcome":"completed", "to":"review"}
+                    ]},
+                    {"id":"review", "name":"Review", "type":"agent", "agentId":"worker", "transitions":[
+                        {"outcome":"approved", "to":"human"},
+                        {"outcome":"revise_build", "to":"build"}
+                    ]},
+                    {"id":"human", "name":"Human decision", "type":"human"}
+                ]}]
+            }),
+        );
         std::fs::write(path.join("uncommitted.txt"), "keep me").unwrap();
         Self { _temp: temp, path }
     }
@@ -69,11 +74,10 @@ fn submission(run: &Value, outcome: &str) -> Value {
 #[tokio::test]
 async fn execute_runs_configured_agent_in_existing_workspace() {
     let f = Fixture::new();
-    let path = f.path.join(".baton/config.json");
-    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut config = common::read_config(&f.path);
     config["agents"][0]["runtimeKind"] = json!("fake");
     config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
-    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 5, json!([])).await;
     let result = f
@@ -97,10 +101,9 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
 #[tokio::test]
 async fn missing_agent_outcome_stops_the_run() {
     let f = Fixture::new();
-    let path = f.path.join(".baton/config.json");
-    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut config = common::read_config(&f.path);
     config["agents"][0]["runtimeKind"] = json!("fake");
-    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 50, json!([])).await;
     let id = run["id"].as_str().unwrap().to_owned();
@@ -131,10 +134,13 @@ async fn execute_command_steps_record_success_and_failure() {
         ("yes x | head -c 20000", "succeeded"),
     ] {
         let f = Fixture::new();
-        std::fs::write(f.path.join(".baton/config.json"), json!({
-            "schemaVersion": 7, "agents": [],
-            "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "command":command}]}]
-        }).to_string()).unwrap();
+        common::write_config(
+            &f.path,
+            &json!({
+                "schemaVersion": 7, "agents": [],
+                "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "type":"shell", "command":command}]}]
+            }),
+        );
         let app = f.app();
         let run = f.start(&app, 5, json!([])).await;
         let result = f
@@ -154,10 +160,13 @@ async fn execute_command_steps_record_success_and_failure() {
 #[tokio::test]
 async fn running_step_allows_status_and_cancellation() {
     let f = Fixture::new();
-    std::fs::write(f.path.join(".baton/config.json"), json!({
-        "schemaVersion": 7, "agents": [],
-        "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "command":"touch started; sleep 30; touch finished"}]}]
-    }).to_string()).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7, "agents": [],
+            "pipelines": [{"id":"factory", "steps":[{"id":"check", "name":"Check", "type":"shell", "command":"touch started; sleep 30; touch finished"}]}]
+        }),
+    );
     let app = std::sync::Arc::new(f.app());
     let run = f.start(&app, 5, json!([])).await;
     let id = run["id"].as_str().unwrap().to_owned();
@@ -230,10 +239,9 @@ async fn execute_refuses_human_steps_without_advancing() {
 #[tokio::test]
 async fn unconfigured_progress_is_rejected_without_advancing() {
     let f = Fixture::new();
-    let path = f.path.join(".baton/config.json");
-    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut config = common::read_config(&f.path);
     config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
-    std::fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+    common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 50, json!([])).await;
     let id = run["id"].as_str().unwrap();
@@ -384,11 +392,7 @@ async fn rework_can_finish_and_advance_to_review() {
 async fn demo_pipeline_runs_in_temporary_workspace() {
     let f = Fixture::new();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    std::fs::copy(
-        repo.join("examples/demo/.baton/config.json"),
-        f.path.join(".baton/config.json"),
-    )
-    .unwrap();
+    common::write_config(&f.path, &common::read_config(&repo.join("examples/demo")));
     for skill in [
         "concise-planning",
         "ponytail",
@@ -483,31 +487,6 @@ async fn rework_and_human_wait_survive_reopening_without_runtime_or_worktree_all
     );
 }
 #[tokio::test]
-async fn legacy_execution_modes_are_accepted_and_removed_from_snapshots() {
-    let f = Fixture::new();
-    let config_path = f.path.join(".baton/config.json");
-    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["pipelines"][0]["steps"][1]["execution"] = json!("subagent");
-    std::fs::write(&config_path, config.to_string()).unwrap();
-    let app = f.app();
-    let start = f.start(&app, 50, json!([])).await;
-    let id = start["id"].as_str().unwrap();
-    let inline = f
-        .call(&app, json!({"command":"next", "id":id}))
-        .await
-        .unwrap();
-    assert!(inline["step"].get("execution").is_none());
-    config["pipelines"][0]["steps"][1]["execution"] = json!("inline");
-    std::fs::write(config_path, config.to_string()).unwrap();
-    f.submit(&app, &start, "completed").await.unwrap();
-    let delegated = f
-        .call(&app, json!({"command":"next", "id":id}))
-        .await
-        .unwrap();
-    assert!(delegated["step"].get("execution").is_none());
-}
-
-#[tokio::test]
 async fn checks_execute_in_the_workspace_and_failed_checks_do_not_advance() {
     let f = Fixture::new();
     let app = f.app();
@@ -544,13 +523,12 @@ async fn checks_execute_in_the_workspace_and_failed_checks_do_not_advance() {
 #[tokio::test]
 async fn successful_terminal_outcomes_cannot_bypass_checks() {
     let f = Fixture::new();
-    let config_path = f.path.join(".baton/config.json");
-    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    let mut config = common::read_config(&f.path);
     config["pipelines"][0]["steps"][0]["transitions"] = json!([
         {"outcome":"responded", "to":null},
         {"outcome":"revise_build", "to":null}
     ]);
-    std::fs::write(config_path, config.to_string()).unwrap();
+    common::write_config(&f.path, &config);
     let app = f.app();
     let start = f
         .start(&app, 50, json!([{"stepId":"build", "command":"false"}]))
@@ -620,7 +598,7 @@ async fn standalone_lock_excludes_other_work_processes_without_initializing_serv
     assert!(WorkApplication::new(f.path.clone()).is_err());
     assert!(!f.path.join(".baton/runs").exists());
     assert!(
-        !std::fs::read_to_string(f.path.join(".baton/config.json"))
+        !std::fs::read_to_string(f.path.join(".baton/project.yml"))
             .unwrap()
             .contains("projectId")
     );
@@ -631,16 +609,14 @@ async fn standalone_lock_excludes_other_work_processes_without_initializing_serv
 #[tokio::test]
 async fn next_leaves_context_with_pi_while_explicit_status_retains_decisions() {
     let f = Fixture::new();
-    let config_path = f.path.join(".baton/config.json");
-    let mut config: Value =
-        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    let mut config = common::read_config(&f.path);
     config["pipelines"][0]["steps"] = json!([
-        {"id":"clarify", "name":"Clarify scope", "human":true},
-        {"id":"plan", "name":"Plan", "agentId":"worker"},
-        {"id":"build", "name":"Build", "agentId":"worker"},
-        {"id":"review", "name":"Review", "agentId":"worker"}
+        {"id":"clarify", "name":"Clarify scope", "type":"human"},
+        {"id":"plan", "name":"Plan", "type":"agent", "agentId":"worker"},
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"worker"},
+        {"id":"review", "name":"Review", "type":"agent", "agentId":"worker"}
     ]);
-    std::fs::write(config_path, config.to_string()).unwrap();
+    common::write_config(&f.path, &config);
     let app = f.app();
     let start = f.start(&app, 50, json!([])).await;
     let id = start["id"].as_str().unwrap();

@@ -1,6 +1,6 @@
 # Getting started: build a Software Factory
 
-This guide builds a small pipeline with planning, implementation, independent review, human approval and a commit. The complete example, including system prompts and transitions, is in [`examples/demo/.baton/config.json`](../examples/demo/.baton/config.json); its skills are in [`examples/demo/.agents/skills/`](../examples/demo/.agents/skills/).
+This guide builds a small pipeline with planning, implementation, independent review, human approval and a commit. The complete example, including system prompts and transitions, is in [`examples/demo/.baton/`](../examples/demo/.baton/); its skills are in [`examples/demo/.agents/skills/`](../examples/demo/.agents/skills/).
 
 The example is a reference, not a portable configuration: its provider, model and credential IDs are local examples. Do not copy its credential IDs into your project. Choose models and credentials available in your own environment.
 
@@ -29,7 +29,7 @@ Review third-party instructions before using them. Skills are instructions, not 
 
 ## 3. Create agents
 
-In **Agents → Create agent**, create these agents. For each one, select Rig, a compatible credential and a model available to you. Copy the corresponding `systemPrompt` from the [example configuration](../examples/demo/.baton/config.json), adapting it to your project. Assign the skills below:
+In **Agents → Create agent**, create these agents. For each one, select Rig, a compatible credential and a model available to you. Copy the corresponding `systemPrompt` from the [example agents](../examples/demo/.baton/agents/), adapting it to your project. Assign the skills below:
 
 | Agent ID            | Responsibility                                     | Skills                                                     |
 | ------------------- | -------------------------------------------------- | ---------------------------------------------------------- |
@@ -53,7 +53,7 @@ In **Pipelines → Create pipeline**, add the steps in this order, then configur
 | `commit`   | `factory-committer` | `completed` → End; `blocked` → `help`                                                         |
 | `help`     | Human               | `responded` or `approved` → `plan`; `rejected` → End                                          |
 
-Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/config.json). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff, but its sequential step cannot itself route to human help.
+Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/pipelines/software-factory.yml). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff, but its sequential step cannot itself route to human help.
 
 **Review loops have no automatic retry or cost limit.** Monitor the run and cancel it if agents repeat without progress. Human approval does not merge or push the branch. A rejected final human transition ends the run as failed. See [workflow transitions](workflow-transitions.md).
 

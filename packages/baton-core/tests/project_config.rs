@@ -5,9 +5,9 @@ fn example() -> serde_json::Value {
         "schemaVersion": 7,
         "agents":[{"id":"writer", "systemPrompt":"Write clearly", "runtimeKind":"rig", "model":{"provider":"openai","model":"gpt-4.1"}, "credentialId":null, "rules":[], "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
-            {"id":"plan", "name":"Plan", "agentId":"writer"},
-            {"id":"build", "name":"Build", "agentId":"writer"},
-            {"id":"review", "name":"Review", "agentId":"writer"}
+            {"id":"plan", "name":"Plan", "type":"agent", "agentId":"writer"},
+            {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
+            {"id":"review", "name":"Review", "type":"agent", "agentId":"writer"}
         ]}]
     })
 }
@@ -50,20 +50,15 @@ fn migrates_only_exact_legacy_marker() {
 #[test]
 fn demo_factory_pipeline_requires_human_approval_before_commit() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/demo/.baton/config.json");
+        .join("../../examples/demo/.baton/pipelines/software-factory.yml");
     let source = std::fs::read_to_string(path).unwrap();
-    let config = parse_config(&source).unwrap();
-    let pipeline = config
-        .pipelines
-        .iter()
-        .find(|pipeline| pipeline.id == "software-factory")
-        .unwrap();
+    let pipeline: baton_core::domain::project::Pipeline = serde_yaml_ng::from_str(&source).unwrap();
     let commit = pipeline
         .steps
         .iter()
         .find(|step| step.id == "commit")
         .unwrap();
-    assert_eq!(commit.agent_id, "factory-committer");
+    assert_eq!(commit.agent_id(), "factory-committer");
     assert!(commit.transitions.iter().any(|transition| {
         transition.outcome == baton_core::domain::project::Outcome::Completed
             && transition.to.is_none()
@@ -73,7 +68,7 @@ fn demo_factory_pipeline_requires_human_approval_before_commit() {
         .iter()
         .find(|step| step.id == "approval")
         .unwrap();
-    assert!(approval.human);
+    assert!(approval.is_human());
     assert!(approval.transitions.iter().any(|transition| {
         transition.outcome == baton_core::domain::project::Outcome::Approved
             && transition.to.as_deref() == Some("commit")
@@ -93,13 +88,10 @@ fn demo_factory_pipeline_requires_human_approval_before_commit() {
 fn project_factory_checks_ci_before_finishing() {
     use baton_core::domain::project::Outcome;
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.baton/config.json");
-    let config = parse_config(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let pipeline = config
-        .pipelines
-        .iter()
-        .find(|p| p.id == "software-factory")
-        .unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.baton/pipelines/software-factory.yml");
+    let pipeline: baton_core::domain::project::Pipeline =
+        serde_yaml_ng::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let step = |id: &str| pipeline.steps.iter().find(|s| s.id == id).unwrap();
     let routes_to = |id: &str, outcome, to: Option<&str>| {
         step(id)
@@ -111,7 +103,7 @@ fn project_factory_checks_ci_before_finishing() {
     assert!(routes_to("ci", Outcome::Completed, None));
     assert!(routes_to("ci", Outcome::ReviseBuild, Some("build")));
     assert!(routes_to("ci", Outcome::Blocked, Some("ci-help")));
-    assert!(step("ci-help").human);
+    assert!(step("ci-help").is_human());
     assert!(routes_to("ci-help", Outcome::Responded, Some("ci")));
 }
 

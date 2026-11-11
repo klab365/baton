@@ -37,21 +37,40 @@ pub struct Pipeline {
     pub steps: Vec<PipelineStep>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct PipelineStep {
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub agent_id: String,
-    #[serde(default)]
-    pub human: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<u32>,
+    #[serde(flatten)]
+    pub kind: PipelineStepKind,
     #[serde(default)]
     pub transitions: Vec<Transition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+#[ts(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum PipelineStepKind {
+    Agent {
+        agent_id: String,
+    },
+    Human,
+    Shell {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        timeout_seconds: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -167,15 +186,30 @@ impl From<Pipeline> for domain::Pipeline {
     }
 }
 
+impl<'de> Deserialize<'de> for PipelineStep {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        domain::PipelineStep::deserialize(deserializer).map(Into::into)
+    }
+}
+
 impl From<domain::PipelineStep> for PipelineStep {
     fn from(value: domain::PipelineStep) -> Self {
         Self {
             id: value.id,
             name: value.name,
-            agent_id: value.agent_id,
-            human: value.human,
-            command: value.command,
-            timeout_seconds: value.timeout_seconds,
+            kind: match value.kind {
+                domain::PipelineStepKind::Agent { agent_id } => {
+                    PipelineStepKind::Agent { agent_id }
+                }
+                domain::PipelineStepKind::Human => PipelineStepKind::Human,
+                domain::PipelineStepKind::Shell {
+                    command,
+                    timeout_seconds,
+                } => PipelineStepKind::Shell {
+                    command,
+                    timeout_seconds,
+                },
+            },
             transitions: value.transitions.into_iter().map(Into::into).collect(),
         }
     }
@@ -186,10 +220,19 @@ impl From<PipelineStep> for domain::PipelineStep {
         Self {
             id: value.id,
             name: value.name,
-            agent_id: value.agent_id,
-            human: value.human,
-            command: value.command,
-            timeout_seconds: value.timeout_seconds,
+            kind: match value.kind {
+                PipelineStepKind::Agent { agent_id } => {
+                    domain::PipelineStepKind::Agent { agent_id }
+                }
+                PipelineStepKind::Human => domain::PipelineStepKind::Human,
+                PipelineStepKind::Shell {
+                    command,
+                    timeout_seconds,
+                } => domain::PipelineStepKind::Shell {
+                    command,
+                    timeout_seconds,
+                },
+            },
             transitions: value.transitions.into_iter().map(Into::into).collect(),
         }
     }

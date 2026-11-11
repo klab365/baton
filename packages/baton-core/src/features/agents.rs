@@ -87,7 +87,7 @@ pub async fn mutate(
                 pipeline
                     .steps
                     .iter()
-                    .find(|step| step.agent_id == id)
+                    .find(|step| step.agent_id() == id)
                     .map(|step| (pipeline, step))
             }) {
                 return Err(AgentError::Conflict(format!(

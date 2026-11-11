@@ -58,7 +58,9 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
         Err(PipelineError::Validation(_))
     ));
     let mut invalid = pipeline.clone();
-    invalid.steps[0].agent_id = "missing".into();
+    invalid.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
+        agent_id: "missing".into(),
+    };
     assert!(matches!(
         pipelines::mutate(&repository, &snapshot.revision, Mutation::Create(invalid)).await,
         Err(PipelineError::Validation(_))
