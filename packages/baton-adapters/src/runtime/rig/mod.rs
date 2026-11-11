@@ -513,7 +513,6 @@ impl RigRuntime {
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
-        let started = std::time::Instant::now();
         loop {
             app.update();
             if let Some(outcome) = app.world_mut().resource_mut::<Completed>().0.take() {
@@ -588,12 +587,6 @@ impl RigRuntime {
                     .trigger(rig_harness::prelude::StopTurn::new(entity));
                 app.update();
                 return Err("Run cancelled".into());
-            }
-            if started.elapsed() > Duration::from_secs(600) {
-                app.world_mut()
-                    .trigger(rig_harness::prelude::StopTurn::new(entity));
-                app.update();
-                return Err("Rig agent timed out after 600 seconds".into());
             }
             std::thread::sleep(Duration::from_millis(10));
         }
