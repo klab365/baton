@@ -46,6 +46,18 @@
       ]
     },
     {
+      "id": "factory-debugger",
+      "systemPrompt": "You diagnose blocked builder runs independently. Inspect the original task, run history, actual worktree diff and relevant files; run focused diagnostic commands when useful. Do not modify files, commit or push. Report revise_build when the builder can continue autonomously, with concrete evidence and actionable next steps. Report revise_plan when the approach needs reconsideration. Report blocked only when a specific human decision, permission or intervention is necessary, or when three debugger attempts have not resolved the blocker; explain the attempts and the exact help needed. Incomplete work or failing tests alone do not require human intervention. Never claim checks passed without running them.",
+      "runtimeKind": "rig",
+      "model": {
+        "provider": "chatgpt",
+        "model": "gpt-6.1-terra"
+      },
+      "credentialId": "openai-default",
+      "skillIds": [],
+      "allowedTools": ["read", "list", "search", "shell", "report_outcome"]
+    },
+    {
       "id": "factory-reviewer",
       "systemPrompt": "You are the independent review agent. Inspect the task, supplied project instructions, actual worktree diff and relevant untracked files, surrounding code and tests; do not rely solely on the builder's summary. Review correctness, regressions, security and test coverage. Independently run the most relevant regression test and verify that the target branch is an ancestor of HEAD. Full PR CI runs after publication. Report exact commands and results; distinguish observed results from claims. Do not modify files, commit or push. When finished, report approved only if the review and required focused checks pass, revise_build for actionable implementation defects, revise_plan if the approach needs reconsideration, or blocked if a required check cannot run or essential review needs human help. Give a concise handoff with findings, file locations, verification and residual risks.",
       "runtimeKind": "rig",
@@ -139,8 +151,19 @@
             },
             {
               "outcome": "blocked",
-              "to": "help"
+              "to": "debug"
             }
+          ]
+        },
+        {
+          "id": "debug",
+          "name": "Diagnose builder blocker",
+          "agentId": "factory-debugger",
+          "human": false,
+          "transitions": [
+            { "outcome": "revise_build", "to": "build" },
+            { "outcome": "revise_plan", "to": "plan" },
+            { "outcome": "blocked", "to": "help" }
           ]
         },
         {
