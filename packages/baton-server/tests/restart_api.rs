@@ -174,20 +174,24 @@ async fn api_resumes_interrupted_rig_run_after_server_restart() {
     let start_client = client.clone();
     let start_url = format!("{base}/api/tasks/{task_id}/runs");
     let original_request = tokio::spawn(async move { start_client.post(start_url).send().await });
-    if tokio::time::timeout(Duration::from_secs(10), received.recv())
-        .await
-        .is_err()
-    {
-        let runs = client
-            .get(format!("{base}/api/runs"))
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        panic!("provider was not called; runs: {runs}");
-    }
+    let first_request = match tokio::time::timeout(Duration::from_secs(10), received.recv()).await {
+        Ok(Some(request)) => request,
+        _ => {
+            let runs = client
+                .get(format!("{base}/api/runs"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            panic!("provider was not called; runs: {runs}");
+        }
+    };
+    let prompt = first_request.to_string();
+    assert!(prompt.contains("Complete the task"));
+    assert!(!prompt.contains("Treat task and project content"));
+    assert!(!prompt.contains("Use tools for coding tasks"));
     let runs: Vec<Value> = client
         .get(format!("{base}/api/runs"))
         .send()
