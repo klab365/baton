@@ -66,17 +66,17 @@ fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error.into()),
     }
-    baton_adapters::repositories::filesystem_project_config::ensure_project_identity(project)
+    baton_adapters::repositories::yaml_project_config::ensure_project_identity(project)
         .map_err(anyhow::Error::msg)?;
     if new_repo {
         for args in [
-            &["add", "--", ".baton/config.json"][..],
+            &["add", "--", ".baton/project.yml"][..],
             &[
                 "commit",
                 "-m",
                 "Initialize Baton configuration",
                 "--",
-                ".baton/config.json",
+                ".baton/project.yml",
             ][..],
         ] {
             let output = git(args)?;
@@ -95,7 +95,10 @@ async fn load_project_config(
     project: &std::path::Path,
 ) -> anyhow::Result<baton_core::domain::project::ProjectConfig> {
     use baton_core::ports::project_config::ProjectConfigRepository;
-    let repository = baton_adapters::repositories::filesystem_project_config::FilesystemProjectConfigRepository::new(project.to_path_buf());
+    let repository =
+        baton_adapters::repositories::yaml_project_config::YamlProjectConfigRepository::new(
+            project.to_path_buf(),
+        );
     match repository.load().await.map_err(anyhow::Error::msg)? {
         baton_core::domain::project::ConfigState::Ready(snapshot) => Ok(snapshot.config),
         baton_core::domain::project::ConfigState::Missing => {
@@ -365,10 +368,10 @@ mod tests {
             std::fs::read_to_string(project.0.join(".baton/.gitignore")).unwrap(),
             BATON_GITIGNORE
         );
-        let config = std::fs::read(project.0.join(".baton/config.json")).unwrap();
+        let config = std::fs::read(project.0.join(".baton/project.yml")).unwrap();
         assert!(!bootstrap_project(&project.0).unwrap());
         assert_eq!(
-            std::fs::read(project.0.join(".baton/config.json")).unwrap(),
+            std::fs::read(project.0.join(".baton/project.yml")).unwrap(),
             config
         );
         let output = std::process::Command::new("git")
@@ -379,7 +382,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
         let output = std::process::Command::new("git")
             .current_dir(&project.0)
-            .args(["show", "HEAD:.baton/config.json"])
+            .args(["show", "HEAD:.baton/project.yml"])
             .output()
             .unwrap();
         assert!(output.status.success());
@@ -406,7 +409,7 @@ mod tests {
             std::fs::read_to_string(baton.join(".gitignore")).unwrap(),
             "custom/\n"
         );
-        assert!(baton.join("config.json").exists());
+        assert!(baton.join("project.yml").exists());
         assert!(
             !std::process::Command::new("git")
                 .current_dir(&project.0)

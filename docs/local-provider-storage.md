@@ -2,7 +2,7 @@
 
 Agents select a runtime, provider/model and, where required, a reusable local credential. Project configuration stores credential IDs and non-secret settings, not API keys or refreshable authentication records. Manage credentials through the UI; the Rig adapter resolves them locally at execution time. The fake runtime does not contact a model.
 
-Each project has a vault under `~/.local/share/baton/credentials/projects/<project-id>`. Set `BATON_CREDENTIAL_DIR` on the backend process to override the base directory. The non-secret `projectId` in `.baton/config.json` is initialized or migrated at startup. Clones with the same ID share the vault, and only one Baton process may use that ID at a time. Existing local IDs are retained during migration. Credentials formerly stored in the global vault are not imported or removed; reconnect accounts and remove old secrets deliberately when no longer needed. Protect vault directories and do not commit them or put secrets in project configuration, task prompts, run records or logs.
+Each project has a vault under `~/.local/share/baton/credentials/projects/<project-id>`. Set `BATON_CREDENTIAL_DIR` on the backend process to override the base directory. The non-secret `projectId` in `.baton/project.yml` is initialized at startup. Clones with the same ID share the vault, and only one Baton process may use that ID at a time. Credentials formerly stored in the global vault are not imported or removed; reconnect accounts and remove old secrets deliberately when no longer needed. Protect vault directories and do not commit them or put secrets in project configuration, task prompts, run records or logs.
 
 ## GitHub Copilot
 

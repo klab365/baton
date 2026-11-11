@@ -1,7 +1,10 @@
-use baton_adapters::{credentials::FilesystemCredentialRepository, runtime::ConfiguredRuntime};
+use baton_adapters::{
+    credentials::FilesystemCredentialRepository,
+    repositories::yaml_project_config::YamlProjectConfigRepository, runtime::ConfiguredRuntime,
+};
 use baton_core::{
-    domain::project::{Outcome, parse_config},
-    ports::runtime::AgentRuntime,
+    domain::project::{ConfigState, Outcome},
+    ports::{project_config::ProjectConfigRepository, runtime::AgentRuntime},
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -10,9 +13,14 @@ use std::{path::PathBuf, sync::Arc};
 fn missing_outcome_is_not_retried_automatically() {
     let project =
         PathBuf::from(std::env::var_os("BATON_LIVE_PROJECT").expect("set BATON_LIVE_PROJECT"));
-    let config =
-        parse_config(&std::fs::read_to_string(project.join(".baton/config.json")).unwrap())
-            .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let ConfigState::Ready(snapshot) = runtime
+        .block_on(YamlProjectConfigRepository::new(project.clone()).load())
+        .unwrap()
+    else {
+        panic!("project configuration is unavailable")
+    };
+    let config = snapshot.config;
     let mut agent = config.agents.first().unwrap().clone();
     agent.skill_ids.clear();
     agent.allowed_tools = Some(vec!["report_outcome".into()]);

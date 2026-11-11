@@ -1,0 +1,61 @@
+---
+id: software-factory
+steps:
+- id: plan
+  name: Analyze and plan
+  agentId: factory-planner
+  transitions:
+  - outcome: completed
+    to: build
+  - outcome: blocked
+    to: help
+  type: agent
+- id: build
+  name: Implement and verify
+  agentId: factory-builder
+  transitions:
+  - outcome: completed
+    to: review
+  - outcome: blocked
+    to: help
+  type: agent
+- id: review
+  name: Independent review
+  agentId: factory-reviewer
+  transitions:
+  - outcome: approved
+    to: approval
+  - outcome: revise_build
+    to: build
+  - outcome: revise_plan
+    to: plan
+  - outcome: blocked
+    to: help
+  type: agent
+- id: approval
+  name: Human approval
+  transitions:
+  - outcome: approved
+    to: commit
+  - outcome: rejected
+    to: null
+  - outcome: responded
+    to: build
+  type: human
+- id: commit
+  name: Create commit
+  agentId: factory-committer
+  transitions:
+  - outcome: completed
+    to: null
+  - outcome: blocked
+    to: help
+  type: agent
+- id: help
+  name: Resolve blocker
+  transitions:
+  - outcome: responded
+    to: plan
+  - outcome: rejected
+    to: null
+  type: human

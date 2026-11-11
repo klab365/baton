@@ -12,7 +12,7 @@ Baton coordinates local AI agents through configurable pipelines. You create age
 - [CLI reference](#cli-reference)
 - [Troubleshooting and limitations](#troubleshooting-and-limitations)
 
-For a complete worked pipeline, follow [Getting started: build a Software Factory](getting-started.md) and inspect the [demo configuration](../examples/demo/.baton/config.json).
+For a complete worked pipeline, follow [Getting started: build a Software Factory](getting-started.md) and inspect the [demo configuration](../examples/demo/.baton/).
 
 ## Get started
 
@@ -30,7 +30,7 @@ In **Settings → Add credential**, select a credential type, give it a name and
 
 Credentials can be reused by multiple agents. The agent editor loads available models based on the selected credential. Deleting a credential leaves agents referencing it unable to start new runs until another available credential is assigned.
 
-Baton stores secret material in a project-specific local credential vault, not `.baton/config.json`. The default base directory is `~/.local/share/baton/credentials`; `BATON_CREDENTIAL_DIR` overrides it. Protect this directory and do not commit it. See [provider credentials](local-provider-storage.md).
+Baton stores secret material in a project-specific local credential vault, not project configuration. The default base directory is `~/.local/share/baton/credentials`; `BATON_CREDENTIAL_DIR` overrides it. Protect this directory and do not commit it. See [provider credentials](local-provider-storage.md).
 
 ## Agents and project instructions
 
@@ -89,7 +89,7 @@ After a backend restart, a previously waiting run remains available for a human 
 
 | Location               | Purpose                                                                                  |
 | ---------------------- | ---------------------------------------------------------------------------------------- |
-| `.baton/config.json`   | Versioned project configuration: agents and pipelines; credential IDs, not secret values |
+| `.baton/project.yml`, `.baton/agents/`, `.baton/pipelines/` | Versioned project metadata, agents and pipelines; credential IDs, not secret values |
 | `.baton/tasks/`        | Task data, including descriptions                                                        |
 | `.baton/runs/`         | Run state, snapshots, handoffs, events and available traces                              |
 | `.agents/skills/`      | Project-owned skill instructions and supporting files                                    |

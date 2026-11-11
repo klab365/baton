@@ -1,6 +1,6 @@
 # Tasks
 
-Tasks are runtime data stored as individual JSON files in `.baton/tasks/`, not in the versioned `.baton/config.json`. Keep this directory out of version control: new projects ignore it automatically; existing projects should add `tasks/` to `.baton/.gitignore`. Task files contain user prompts and should be treated as private local data.
+Tasks are runtime data stored as individual JSON files in `.baton/tasks/`, not in the versioned project configuration. Keep this directory out of version control: new projects ignore it automatically; existing projects should add `tasks/` to `.baton/.gitignore`. Task files contain user prompts and should be treated as private local data.
 
 The API exposes `GET /api/tasks`, `POST /api/tasks`, and `GET`, `PUT`, `DELETE /api/tasks/{id}`. POST and PUT accept `title`, `description`, and `pipelineId`. The title and description must be nonblank; include any acceptance criteria in the description. The selected pipeline must exist in the current valid project configuration. Missing tasks return 404; invalid selections return 400. PUT replaces the editable fields. Status and timestamps are server-owned.
 

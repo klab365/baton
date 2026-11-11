@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{Json, Router, extract::State, routing::post};
 use serde_json::{Value, json};
 use std::{
@@ -104,14 +106,17 @@ async fn api_stops_interrupted_rig_run_for_manual_reconciliation() {
             "initial",
         ],
     );
-    std::fs::write(project.join(".baton/config.json"), json!({
-        "schemaVersion":7,
-        "agents":[{"id":"worker", "systemPrompt":"Complete the task", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"fake"}, "credentialId":"fake", "skillIds":[]}],
-        "pipelines":[{"id":"factory", "steps":[
-            {"id":"build", "name":"Build", "agentId":"worker"},
-            {"id":"approval", "name":"Human approval", "human":true}
-        ]}]
-    }).to_string()).unwrap();
+    common::write_config(
+        &project,
+        &json!({
+            "schemaVersion":7,
+            "agents":[{"id":"worker", "systemPrompt":"Complete the task", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"fake"}, "credentialId":"fake", "skillIds":[]}],
+            "pipelines":[{"id":"factory", "steps":[
+                {"id":"build", "name":"Build", "type":"agent", "agentId":"worker"},
+                {"id":"approval", "name":"Human approval", "type":"human"}
+            ]}]
+        }),
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let provider_address = listener.local_addr().unwrap();

@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -43,21 +45,17 @@ fn fixture() -> std::path::PathBuf {
                 .success()
         );
     }
-    std::fs::write(
-        directory.join(".baton/config.json"),
-        include_str!("../../baton-core/tests/fixture_config.json"),
-    )
-    .unwrap();
+    common::write_config(
+        &directory,
+        &serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap(),
+    );
     directory
 }
 async fn json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
 }
 fn configure_fake(directory: &std::path::Path) {
-    let mut config: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(directory.join(".baton/config.json")).unwrap(),
-    )
-    .unwrap();
+    let mut config = common::read_config(directory);
     for agent in config["agents"].as_array_mut().unwrap() {
         agent["runtimeKind"] = "fake".into();
         agent["model"] = serde_json::Value::Null;
@@ -65,14 +63,9 @@ fn configure_fake(directory: &std::path::Path) {
     let steps = config["pipelines"][0]["steps"].as_array_mut().unwrap();
     steps.retain(|step| step["id"] == "write" || step["id"] == "review");
     for step in steps {
-        step["human"] = false.into();
         step["transitions"] = serde_json::json!([]);
     }
-    std::fs::write(
-        directory.join(".baton/config.json"),
-        serde_json::to_vec(&config).unwrap(),
-    )
-    .unwrap();
+    common::write_config(directory, &config);
 }
 fn input(title: &str) -> Body {
     Body::from(serde_json::json!({ "title": title, "description": "Feature details\n\nAcceptance criteria: Tests pass", "pipelineId": "draft" }).to_string())
@@ -120,12 +113,13 @@ async fn task_completes_after_human_approval_and_repairs_stale_status() {
         .await;
     let directory = fixture();
     configure_fake(&directory);
-    let config_path = directory.join(".baton/config.json");
-    let mut config: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["pipelines"][0]["steps"][1]["human"] = true.into();
-    config["pipelines"][0]["steps"][1]["agentId"] = "".into();
-    std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let mut config = common::read_config(&directory);
+    config["pipelines"][0]["steps"][1]["type"] = "human".into();
+    config["pipelines"][0]["steps"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("agentId");
+    common::write_config(&directory, &config);
     let app = router(AppState::new(directory.clone()));
     let response = app
         .clone()

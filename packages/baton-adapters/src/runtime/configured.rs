@@ -62,12 +62,12 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
         let ids = pipeline
             .steps
             .iter()
-            .filter(|step| !step.human)
+            .filter(|step| !step.is_human())
             .filter_map(|step| {
                 config
                     .agents
                     .iter()
-                    .find(|agent| agent.id == step.agent_id)
+                    .find(|agent| agent.id == step.agent_id())
                     .and_then(|agent| agent.credential_id.clone())
             })
             .collect::<Vec<_>>();
@@ -230,7 +230,7 @@ mod tests {
         let config = baton_core::domain::project::parse_config(r#"{
             "schemaVersion": 7,
             "agents": [{"id":"agent","systemPrompt":"test","credentialId":"selected","skillIds":[]}],
-            "pipelines": [{"id":"pipeline","steps":[{"id":"step","name":"Step","agentId":"agent"}]}]
+            "pipelines": [{"id":"pipeline","steps":[{"id":"step","name":"Step","type":"agent","agentId":"agent"}]}]
         }"#).unwrap();
         let runtime = factory.create(&config, "pipeline").unwrap();
         assert!(repository.acquire_delete_lease("selected").is_err());

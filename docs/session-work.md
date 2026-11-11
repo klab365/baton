@@ -14,7 +14,7 @@ To test the local checkout, run `mise run dev-pi` from the repository root. It b
 
 Other coding-agent TUIs, such as Claude Code and Codex, can invoke the CLI directly. They do not yet have a dedicated Baton UI integration.
 
-Configure agents and a pipeline in `.baton/config.json`. Rig agents use their configured provider, model, tool permissions and credential ID; credentials must exist in Baton's local credential vault. Assigned project skills and project instructions are provided by the runtime. Agent skills and tools are not a security boundary: commands run with local user permissions and a worktree is not a sandbox.
+Configure agents in `.baton/agents/` and pipelines in `.baton/pipelines/`. Rig agents use their configured provider, model, tool permissions and credential ID; credentials must exist in Baton's local credential vault. Assigned project skills and project instructions are provided by the runtime. Agent skills and tools are not a security boundary: commands run with local user permissions and a worktree is not a sandbox.
 
 Baton stores the task text literally and does not fetch issue URLs. Resolve an issue and include its requirements and acceptance criteria in the task text before starting.
 

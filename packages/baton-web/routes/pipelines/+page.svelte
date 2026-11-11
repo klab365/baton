@@ -27,7 +27,6 @@ const outcomes: Outcome[] = [
 	"rejected",
 	"responded",
 ];
-import type { PipelineStep as Step } from "../../lib/generated/PipelineStep";
 type PipelineConfiguration = {
 	revision: string;
 	pipelines: Pipeline[];
@@ -58,13 +57,25 @@ function add() {
 	draft?.steps.push({
 		id,
 		name: "",
+		type: "agent",
 		agentId: config.agents[0]?.id ?? "",
-		human: false,
-		command: null,
-		timeoutSeconds: null,
 		transitions: [],
 	});
 	expandedStepIds = new Set([...expandedStepIds, id]);
+}
+function setStepType(index: number, value: string) {
+	if (!draft || !config) return;
+	const { id, name } = draft.steps[index];
+	const common = { id, name, transitions: [] };
+	if (value === "human") draft.steps[index] = { ...common, type: "human" };
+	else if (value === "shell")
+		draft.steps[index] = { ...common, type: "shell", command: "" };
+	else
+		draft.steps[index] = {
+			...common,
+			type: "agent",
+			agentId: config.agents[0]?.id ?? "",
+		};
 }
 function toggleStep(id: string) {
 	const next = new Set(expandedStepIds);
@@ -147,10 +158,10 @@ async function save(remove = false) {
          <header class="step-header"><div class="step-number">{index + 1}</div><button type="button" class="step-title" aria-expanded={expandedStepIds.has(step.id)} aria-controls={`step-details-${step.id}`} onclick={() => toggleStep(step.id)}><strong>{step.name || "Untitled step"}</strong></button><div class="step-controls"><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} up`} disabled={busy || index === 0} onclick={() => move(index, -1)}><ArrowUp size={17} /></button><button type="button" class="icon-button" aria-label={`Move ${step.name || `step ${index + 1}`} down`} disabled={busy || index === draft.steps.length - 1} onclick={() => move(index, 1)}><ArrowDown size={17} /></button><button type="button" class="icon-button remove-step" aria-label={`Remove ${step.name || `step ${index + 1}`}`} disabled={busy} onclick={() => { if (draft) draft.steps = draft.steps.filter((item) => item.id !== step.id); }}><Trash2 size={16} /></button><GripVertical class="drag-hint" size={19} aria-hidden="true" /></div></header>
          {#if expandedStepIds.has(step.id)}<div class="step-body" id={`step-details-${step.id}`}>
           <Field label="Step name" for={`name-${step.id}`} required>{#snippet children()}<input id={`name-${step.id}`} bind:value={step.name} required disabled={busy} placeholder="e.g. Research request" />{/snippet}</Field>
-          <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.command != null ? "shell" : step.human ? "human" : "agent"} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }, { id: "shell", name: "Shell" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => { step.human = value === "human"; step.command = value === "shell" ? "" : null; step.timeoutSeconds = null; step.agentId = value === "agent" ? config.agents[0]?.id ?? "" : ""; step.transitions = []; }} />{/snippet}</Field>
-          {#if step.command != null}<Field label="Command" for={`command-${step.id}`} required>{#snippet children({ describedBy })}<input id={`command-${step.id}`} bind:value={step.command} required aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
-          {#if step.command != null}<Field label="Timeout in seconds" for={`timeout-${step.id}`}>{#snippet children({ describedBy })}<input id={`timeout-${step.id}`} type="number" min="1" max="86400" placeholder="300" bind:value={step.timeoutSeconds} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
-          {#if !step.human && step.command == null}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
+          <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.type} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }, { id: "shell", name: "Shell" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => setStepType(index, value)} />{/snippet}</Field>
+          {#if step.type === "shell"}<Field label="Command" for={`command-${step.id}`} required>{#snippet children({ describedBy })}<input id={`command-${step.id}`} bind:value={step.command} required aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
+          {#if step.type === "shell"}<Field label="Timeout in seconds" for={`timeout-${step.id}`}>{#snippet children({ describedBy })}<input id={`timeout-${step.id}`} type="number" min="1" max="86400" placeholder="300" bind:value={step.timeoutSeconds} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
+          {#if step.type === "agent"}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
           <section class="transition-editor" aria-labelledby={`routing-${step.id}`}>
             <header class="transition-heading"><div><span class="eyebrow">Routing</span><h3 id={`routing-${step.id}`}>What happens next?</h3><p>Without a route, this step continues to the next step automatically.</p></div></header>
             {#if step.transitions.length}
@@ -158,7 +169,7 @@ async function save(remove = false) {
               {#each step.transitions as transition, routeIndex}
                 <li class="transition-card">
                   <span class="route-number">Route {routeIndex + 1}</span>
-                  <Field label="When the outcome is" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} items={outcomes.filter((outcome) => step.command != null ? ["completed", "failed"].includes(outcome) : !step.human || ["approved", "rejected", "responded"].includes(outcome)).map((outcome) => ({ id: outcome, name: outcome.replaceAll("_", " ") }))} placeholder="Select an outcome" label="Outcomes" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>
+                  <Field label="When the outcome is" for={`outcome-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`outcome-${step.id}-${routeIndex}`} bind:value={transition.outcome} items={outcomes.filter((outcome) => step.type === "shell" ? ["completed", "failed"].includes(outcome) : step.type !== "human" || ["approved", "rejected", "responded"].includes(outcome)).map((outcome) => ({ id: outcome, name: outcome.replaceAll("_", " ") }))} placeholder="Select an outcome" label="Outcomes" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>
                   <div class="route-arrow" aria-hidden="true">→</div>
                   <Field label="Send the task to" for={`target-${step.id}-${routeIndex}`}>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`target-${step.id}-${routeIndex}`} value={transition.to ?? "__end__"} items={[{ id: "__end__", name: "End run" }, ...(draft?.steps ?? []).map((target) => ({ id: target.id, name: target.name || target.id }))]} placeholder="Select a destination" label="Destinations" {describedBy} {invalid} disabled={busy} onValueChange={(value) => transition.to = value === "__end__" ? null : value} />{/snippet}</Field>
                   <button class="remove-route" type="button" aria-label={`Remove route ${routeIndex + 1}`} disabled={busy} onclick={() => { step.transitions = step.transitions.filter((_, i) => i !== routeIndex); }}><Trash2 size={15} /></button>
@@ -168,7 +179,7 @@ async function save(remove = false) {
             {:else}
               <div class="sequential-route"><span>Default path</span><strong>Continue to the next step</strong></div>
             {/if}
-            <Button variant="secondary" disabled={busy} onclick={() => { step.transitions.push({ outcome: step.human ? "approved" : "completed", to: null }); }}>Add conditional route</Button>
+            <Button variant="secondary" disabled={busy} onclick={() => { step.transitions.push({ outcome: step.type === "human" ? "approved" : "completed", to: null }); }}>Add conditional route</Button>
           </section>
          </div>{/if}
         </article>

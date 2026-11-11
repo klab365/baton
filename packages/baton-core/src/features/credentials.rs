@@ -280,12 +280,12 @@ fn running_run_uses_credential(run: &crate::domain::pipeline::PipelineRun, id: &
     pipeline
         .steps
         .iter()
-        .filter(|step| !step.human && step.command.is_none())
+        .filter(|step| !step.is_human() && step.command().is_none())
         .any(|step| {
             config
                 .agents
                 .iter()
-                .find(|agent| agent.id == step.agent_id)
+                .find(|agent| agent.id == step.agent_id())
                 .is_none_or(|agent| agent.credential_id.as_deref() == Some(id))
         })
 }
@@ -305,7 +305,7 @@ mod tests {
                     {"id": "agent", "systemPrompt": "prompt", "credentialId": "used", "skillIds": []},
                     {"id": "other", "systemPrompt": "prompt", "credentialId": "not-in-pipeline", "skillIds": []}
                 ],
-                "pipelines": [{"id": "pipeline", "steps": [{"id": "step", "name": "Step", "agentId": "agent"}]}]
+                "pipelines": [{"id": "pipeline", "steps": [{"id": "step", "name": "Step", "type": "agent", "agentId": "agent"}]}]
             }
         })).unwrap()
     }

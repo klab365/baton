@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -16,11 +18,10 @@ fn fixture() -> std::path::PathBuf {
             .as_nanos()
     ));
     std::fs::create_dir_all(directory.join(".baton")).unwrap();
-    std::fs::write(
-        directory.join(".baton/config.json"),
-        include_str!("../../baton-core/tests/fixture_config.json"),
-    )
-    .unwrap();
+    common::write_config(
+        &directory,
+        &serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap(),
+    );
     directory
 }
 
@@ -42,7 +43,13 @@ async fn pipeline_routes_return_http_contracts() {
     let listing = json(response).await;
     let revision = listing["revision"].as_str().unwrap();
     assert_eq!(listing["pipelines"][0]["id"], "draft");
-    assert_eq!(listing["agents"][0]["id"], "writer");
+    assert!(
+        listing["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["id"] == "writer")
+    );
 
     let config: ProjectConfig =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();

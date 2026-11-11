@@ -1,0 +1,19 @@
+---
+id: factory
+steps:
+- id: build
+  name: Plan, implement and verify
+  agentId: implementer
+  type: agent
+- id: review
+  name: Review against issue acceptance criteria
+  agentId: reviewer
+  transitions:
+  - outcome: approved
+    to: human
+  - outcome: revise_build
+    to: build
+  type: agent
+- id: human
+  name: Human acceptance
+  type: human

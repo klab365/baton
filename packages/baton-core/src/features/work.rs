@@ -168,7 +168,7 @@ pub fn validate_workspace(run: &PipelineRun, workspace: &std::path::Path) -> Res
 }
 fn outcomes(step: &PipelineStep) -> Vec<Outcome> {
     if step.transitions.is_empty() {
-        if step.human {
+        if step.is_human() {
             vec![Outcome::Approved, Outcome::Rejected, Outcome::Responded]
         } else {
             vec![Outcome::Completed]
@@ -202,16 +202,20 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         run.ended_at = Some(utc_now());
         return Ok(());
     }
-    let status = if step.human {
+    let status = if step.is_human() {
         Status::WaitingHuman
     } else {
         Status::Running
     };
-    run.pending_actions = if step.human { outcomes(&step) } else { vec![] };
+    run.pending_actions = if step.is_human() {
+        outcomes(&step)
+    } else {
+        vec![]
+    };
     run.status = status.clone();
     run.steps.push(StepRun {
+        agent_id: step.agent_id().to_owned(),
         step_id: step.id,
-        agent_id: step.agent_id,
         status,
         input: None,
         output: None,
@@ -256,7 +260,7 @@ async fn start_work_handler(
         if !pipeline
             .steps
             .iter()
-            .any(|s| s.id == check.step_id && !s.human)
+            .any(|s| s.id == check.step_id && !s.is_human())
         {
             return Err("Checks must reference an agent step in the selected pipeline".into());
         }
@@ -266,12 +270,12 @@ async fn start_work_handler(
     for step in pipeline
         .steps
         .iter()
-        .filter(|s| !s.human && s.command.is_none())
+        .filter(|s| !s.is_human() && s.command().is_none())
     {
         let agent = config
             .agents
             .iter()
-            .find(|a| a.id == step.agent_id)
+            .find(|a| a.id == step.agent_id())
             .ok_or("Unknown agent")?;
         for id in &agent.skill_ids {
             if !skills.iter().any(|s| &s.id == id) {
@@ -337,8 +341,8 @@ async fn next_work_handler(
     };
     let agent = step
         .as_ref()
-        .filter(|s| !s.human)
-        .and_then(|s| config.agents.iter().find(|a| a.id == s.agent_id))
+        .filter(|s| !s.is_human())
+        .and_then(|s| config.agents.iter().find(|a| a.id == s.agent_id()))
         .cloned();
     let mut skills = vec![];
     if let Some(agent) = &agent {
@@ -413,14 +417,15 @@ fn validate_submission(
         .iter()
         .find(|s| Some(&s.id) == run.current_step.as_ref())
         .ok_or("Unknown current step")?;
-    if step.human != human || step.id != step_id {
+    if step.is_human() != human || step.id != step_id {
         return Err("Submission does not match the current step".into());
     }
     let index = run.steps.len().checked_sub(1).ok_or("Missing attempt")?;
     if run.steps[index].attempt != attempt {
         return Err("Stale attempt; fetch next again".into());
     }
-    if !outcomes(step).contains(outcome) && !(step.command.is_some() && *outcome == Outcome::Failed)
+    if !outcomes(step).contains(outcome)
+        && !(step.command().is_some() && *outcome == Outcome::Failed)
     {
         return Err("Outcome is not allowed by this step".into());
     }

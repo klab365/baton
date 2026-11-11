@@ -4,7 +4,7 @@ Baton owns pipeline routing, worktrees, human decisions and durable state. `Agen
 
 ## Agent runtime configuration
 
-Agents are configured in the **Agents** UI. Provider/model and credential are separate choices: credentials are reusable local records, while each agent selects the model it uses. Only credential IDs are stored in `.baton/config.json`; secret material and refreshable auth records remain in the local vault. The selected credential type must match the provider integration.
+Agents are configured in the **Agents** UI. Provider/model and credential are separate choices: credentials are reusable local records, while each agent selects the model it uses. Only credential IDs are stored in `.baton/agents/`; secret material and refreshable auth records remain in the local vault. The selected credential type must match the provider integration.
 
 The embedded runtime is `rig`. `fake` is a deterministic offline runtime intended for tests; it is explicitly selected and returns `agentId: input` without contacting a model.
 

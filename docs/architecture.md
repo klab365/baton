@@ -28,6 +28,6 @@ Browser → embedded SvelteKit UI → HTTP /api → Axum (baton-server)
 
 ## Persistence and safety
 
-Project configuration lives in `.baton/config.json`; task and run records live under `.baton/tasks/` and `.baton/runs/`. These records can contain prompts and outputs. Credentials are kept separately in a local credential directory; configuration stores credential IDs rather than secret material. Run a single backend per project: independent concurrent backend processes are not supported.
+Project configuration lives in `.baton/project.yml`, `.baton/agents/` and `.baton/pipelines/`; task and run records live under `.baton/tasks/` and `.baton/runs/`. These records can contain prompts and outputs. Credentials are kept separately in a local credential directory; configuration stores credential IDs rather than secret material. Run a single backend per project: independent concurrent backend processes are not supported.
 
 Git worktrees isolate task branches and working directories, but do **not** confine shell commands, network access or credentials. Treat agent execution as code execution by the local user. See [orchestration](orchestration.md), [tasks](tasks.md), and [provider credentials](local-provider-storage.md) for details.

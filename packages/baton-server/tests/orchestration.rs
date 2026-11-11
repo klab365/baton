@@ -66,7 +66,6 @@ fn config() -> baton_core::domain::project::ProjectConfig {
         .steps
         .retain(|step| step.id == "write" || step.id == "review");
     for step in &mut pipeline.steps {
-        step.human = false;
         step.transitions.clear();
     }
     config
@@ -197,10 +196,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
     pipeline.steps.push(PipelineStep {
         id: "help".into(),
         name: "Help".into(),
-        command: None,
-        timeout_seconds: None,
-        agent_id: String::new(),
-        human: true,
+        kind: baton_core::domain::project::PipelineStepKind::Human,
         transitions: vec![Transition {
             outcome: Outcome::Responded,
             to: Some("write".into()),

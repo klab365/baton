@@ -1,16 +1,10 @@
 # Project skills
 
 Skills are stored in `.agents/skills/<id>/SKILL.md` and versioned with the project.
-`config.json` contains only agent `skillIds`; it does not contain a skill list or
-instruction bodies. Global skill directories are not searched.
+Agent files under `.baton/agents/` contain `skillIds`, not skill instruction bodies. Global skill directories are not searched.
 
 Use **Skills** in the sidebar to create, edit, import, or delete a skill. The skill ID is also its display name. The optional multiline description is stored
 in YAML block-scalar form (`description: |`) in `SKILL.md` frontmatter. GitHub import downloads the skill folder, including supporting files. Use a GitHub folder URL with a commit SHA to select a specific revision; automatic updates and rollback are not implemented.
-
-On loading a project, the filesystem adapter migrates an existing inline `skills`
-list to files under `.agents/skills/` before removing the list from `config.json`. Existing directories
-with the same ID are not overwritten: reconcile conflicting files first. Empty
-legacy lists are removed as well. Invalid data is not silently discarded.
 
 Skill use cases and validation live in `baton-core/features/skills.rs`, storage is
 contracted through `baton-core/ports/skills.rs`, and the filesystem adapter lives

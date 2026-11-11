@@ -208,7 +208,7 @@ pub fn start_pipeline_for_task_with_worktree(
             .iter()
             .map(|s| StepRun {
                 step_id: s.id.clone(),
-                agent_id: s.agent_id.clone(),
+                agent_id: s.agent_id().to_owned(),
                 status: Status::Pending,
                 input: None,
                 output: None,
@@ -257,7 +257,7 @@ pub fn start_pipeline_for_task_with_worktree(
 fn pending(step: &PipelineStep) -> StepRun {
     StepRun {
         step_id: step.id.clone(),
-        agent_id: step.agent_id.clone(),
+        agent_id: step.agent_id().to_owned(),
         status: Status::Pending,
         input: None,
         output: None,
@@ -284,7 +284,7 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
         let human = pipeline
             .steps
             .iter()
-            .any(|step| step.human && step.id == attempt.step_id);
+            .any(|step| step.is_human() && step.id == attempt.step_id);
         if human && attempt.outcome.is_none() {
             continue;
         }
@@ -363,7 +363,7 @@ fn repeated_blocker(
         if pipeline
             .steps
             .iter()
-            .any(|step| step.human && step.id == attempt.step_id)
+            .any(|step| step.is_human() && step.id == attempt.step_id)
             && attempt.outcome == Some(Outcome::Responded)
         {
             human_responded = true;
@@ -417,7 +417,7 @@ pub(crate) fn execute_graph(
         };
         run.steps[index].attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
         run.steps[index].input = Some(input.clone());
-        if step.human {
+        if step.is_human() {
             run.steps[index].status = Status::WaitingHuman;
             run.status = Status::WaitingHuman;
             run.pending_actions = if step.transitions.is_empty() {
@@ -449,11 +449,11 @@ pub(crate) fn execute_graph(
                 .map(|r| r.status == Status::Cancelled)
                 .unwrap_or(true)
         };
-        if let Some(command) = &step.command {
+        if let Some(command) = step.command() {
             let result = runtime.execute_shell(
                 &run.worktree.as_ref().ok_or("Missing worktree")?.path,
                 command,
-                step.timeout_seconds.unwrap_or(300),
+                step.timeout_seconds().unwrap_or(300),
                 &cancelled,
             );
             if let Some(cancelled) = cancelled_run(repository, &run)? {
@@ -495,7 +495,7 @@ pub(crate) fn execute_graph(
         let agent = config
             .agents
             .iter()
-            .find(|a| a.id == step.agent_id)
+            .find(|a| a.id == step.agent_id())
             .ok_or("Unknown agent")?;
         let allowed_outcomes = step
             .transitions
@@ -613,7 +613,7 @@ mod tests {
         let mut pipeline = config.pipelines[0].clone();
         let mut human = pipeline.steps[0].clone();
         human.id = "help".into();
-        human.human = true;
+        human.kind = crate::domain::project::PipelineStepKind::Human;
         pipeline.steps.push(human.clone());
         let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
             "id": "run", "pipelineId": pipeline.id, "task": "task", "startedAt": "now",
@@ -644,7 +644,7 @@ mod tests {
         let mut pipeline = config.pipelines[0].clone();
         let mut human = pipeline.steps[0].clone();
         human.id = "help".into();
-        human.human = true;
+        human.kind = crate::domain::project::PipelineStepKind::Human;
         pipeline.steps.push(human.clone());
         let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
             "id": "run", "pipelineId": pipeline.id, "task": "implement timers",
@@ -718,7 +718,7 @@ mod tests {
         let mut pipeline = config.pipelines[0].clone();
         let mut human = pipeline.steps[0].clone();
         human.id = "help".into();
-        human.human = true;
+        human.kind = crate::domain::project::PipelineStepKind::Human;
         pipeline.steps.push(human.clone());
         let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
             "id": "run", "pipelineId": pipeline.id, "task": "implement timers",

@@ -46,7 +46,7 @@ pub fn resume_human(
         .iter()
         .find(|step| Some(&step.id) == run.current_step.as_ref())
         .ok_or("Unknown current step")?;
-    if !step.human {
+    if !step.is_human() {
         return Err("Current step is not human".into());
     }
     if !step.transitions.is_empty() && !step.transitions.iter().any(|edge| edge.outcome == outcome)

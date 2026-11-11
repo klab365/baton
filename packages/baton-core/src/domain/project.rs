@@ -70,21 +70,134 @@ impl Agent {
             .is_none_or(|tools| tools.iter().any(|name| name == tool))
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct PipelineStep {
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub agent_id: String,
-    #[serde(default)]
-    pub human: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<u32>,
+    #[serde(flatten)]
+    pub kind: PipelineStepKind,
     #[serde(default)]
     pub transitions: Vec<Transition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PipelineStepKind {
+    Agent {
+        agent_id: String,
+    },
+    Human,
+    Shell {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u32>,
+    },
+}
+
+impl<'de> Deserialize<'de> for PipelineStep {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(
+            tag = "type",
+            rename_all = "snake_case",
+            rename_all_fields = "camelCase",
+            deny_unknown_fields
+        )]
+        enum Wire {
+            Agent {
+                id: String,
+                name: String,
+                agent_id: String,
+                #[serde(default)]
+                transitions: Vec<Transition>,
+            },
+            Human {
+                id: String,
+                name: String,
+                #[serde(default)]
+                transitions: Vec<Transition>,
+            },
+            Shell {
+                id: String,
+                name: String,
+                command: String,
+                #[serde(default)]
+                timeout_seconds: Option<u32>,
+                #[serde(default)]
+                transitions: Vec<Transition>,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Agent {
+                id,
+                name,
+                agent_id,
+                transitions,
+            } => Self {
+                id,
+                name,
+                kind: PipelineStepKind::Agent { agent_id },
+                transitions,
+            },
+            Wire::Human {
+                id,
+                name,
+                transitions,
+            } => Self {
+                id,
+                name,
+                kind: PipelineStepKind::Human,
+                transitions,
+            },
+            Wire::Shell {
+                id,
+                name,
+                command,
+                timeout_seconds,
+                transitions,
+            } => Self {
+                id,
+                name,
+                kind: PipelineStepKind::Shell {
+                    command,
+                    timeout_seconds,
+                },
+                transitions,
+            },
+        })
+    }
+}
+
+impl PipelineStep {
+    pub fn is_human(&self) -> bool {
+        matches!(self.kind, PipelineStepKind::Human)
+    }
+    pub fn agent_id(&self) -> &str {
+        match &self.kind {
+            PipelineStepKind::Agent { agent_id } => agent_id,
+            _ => "",
+        }
+    }
+    pub fn command(&self) -> Option<&str> {
+        match &self.kind {
+            PipelineStepKind::Shell { command, .. } => Some(command),
+            _ => None,
+        }
+    }
+    pub fn timeout_seconds(&self) -> Option<u32> {
+        match self.kind {
+            PipelineStepKind::Shell {
+                timeout_seconds, ..
+            } => timeout_seconds,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -189,37 +302,32 @@ impl ProjectConfig {
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 nonempty(&format!("{step_path}.name"), &step.name)?;
-                if let Some(timeout) = step.timeout_seconds
-                    && (step.command.is_none() || !(1..=86400).contains(&timeout))
-                {
-                    return Err(format!(
-                        "{step_path}: timeoutSeconds requires a shell step and must be between 1 and 86400"
-                    ));
-                }
-                if let Some(command) = &step.command {
-                    nonempty(&format!("{step_path}.command"), command)?;
-                    if step.human || !step.agent_id.is_empty() {
-                        return Err(format!(
-                            "{step_path}: shell steps cannot have an agent or be human"
-                        ));
+                match &step.kind {
+                    PipelineStepKind::Shell {
+                        command,
+                        timeout_seconds,
+                    } => {
+                        nonempty(&format!("{step_path}.command"), command)?;
+                        if timeout_seconds.is_some_and(|timeout| !(1..=86400).contains(&timeout)) {
+                            return Err(format!(
+                                "{step_path}: timeoutSeconds must be between 1 and 86400"
+                            ));
+                        }
                     }
-                } else if step.human {
-                    if !step.agent_id.is_empty() {
-                        return Err(format!("{step_path}: human steps cannot have an agent"));
-                    }
-                } else {
-                    reference(&format!("{step_path}.agentId"), &step.agent_id, &agents)?;
-                    if !step.transitions.is_empty()
-                        && self
-                            .agents
-                            .iter()
-                            .find(|agent| agent.id == step.agent_id)
-                            .is_some_and(|agent| !agent.allows_tool("report_outcome"))
-                    {
-                        return Err(format!(
-                            "{step_path}: agent {:?} must allow report_outcome for steps with transitions",
-                            step.agent_id
-                        ));
+                    PipelineStepKind::Human => {}
+                    PipelineStepKind::Agent { agent_id } => {
+                        reference(&format!("{step_path}.agentId"), agent_id, &agents)?;
+                        if !step.transitions.is_empty()
+                            && self
+                                .agents
+                                .iter()
+                                .find(|agent| agent.id == *agent_id)
+                                .is_some_and(|agent| !agent.allows_tool("report_outcome"))
+                        {
+                            return Err(format!(
+                                "{step_path}: agent {agent_id:?} must allow report_outcome for steps with transitions"
+                            ));
+                        }
                     }
                 }
                 let mut outcomes = Vec::new();
@@ -229,14 +337,14 @@ impl ProjectConfig {
                             "{step_path}: progress is only supported in historical run data"
                         ));
                     }
-                    if step.command.is_some()
+                    if step.command().is_some()
                         && !matches!(transition.outcome, Outcome::Completed | Outcome::Failed)
                     {
                         return Err(format!(
                             "{step_path}: shell transitions require completed or failed"
                         ));
                     }
-                    if step.human
+                    if step.is_human()
                         && !matches!(
                             transition.outcome,
                             Outcome::Approved | Outcome::Rejected | Outcome::Responded
@@ -311,12 +419,74 @@ pub enum ConfigState {
     Invalid(String),
 }
 
-/// Snapshot readers share the same explicit breaking migration as project reads.
+fn parse_snapshot(mut value: serde_json::Value) -> Result<ProjectConfig, String> {
+    if let Some(pipelines) = value
+        .get_mut("pipelines")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for pipeline in pipelines {
+            if let Some(steps) = pipeline
+                .get_mut("steps")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for step in steps {
+                    let Some(object) = step.as_object_mut() else {
+                        continue;
+                    };
+                    if object.contains_key("type") {
+                        continue;
+                    }
+                    let human = match object.remove("human") {
+                        None => false,
+                        Some(serde_json::Value::Bool(value)) => value,
+                        Some(_) => return Err("Invalid legacy step human flag".into()),
+                    };
+                    let agent = match object.remove("agentId") {
+                        None => String::new(),
+                        Some(serde_json::Value::String(value)) => value,
+                        Some(_) => return Err("Invalid legacy step agentId".into()),
+                    };
+                    let command = match object.remove("command") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(serde_json::Value::String(value)) => Some(value),
+                        Some(_) => return Err("Invalid legacy step command".into()),
+                    };
+                    let timeout = object.remove("timeoutSeconds");
+                    let kind = if let Some(command) = command {
+                        if human || !agent.is_empty() {
+                            return Err("Invalid legacy shell step".into());
+                        }
+                        object.insert("command".into(), command.into());
+                        if let Some(timeout) = timeout.filter(|value| !value.is_null()) {
+                            object.insert("timeoutSeconds".into(), timeout);
+                        }
+                        "shell"
+                    } else if human {
+                        if !agent.is_empty() || timeout.is_some_and(|value| !value.is_null()) {
+                            return Err("Invalid legacy human step".into());
+                        }
+                        "human"
+                    } else {
+                        if timeout.is_some_and(|value| !value.is_null()) {
+                            return Err("Invalid legacy agent step".into());
+                        }
+                        object.insert("agentId".into(), agent.into());
+                        "agent"
+                    };
+                    object.insert("type".into(), kind.into());
+                }
+            }
+        }
+    }
+    parse_config(&value.to_string())
+}
+
+/// Read historical snapshots without accepting legacy step syntax in new configuration.
 pub fn deserialize_snapshot<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<ProjectConfig, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
-    parse_config(&value.to_string()).map_err(serde::de::Error::custom)
+    parse_snapshot(value).map_err(serde::de::Error::custom)
 }
 
 pub fn deserialize_optional_snapshot<'de, D: serde::Deserializer<'de>>(
@@ -324,7 +494,7 @@ pub fn deserialize_optional_snapshot<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Option<ProjectConfig>, D::Error> {
     let value = Option::<serde_json::Value>::deserialize(deserializer)?;
     value
-        .map(|value| parse_config(&value.to_string()).map_err(serde::de::Error::custom))
+        .map(|value| parse_snapshot(value).map_err(serde::de::Error::custom))
         .transpose()
 }
 
@@ -482,21 +652,101 @@ mod project_identity_tests {
     use super::parse_config;
 
     #[test]
+    fn legacy_run_snapshots_are_read_and_written_with_explicit_types() {
+        use crate::domain::pipeline::PipelineRun;
+        let snapshot = serde_json::json!({
+            "schemaVersion": 7,
+            "agents": [{"id":"worker", "systemPrompt":"work", "skillIds":[]}],
+            "pipelines": [{"id":"p", "steps":[
+                {"id":"a", "name":"Agent", "agentId":"worker", "human":false},
+                {"id":"h", "name":"Human", "agentId":"", "human":true},
+                {"id":"s", "name":"Shell", "agentId":"", "human":false, "command":"true", "timeoutSeconds":2}
+            ]}]
+        });
+        let run = serde_json::json!({"id":"run", "pipelineId":"p", "task":"task", "startedAt":"now", "endedAt":null, "durationMs":null, "status":"running", "steps":[], "configSnapshot":snapshot});
+        let parsed: PipelineRun = serde_json::from_value(run.clone()).unwrap();
+        let saved = serde_json::to_value(parsed).unwrap();
+        let steps = saved["configSnapshot"]["pipelines"][0]["steps"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            steps
+                .iter()
+                .map(|step| step["type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["agent", "human", "shell"]
+        );
+        assert!(steps.iter().all(|step| step.get("human").is_none()));
+        let mut invalid = run;
+        invalid["configSnapshot"]["pipelines"][0]["steps"][1]["agentId"] = "worker".into();
+        assert!(serde_json::from_value::<PipelineRun>(invalid).is_err());
+    }
+
+    #[test]
+    fn step_type_is_explicit_and_rejects_incompatible_fields() {
+        use super::{PipelineStep, PipelineStepKind};
+        for (json, kind) in [
+            (
+                r#"{"id":"a","name":"Agent","type":"agent","agentId":"worker"}"#,
+                PipelineStepKind::Agent {
+                    agent_id: "worker".into(),
+                },
+            ),
+            (
+                r#"{"id":"h","name":"Human","type":"human"}"#,
+                PipelineStepKind::Human,
+            ),
+            (
+                r#"{"id":"s","name":"Shell","type":"shell","command":"true"}"#,
+                PipelineStepKind::Shell {
+                    command: "true".into(),
+                    timeout_seconds: None,
+                },
+            ),
+        ] {
+            let step: PipelineStep = serde_json::from_str(json).unwrap();
+            assert_eq!(step.kind, kind);
+            assert_eq!(
+                serde_json::from_str::<PipelineStep>(&serde_json::to_string(&step).unwrap())
+                    .unwrap(),
+                step
+            );
+            let yaml = serde_yaml_ng::to_string(&step).unwrap();
+            assert_eq!(
+                serde_yaml_ng::from_str::<PipelineStep>(&yaml).unwrap(),
+                step
+            );
+        }
+        for invalid in [
+            r#"{"id":"a","name":"Agent","agentId":"worker"}"#,
+            r#"{"id":"a","name":"Agent","type":"agent","agentId":"worker","human":true}"#,
+            r#"{"id":"h","name":"Human","type":"human","agentId":"worker"}"#,
+            r#"{"id":"s","name":"Shell","type":"shell","command":"true","agentId":"worker"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<PipelineStep>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn shell_timeout_must_be_in_range_and_only_on_shell_steps() {
         let mut config: super::ProjectConfig =
             serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
         let step = &mut config.pipelines[0].steps[0];
-        step.agent_id.clear();
-        step.command = Some("true".into());
-        step.timeout_seconds = Some(1);
+        step.kind = super::PipelineStepKind::Shell {
+            command: "true".into(),
+            timeout_seconds: Some(1),
+        };
         assert!(config.validate().is_ok());
-        config.pipelines[0].steps[0].timeout_seconds = Some(0);
-        assert!(config.validate().is_err());
-        config.pipelines[0].steps[0].timeout_seconds = Some(86401);
-        assert!(config.validate().is_err());
-        config.pipelines[0].steps[0].timeout_seconds = Some(1);
-        config.pipelines[0].steps[0].command = None;
-        assert!(config.validate().is_err());
+        for timeout in [0, 86401] {
+            config.pipelines[0].steps[0].kind = super::PipelineStepKind::Shell {
+                command: "true".into(),
+                timeout_seconds: Some(timeout),
+            };
+            assert!(config.validate().is_err());
+        }
     }
 
     #[test]
@@ -518,7 +768,7 @@ mod project_identity_tests {
             serde_json::from_str::<super::Agent>(&serde_json::to_string(&parsed).unwrap()).unwrap(),
             parsed
         );
-        let pipeline = r#"[{"id":"p","steps":[{"id":"s","name":"Step","agentId":"planner","transitions":[{"outcome":"completed","to":null}]}]}]"#;
+        let pipeline = r#"[{"id":"p","steps":[{"id":"s","name":"Step","type":"agent","agentId":"planner","transitions":[{"outcome":"completed","to":null}]}]}]"#;
         let config =
             format!(r#"{{"schemaVersion":7,"agents":[{explicit}],"pipelines":{pipeline}}}"#);
         assert!(
