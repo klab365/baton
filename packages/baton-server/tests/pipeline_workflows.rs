@@ -10,6 +10,7 @@ use baton_core::{
     ports::{
         runs::RunRepository,
         runtime::{AgentDecision, AgentRuntime, AgentRuntimeFactory},
+        worktrees::WorktreeManager,
     },
 };
 use std::{
@@ -72,6 +73,7 @@ struct Script {
     run_ids: Vec<String>,
     history_required: Vec<bool>,
     decision: Option<AgentDecision>,
+    emit_observed_activity: bool,
 }
 impl Script {
     fn new(outputs: &[&str]) -> Self {
@@ -137,6 +139,25 @@ impl AgentRuntime for Script {
         self.allowed.push(allowed_outcomes.to_vec());
         self.execute(directory, agent, input)
     }
+    fn execute_pipeline_step_observed(
+        &mut self,
+        directory: &Path,
+        agent: &Agent,
+        input: &str,
+        allowed_outcomes: &[Outcome],
+        cancelled: &dyn Fn() -> bool,
+        observer: &mut dyn FnMut(baton_core::domain::pipeline::RunTraceEntry) -> Result<(), String>,
+    ) -> Result<String, String> {
+        if self.emit_observed_activity {
+            observer(baton_core::domain::pipeline::RunTraceEntry {
+                attempt: None,
+                occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                kind: "runtimeRequest".into(),
+                content: r#"{"messageRoles":["user"],"toolNames":[]}"#.into(),
+            })?;
+        }
+        self.execute_pipeline_step(directory, agent, input, allowed_outcomes, cancelled)
+    }
     fn take_decision(&mut self) -> Option<AgentDecision> {
         self.decision.take()
     }
@@ -164,9 +185,9 @@ fn config() -> ProjectConfig {
 struct ResumeFactory;
 impl AgentRuntimeFactory for ResumeFactory {
     fn create(&self, _: &ProjectConfig, _: &str) -> Result<Box<dyn AgentRuntime>, String> {
-        Ok(Box::new(Script::new(&[
-            r#"{"outcome":"approved","output":"Verified"}"#,
-        ])))
+        let mut runtime = Script::new(&[r#"{"outcome":"approved","output":"Verified"}"#]);
+        runtime.emit_observed_activity = true;
+        Ok(Box::new(runtime))
     }
 }
 
@@ -211,6 +232,7 @@ fn interrupted_agent_resumes_in_same_worktree_with_reconciliation_warning() {
     assert_eq!(resumed.worktree, worktree);
     assert_eq!(resumed.steps[0].status, Status::Failed);
     assert_eq!(resumed.steps[1].attempt, 2);
+    assert!(resumed.trace.iter().any(|entry| entry.attempt == Some(2)));
     assert!(
         resumed.steps[1]
             .input
@@ -267,6 +289,249 @@ fn interrupted_shell_is_not_replayed_automatically() {
 }
 
 #[test]
+fn human_resume_releases_action_lease_before_live_observation() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut human = config.pipelines[0].steps[3].clone();
+    human
+        .transitions
+        .retain(|transition| transition.outcome == Outcome::Approved);
+    let finish = config.pipelines[0].steps[4].clone();
+    config.pipelines[0].steps = vec![human, finish];
+    let repository = fixture.repo();
+    let waiting = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "human-observed-resume",
+        &mut Script::default(),
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    let lease = repository.acquire_action_lease(&waiting.id).unwrap();
+    let (config, run) = baton_core::features::human_actions::prepare_human_resume(
+        &waiting.id,
+        Outcome::Approved,
+        "Approved",
+        &repository,
+    )
+    .unwrap();
+    drop(lease);
+    let mut runtime = Script::new(&["Finished after approval"]);
+    runtime.emit_observed_activity = true;
+    let resumed = baton_core::features::pipeline_engine::execute_graph(
+        &config,
+        run,
+        &mut runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+    assert!(resumed.trace.iter().any(|entry| entry.attempt == Some(2)));
+}
+
+#[test]
+fn cancellation_after_step_start_is_serialized_before_agent_side_effects() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+
+    struct PauseStartRepository {
+        inner: FilesystemRunRepository,
+        started: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl RunRepository for PauseStartRepository {
+        fn acquire_action_lease(
+            &self,
+            id: &str,
+        ) -> Result<Box<dyn baton_core::ports::runs::RunActionLease>, String> {
+            self.inner.acquire_action_lease(id)
+        }
+        fn worktree_manager(&self) -> Result<Box<dyn WorktreeManager>, String> {
+            self.inner.worktree_manager()
+        }
+        fn create(&self, run: &PipelineRun) -> Result<(), String> {
+            self.inner.create(run)
+        }
+        fn save(&self, run: &PipelineRun) -> Result<(), String> {
+            self.inner.save(run)
+        }
+        fn load(&self, id: &str) -> Result<PipelineRun, String> {
+            self.inner.load(id)
+        }
+        fn list(&self) -> Result<Vec<PipelineRun>, String> {
+            self.inner.list()
+        }
+        fn publish(&self, event: &baton_core::domain::pipeline::RunEvent) -> Result<(), String> {
+            if event.message.as_deref() == Some("Step plan started") {
+                self.started.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+            self.inner.publish(event)
+        }
+    }
+    struct WaitForCancellation(Arc<AtomicBool>);
+    impl AgentRuntime for WaitForCancellation {
+        fn execute(&mut self, _: &Path, _: &Agent, _: &str) -> Result<String, String> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok("unexpected side effect".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            _: &Path,
+            _: &Agent,
+            _: &str,
+            cancelled: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            while !cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            Err("Run cancelled".into())
+        }
+    }
+
+    let fixture = Fixture::new();
+    let mut config = config();
+    config.pipelines[0].steps = vec![config.pipelines[0].steps[0].clone()];
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let repository = PauseStartRepository {
+        inner: FilesystemRunRepository(fixture.0.clone()),
+        started: started_tx,
+        release: Mutex::new(release_rx),
+    };
+    let cancelled_side_effect = Arc::new(AtomicBool::new(false));
+    let runtime_flag = cancelled_side_effect.clone();
+    let run_config = config.clone();
+    let execution = std::thread::spawn(move || {
+        start_pipeline(
+            &run_config,
+            "draft",
+            "task",
+            "step-start-cancel",
+            &mut WaitForCancellation(runtime_flag),
+            &repository,
+        )
+    });
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let cancel_repo = FilesystemRunRepository(fixture.0.clone());
+    let cancellation = std::thread::spawn(move || {
+        baton_core::features::runs::cancel_run(&cancel_repo, "step-start-cancel")
+    });
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        cancellation.join().unwrap().unwrap().status,
+        Status::Cancelled
+    );
+    let final_run = execution.join().unwrap().unwrap();
+    assert_eq!(final_run.status, Status::Cancelled);
+    assert!(!cancelled_side_effect.load(Ordering::SeqCst));
+}
+
+#[test]
+fn cancellation_wins_over_a_non_observer_terminal_write() {
+    use std::sync::mpsc;
+
+    struct ContendedRepository {
+        root: PathBuf,
+        lease_contended: mpsc::Sender<()>,
+    }
+    impl ContendedRepository {
+        fn inner(&self) -> FilesystemRunRepository {
+            FilesystemRunRepository(self.root.clone())
+        }
+    }
+    impl RunRepository for ContendedRepository {
+        fn acquire_action_lease(
+            &self,
+            id: &str,
+        ) -> Result<Box<dyn baton_core::ports::runs::RunActionLease>, String> {
+            let lease = self.inner().acquire_action_lease(id);
+            if lease.is_err() {
+                let _ = self.lease_contended.send(());
+            }
+            lease
+        }
+        fn worktree_manager(&self) -> Result<Box<dyn WorktreeManager>, String> {
+            self.inner().worktree_manager()
+        }
+        fn create(&self, run: &PipelineRun) -> Result<(), String> {
+            self.inner().create(run)
+        }
+        fn save(&self, run: &PipelineRun) -> Result<(), String> {
+            self.inner().save(run)
+        }
+        fn load(&self, id: &str) -> Result<PipelineRun, String> {
+            self.inner().load(id)
+        }
+        fn list(&self) -> Result<Vec<PipelineRun>, String> {
+            self.inner().list()
+        }
+        fn publish(&self, event: &baton_core::domain::pipeline::RunEvent) -> Result<(), String> {
+            self.inner().publish(event)
+        }
+    }
+    struct PausedRuntime(mpsc::Sender<()>, mpsc::Receiver<()>);
+    impl AgentRuntime for PausedRuntime {
+        fn execute(&mut self, _: &Path, _: &Agent, _: &str) -> Result<String, String> {
+            self.0.send(()).unwrap();
+            self.1.recv().unwrap();
+            Ok("Completed just as cancellation arrived".into())
+        }
+    }
+
+    let fixture = Fixture::new();
+    let mut cfg = config();
+    cfg.pipelines[0].steps = vec![cfg.pipelines[0].steps[0].clone()];
+    let base = fixture.repo();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (lease_tx, lease_rx) = mpsc::channel();
+    let run_repository = ContendedRepository {
+        root: fixture.0.clone(),
+        lease_contended: lease_tx,
+    };
+    let run_config = cfg.clone();
+    let execution = std::thread::spawn(move || {
+        start_pipeline(
+            &run_config,
+            "draft",
+            "task",
+            "terminal-cancel-race",
+            &mut PausedRuntime(entered_tx, release_rx),
+            &run_repository,
+        )
+    });
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let lease = base.acquire_action_lease("terminal-cancel-race").unwrap();
+    release_tx.send(()).unwrap();
+    lease_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let mut run = base.load("terminal-cancel-race").unwrap();
+    assert_eq!(run.status, Status::Running);
+    run.status = Status::Cancelled;
+    run.ended_at = Some(baton_core::features::pipeline_engine::utc_now());
+    run.steps[0].status = Status::Cancelled;
+    base.save(&run).unwrap();
+    drop(lease);
+    assert_eq!(execution.join().unwrap().unwrap().status, Status::Cancelled);
+    assert_eq!(
+        base.load("terminal-cancel-race").unwrap().status,
+        Status::Cancelled
+    );
+}
+
+#[test]
 fn routed_agent_rework_continues_with_handoff_before_completion() {
     let fixture = Fixture::new();
     let mut config = config();
@@ -289,6 +554,7 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
         r#"{"outcome":"revise_build","output":"Fourth"}"#,
         r#"{"outcome":"approved","output":"Verified"}"#,
     ]);
+    runtime.emit_observed_activity = true;
     let run = start_pipeline(
         &config,
         "draft",
@@ -300,6 +566,33 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.steps.len(), 5);
+    assert_eq!(run.trace.len(), 5);
+    assert!(
+        run.trace
+            .iter()
+            .enumerate()
+            .all(|(index, trace)| trace.attempt == Some(index as u32 + 1))
+    );
+    assert!(
+        run.events
+            .iter()
+            .any(|event| event.message.as_deref()
+                == Some("Observed runtime activity: runtimeRequest"))
+    );
+    let stored = fixture.repo().load("progress-test").unwrap();
+    assert_eq!(stored.trace.len(), run.trace.len());
+    assert_eq!(
+        stored
+            .trace
+            .iter()
+            .map(|trace| trace.attempt)
+            .collect::<Vec<_>>(),
+        run.trace
+            .iter()
+            .map(|trace| trace.attempt)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(stored.events, run.events);
     assert_eq!(run.steps[0].outcome, Some(Outcome::ReviseBuild));
     assert!(
         run.steps[1]

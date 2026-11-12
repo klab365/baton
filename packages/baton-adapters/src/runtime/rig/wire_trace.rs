@@ -6,7 +6,7 @@ use rig::{
     wasm_compat::WasmBoxedFuture,
 };
 
-/// Capture only system messages and message roles from model HTTP bodies.
+/// Capture only message roles from model HTTP bodies; message content can be sensitive.
 pub(super) struct WireTrace(pub Arc<Mutex<Vec<String>>>);
 
 /// Copilot Chat compatibility: preserve simple system instructions as plain text.
@@ -68,22 +68,27 @@ fn summarize(body: &[u8]) -> Option<String> {
         .as_array()?;
     let roles: Vec<_> = messages
         .iter()
-        .filter_map(|message| message.get("role").and_then(|role| role.as_str()))
+        .filter_map(
+            |message| match message.get("role").and_then(|role| role.as_str()) {
+                Some("system") => Some("system"),
+                Some("developer") => Some("developer"),
+                Some("user") => Some("user"),
+                Some("assistant") => Some("assistant"),
+                Some("tool") => Some("tool"),
+                _ => None,
+            },
+        )
+        .take(64)
         .collect();
-    let mut system_messages: Vec<_> = messages
-        .iter()
-        .filter(|message| {
-            matches!(
-                message.get("role").and_then(|role| role.as_str()),
-                Some("system" | "developer")
-            )
+    Some(
+        serde_json::json!({
+            "kind": "wireRequest",
+            "occurredAt": baton_core::features::pipeline_engine::utc_now(),
+            "roles": roles,
+            "messageCountTruncated": messages.len() > 64,
         })
-        .cloned()
-        .collect();
-    if let Some(system) = body.get("system") {
-        system_messages.push(serde_json::json!({ "role": "system", "content": system }));
-    }
-    Some(serde_json::json!({ "roles": roles, "systemMessages": system_messages }).to_string())
+        .to_string(),
+    )
 }
 
 impl HttpMiddleware for WireTrace {
@@ -98,7 +103,7 @@ impl HttpMiddleware for WireTrace {
                 && let Some(summary) = summarize(&body)
                 && let Ok(mut traces) = self.0.lock()
             {
-                traces.push(summary);
+                super::push_activity(&mut traces, summary);
             }
             Ok(body)
         })
@@ -132,13 +137,11 @@ mod tests {
     }
 
     #[test]
-    fn traces_anthropic_system_field() {
+    fn omits_anthropic_system_field_and_user_content() {
         let summary = summarize(br#"{"system":[{"type":"text","text":"Plan only"}],"messages":[{"role":"user","content":"private task"}]}"#).unwrap();
         let value: serde_json::Value = serde_json::from_str(&summary).unwrap();
-        assert_eq!(
-            value["systemMessages"][0]["content"][0]["text"],
-            "Plan only"
-        );
+        assert_eq!(value["roles"], serde_json::json!(["user"]));
+        assert!(!summary.contains("Plan only"));
         assert!(!summary.contains("private task"));
     }
 
@@ -147,7 +150,8 @@ mod tests {
         let summary = summarize(br#"{"messages":[{"role":"system","content":"Plan only"},{"role":"user","content":"private task"}],"authorization":"secret"}"#).unwrap();
         let value: serde_json::Value = serde_json::from_str(&summary).unwrap();
         assert_eq!(value["roles"], serde_json::json!(["system", "user"]));
-        assert_eq!(value["systemMessages"][0]["content"], "Plan only");
+        assert!(!summary.contains("Plan only"));
+        assert!(!summary.contains("authorization"));
         assert!(!summary.contains("secret"));
         assert!(!summary.contains("private task"));
     }

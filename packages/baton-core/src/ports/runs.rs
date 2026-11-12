@@ -9,7 +9,8 @@ impl RunActionLease for UnlockedRunActionLease {}
 
 /// Persistence boundary required by pipeline execution and run lifecycle features.
 pub trait RunRepository: Send + Sync {
-    /// Reserve a human action for a run. Cancellation intentionally does not take this lease.
+    /// Serialize mutations such as human actions, activity observations, and cancellation.
+    /// Implementations may fail fast when another mutation currently holds the lease.
     fn acquire_action_lease(&self, _id: &str) -> Result<Box<dyn RunActionLease>, String> {
         Ok(Box::new(UnlockedRunActionLease))
     }

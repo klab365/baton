@@ -4,8 +4,8 @@ use crate::{
         project::Outcome,
     },
     features::{
-        human_actions::resume_human,
-        pipeline_engine::{execute_graph, publish, utc_now},
+        human_actions::prepare_human_resume,
+        pipeline_engine::{elapsed_ms, execute_graph, publish, utc_now},
     },
     ports::{runs::RunRepository, runtime::AgentRuntimeFactory, tasks::TaskRepository},
 };
@@ -87,27 +87,32 @@ async fn cancel_run_handler(
 }
 
 /// Shared cancellation policy for managed runs and externally executed work.
-pub(crate) fn cancel_run(repository: &dyn RunRepository, id: &str) -> Result<PipelineRun, String> {
-    let initial = repository.load(id)?;
-    let _lease = if initial.session.is_some() {
-        Some(repository.acquire_action_lease(id)?)
-    } else {
-        None
-    };
+pub fn cancel_run(repository: &dyn RunRepository, id: &str) -> Result<PipelineRun, String> {
+    let never_cancelled = || false;
+    let _lease = crate::features::pipeline_engine::acquire_action_lease_retry(
+        repository,
+        id,
+        &never_cancelled,
+    )?;
     let mut run = repository.load(id)?;
     if !matches!(run.status, Status::Running | Status::WaitingHuman) {
         return Err("Only running or waiting runs can be cancelled".into());
     }
     run.status = Status::Cancelled;
     run.pending_actions.clear();
+    let now = utc_now();
     for step in &mut run.steps {
         if matches!(step.status, Status::Running | Status::WaitingHuman) {
             step.status = Status::Cancelled;
+            step.ended_at = Some(now.clone());
+            step.duration_ms = step
+                .started_at
+                .as_deref()
+                .and_then(|started| elapsed_ms(started, &now));
         }
     }
-    let now = utc_now();
     run.ended_at = Some(now.clone());
-    run.duration_ms = None;
+    run.duration_ms = elapsed_ms(&run.started_at, &now);
     let event = RunEvent {
         run_id: run.id.clone(),
         status: Status::Cancelled,
@@ -183,6 +188,7 @@ pub fn resume_interrupted_run(
         &mut run,
         Some("Resuming interrupted agent step in existing worktree".into()),
     )?;
+    drop(_lease);
     let run = execute_graph(&config, run, runtime.as_mut(), runs)?;
     if run.status == Status::Succeeded
         && let Some(id) = &run.task_id
@@ -217,15 +223,15 @@ async fn respond_to_run_handler(
     let runs = resources.runs;
     let tasks = resources.tasks;
     tokio::task::spawn_blocking(move || {
-        let _lease = lease;
         let _task_lease = task_lease;
-        let run = resume_human(
+        let (config, run) = prepare_human_resume(
             &command.id,
             command.outcome,
             &command.response,
-            runtime.as_mut(),
             runs.as_ref(),
         )?;
+        drop(lease);
+        let run = execute_graph(&config, run, runtime.as_mut(), runs.as_ref())?;
         if run.status == Status::Succeeded
             && let Some(id) = &run.task_id
         {

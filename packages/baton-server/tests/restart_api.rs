@@ -248,6 +248,12 @@ async fn api_stops_interrupted_rig_run_for_manual_reconciliation() {
         "keep"
     );
     assert_eq!(run["steps"][0]["status"], "failed");
+    assert!(run["startedAt"].is_string());
+    assert!(run["endedAt"].is_string());
+    assert!(run["durationMs"].is_number());
+    assert!(run["steps"][0]["startedAt"].is_string());
+    assert!(run["steps"][0]["endedAt"].is_string());
+    assert!(run["steps"][0]["durationMs"].is_number());
     assert!(run["steps"].as_array().unwrap().iter().any(|step| {
         step["error"]
             .as_str()
