@@ -15,11 +15,12 @@ pub struct ConfiguredRuntime {
     run_id: String,
     history_required: bool,
     fake: super::FakeRuntime,
-    decision: Option<AgentDecision>,
-    trace: Vec<RunTraceEntry>,
+    pub(super) decision: Option<AgentDecision>,
+    pub(super) trace: Vec<RunTraceEntry>,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     auth_root: std::path::PathBuf,
     _credential_leases: Option<Box<dyn baton_core::ports::credentials::CredentialLease>>,
+    pub(super) pi_command: std::ffi::OsString,
 }
 impl ConfiguredRuntime {
     pub fn new(
@@ -37,6 +38,7 @@ impl ConfiguredRuntime {
             credentials,
             auth_root,
             _credential_leases: None,
+            pi_command: "pi".into(),
         }
     }
 }
@@ -68,7 +70,11 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
                     .agents
                     .iter()
                     .find(|agent| agent.id == step.agent_id())
-                    .and_then(|agent| agent.credential_id.clone())
+                    .and_then(|agent| {
+                        (agent.runtime_kind == RuntimeKind::Rig)
+                            .then(|| agent.credential_id.clone())
+                            .flatten()
+                    })
             })
             .collect::<Vec<_>>();
         let leases = self.credentials.acquire_run_leases(&ids)?;
@@ -187,6 +193,15 @@ impl AgentRuntime for ConfiguredRuntime {
             RuntimeKind::Fake => self
                 .fake
                 .execute_cancellable(directory, agent, input, cancelled),
+            RuntimeKind::Pi => super::pi::execute(
+                self,
+                directory,
+                agent,
+                input,
+                allowed_outcomes,
+                cancelled,
+                observer,
+            ),
         }
     }
     fn take_decision(&mut self) -> Option<AgentDecision> {
@@ -202,6 +217,254 @@ mod tests {
     use super::*;
     use crate::credentials::FilesystemCredentialRepository;
     use baton_core::ports::credentials::CredentialRepository;
+    use std::time::Duration;
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_detached_pipe_holder() {
+        let Ok(pid_file) = std::env::var("BATON_PI_DESCENDANT_FILE") else {
+            return;
+        };
+        #[cfg(unix)]
+        unsafe {
+            libc::setsid();
+        }
+        std::fs::write(pid_file, std::process::id().to_string()).unwrap();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_cli_receives_worktree_prompt_model_and_restricted_tools() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let args = root.path().join("args");
+        let prompt = root.path().join("prompt");
+        let pi = bin.join("pi");
+        std::fs::write(
+            &pi,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" > '{}'
+cat > '{}'
+printf 'done'
+"#,
+                args.display(),
+                prompt.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "model":"openai/gpt-4.1", "credentialId":null, "skillIds":[], "allowedTools":["read", "shell", "report_outcome"]})).unwrap();
+        let large_prompt = format!("- {}", "x".repeat(256 * 1024));
+        let result = runtime.execute(root.path(), &agent, &large_prompt);
+        assert_eq!(result.unwrap(), "done");
+        assert_eq!(std::fs::read_to_string(prompt).unwrap(), large_prompt);
+        let args = std::fs::read_to_string(args).unwrap();
+        assert!(args.contains("--no-extensions") && args.contains("--no-mcp"));
+        assert!(args.contains("--model\nopenai/gpt-4.1"));
+        assert!(args.contains("--tools\nread,bash"));
+        assert!(args.ends_with("--\n"));
+        std::fs::write(
+            &pi,
+            r#"#!/bin/sh
+cat > /dev/null
+printf '{"outcome":"completed","summary":"handoff"}' > "$BATON_PI_OUTCOME_FILE"
+printf 'done'
+"#,
+        )
+        .unwrap();
+        let allowed = [Outcome::Completed, Outcome::Blocked];
+        assert_eq!(
+            runtime
+                .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
+                .unwrap(),
+            "handoff"
+        );
+        assert_eq!(runtime.take_decision().unwrap().outcome, Outcome::Completed);
+        std::fs::write(&pi, "#!/bin/sh\ncat > /dev/null\nprintf 'no tool call'\n").unwrap();
+        let error = runtime
+            .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
+            .unwrap_err();
+        assert!(error.contains("did not call report_outcome"));
+        std::fs::write(&pi, "#!/bin/sh\ncat > /dev/null\nprintf '{\"outcome\":\"approved\",\"summary\":\"wrong\"}' > \"$BATON_PI_OUTCOME_FILE\"\n").unwrap();
+        let error = runtime
+            .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
+            .unwrap_err();
+        assert!(error.contains("not allowed"));
+        std::fs::write(&pi, "#!/bin/sh\necho secret-token >&2\nexit 7\n").unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("pi auth") && !error.contains("secret-token"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_process_is_killed_when_cancelled() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, "#!/bin/sh\nsleep 30 &\nwait\n").unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":[]})).unwrap();
+        let started = std::time::Instant::now();
+        let result = runtime.execute_cancellable(root.path(), &agent, "task", &|| {
+            started.elapsed() > std::time::Duration::from_millis(100)
+        });
+        assert_eq!(result.unwrap_err(), "Agent execution cancelled");
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_reports_auth_failure_even_if_large_prompt_pipe_closes_early() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, "#!/bin/sh\necho private-detail >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":[]})).unwrap();
+        let error = runtime
+            .execute(root.path(), &agent, &"x".repeat(1024 * 1024))
+            .unwrap_err();
+        assert!(
+            error.contains("provider credentials") && !error.contains("private-detail"),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_reports_early_stdin_pipe_close() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":[]})).unwrap();
+        let error = runtime
+            .execute(root.path(), &agent, &"x".repeat(1024 * 1024))
+            .unwrap_err();
+        assert!(error.contains("Could not send Pi prompt"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_bounds_collection_if_a_descendant_escapes_its_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        let escaped_pid = root.path().join("escaped.pid");
+        std::fs::write(
+            &pi,
+            format!(
+                r#"#!/bin/sh
+BATON_PI_DESCENDANT_FILE='{}' '{}' --exact runtime::configured::tests::pi_detached_pipe_holder --nocapture &
+exit 0
+"#,
+                escaped_pid.display(), std::env::current_exe().unwrap().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":[]})).unwrap();
+        let started = std::time::Instant::now();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("kept its output pipes open"), "{error}");
+        let pid: i32 = std::fs::read_to_string(escaped_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_checks_cancellation_while_collecting_descendant_pipes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        let pid_file = root.path().join("escaped.pid");
+        std::fs::write(
+            &pi,
+            format!(
+                r#"#!/bin/sh
+BATON_PI_DESCENDANT_FILE='{}' '{}' --exact runtime::configured::tests::pi_detached_pipe_holder --nocapture &
+exit 0
+"#,
+                pid_file.display(), std::env::current_exe().unwrap().display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":[]})).unwrap();
+        let started = std::time::Instant::now();
+        let error = runtime
+            .execute_cancellable(root.path(), &agent, "task", &|| {
+                pid_file.exists() && started.elapsed() > Duration::from_secs(1)
+            })
+            .unwrap_err();
+        assert_eq!(error, "Agent execution cancelled");
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+
+    #[test]
+    fn pi_rejects_unsupported_tools_without_running_cli() {
+        let root = tempfile::tempdir().unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":["unsupported"]})).unwrap();
+        let error = runtime
+            .execute_pipeline_step(root.path(), &agent, "task", &[], &|| false)
+            .unwrap_err();
+        assert!(error.contains("does not support"));
+    }
 
     #[tokio::test]
     async fn missing_and_incompatible_credentials_report_clear_errors() {

@@ -6,7 +6,8 @@ steps:
   agentId: factory-planner
   prompt: |
     Analyze the task and produce an actionable implementation plan. Include the
-    plan and relevant evidence in your handoff for the builder.
+    plan and relevant evidence in your handoff for the builder. Report blocked
+    if critical information is missing. Do not modify files or commit.
   transitions:
   - outcome: completed
     to: build
@@ -20,7 +21,8 @@ steps:
   prompt: |
     Implement and verify the task using the plan and any review feedback or
     debugger diagnosis in the handoff. Report the changes and verification, or
-    describe the blocker and what has been tried.
+    describe the blocker and what has been tried. Run applicable checks and verify
+    the target branch is an ancestor of HEAD. Do not commit, push or create a PR.
   transitions:
   - outcome: completed
     to: review
@@ -33,7 +35,9 @@ steps:
   prompt: |
     Independently investigate the blocker in the handoff and inspect the
     repository. Return evidence and actionable next steps for implementation or
-    planning; explain when a human or external prerequisite is needed.
+    planning; explain when a human or external prerequisite is needed. Use
+    revise_build or revise_plan for actionable next steps; use blocked for human
+    intervention or after three unresolved attempts. Do not modify files or commit.
   transitions:
   - outcome: revise_build
     to: build
@@ -49,7 +53,10 @@ steps:
   prompt: |
     Independently review the changes against the task and prior handoff. Approve
     only when appropriate; otherwise provide actionable findings for the builder
-    or planner, or explain the blocker.
+    or planner, or explain the blocker. Inspect the actual diff and tests, run a
+    relevant regression test and verify the target branch is an ancestor of HEAD.
+    Use approved only when checks pass; otherwise use revise_build, revise_plan or
+    blocked. Do not modify files or commit.
   transitions:
   - outcome: approved
     to: commit
@@ -67,6 +74,10 @@ steps:
   prompt: |
     Commit the reviewed changes and publish or update the pull request. Report
     the commit and pull request, or explain the blocker and any side effects.
+    Stage only intended changes; stop if staged changes or scope are unclear. Check
+    the staged diff, use a Conventional Commit, and push without force. Include actual
+    verification and a closing issue reference when applicable. Never rewrite history,
+    merge, push a protected branch or create duplicate commits on re-entry.
   transitions:
   - outcome: completed
     to: ci
@@ -80,6 +91,9 @@ steps:
   prompt: |
     Verify the pull request's CI results. Report successful checks, actionable
     failures for the builder, or external blockers requiring human assistance.
+    Check all applicable required checks against the current PR head; missing, pending
+    or inconclusive checks are not success. Report checks, results and URLs. Use
+    revise_build for actionable failures and blocked for external blockers.
   transitions:
   - outcome: completed
     to: null

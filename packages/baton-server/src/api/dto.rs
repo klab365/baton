@@ -117,6 +117,7 @@ pub enum RuntimeKind {
     #[default]
     Rig,
     Fake,
+    Pi,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -347,6 +348,7 @@ impl From<CoreRuntimeKind> for RuntimeKind {
         match value {
             CoreRuntimeKind::Rig => Self::Rig,
             CoreRuntimeKind::Fake => Self::Fake,
+            CoreRuntimeKind::Pi => Self::Pi,
         }
     }
 }
@@ -356,6 +358,7 @@ impl From<RuntimeKind> for CoreRuntimeKind {
         match value {
             RuntimeKind::Rig => Self::Rig,
             RuntimeKind::Fake => Self::Fake,
+            RuntimeKind::Pi => Self::Pi,
         }
     }
 }
