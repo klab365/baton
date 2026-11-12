@@ -55,7 +55,7 @@ async fn agents_can_be_configured_directly_and_unreferenced_agents_deleted() {
     .unwrap();
 
     let snapshot = agents::list(&repository).await.unwrap();
-    agent.system_prompt = "A revised prompt.".into();
+    agent.instructions = "A revised prompt.".into();
     agents::mutate(
         &repository,
         &snapshot.revision,

@@ -13,6 +13,7 @@ import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
 import EmptyState from "../../components/EmptyState.svelte";
 import Field from "../../components/Field.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
+import MultilineInput from "../../components/MultilineInput.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
 import type { Pipeline } from "../../lib/generated/Pipeline";
@@ -44,7 +45,14 @@ let expandedStepIds = $state<Set<string>>(new Set());
 const config = $derived(data.configuration as PipelineConfiguration | null);
 function open(pipeline?: Pipeline) {
 	if (!config) return;
-	draft = pipeline ? structuredClone(pipeline) : { id: "", steps: [] };
+	draft = pipeline
+		? {
+				...structuredClone(pipeline),
+				steps: pipeline.steps.map((step) =>
+					step.type === "agent" ? { ...step, prompt: step.prompt ?? "" } : step,
+				),
+			}
+		: { id: "", steps: [] };
 	expandedStepIds = new Set();
 	revision = config.revision;
 	editing = Boolean(pipeline);
@@ -59,6 +67,7 @@ function add() {
 		name: "",
 		type: "agent",
 		agentId: config.agents[0]?.id ?? "",
+		prompt: "",
 		transitions: [],
 	});
 	expandedStepIds = new Set([...expandedStepIds, id]);
@@ -75,6 +84,7 @@ function setStepType(index: number, value: string) {
 			...common,
 			type: "agent",
 			agentId: config.agents[0]?.id ?? "",
+			prompt: "",
 		};
 }
 function toggleStep(id: string) {
@@ -161,7 +171,7 @@ async function save(remove = false) {
           <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.type} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }, { id: "shell", name: "Shell" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => setStepType(index, value)} />{/snippet}</Field>
           {#if step.type === "shell"}<Field label="Command" for={`command-${step.id}`} required>{#snippet children({ describedBy })}<input id={`command-${step.id}`} bind:value={step.command} required aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
           {#if step.type === "shell"}<Field label="Timeout in seconds" for={`timeout-${step.id}`}>{#snippet children({ describedBy })}<input id={`timeout-${step.id}`} type="number" min="1" max="86400" placeholder="300" bind:value={step.timeoutSeconds} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
-          {#if step.type === "agent"}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
+          {#if step.type === "agent"}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field><Field label="Step prompt" for={`prompt-${step.id}`} hint="Describe this step’s specific task; leave empty to use only the task and handoff.">{#snippet children({ describedBy })}<MultilineInput id={`prompt-${step.id}`} bind:value={step.prompt} rows={4} disabled={busy} {describedBy} placeholder="What should the agent do in this step?" />{/snippet}</Field>{/if}
           <section class="transition-editor" aria-labelledby={`routing-${step.id}`}>
             <header class="transition-heading"><div><span class="eyebrow">Routing</span><h3 id={`routing-${step.id}`}>What happens next?</h3><p>Without a route, this step continues to the next step automatically.</p></div></header>
             {#if step.transitions.length}

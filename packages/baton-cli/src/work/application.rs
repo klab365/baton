@@ -161,7 +161,10 @@ impl WorkApplication {
                     .iter()
                     .find(|p| p.id == run.pipeline_id)
                     .ok_or("Missing pipeline")?;
-                let input = baton_core::features::pipeline_engine::step_input(&run, pipeline);
+                let input = baton_core::features::pipeline_engine::with_step_prompt(
+                    baton_core::features::pipeline_engine::step_input(&run, pipeline),
+                    &step,
+                );
                 let recorded_input = input.clone();
                 let store =
                     baton_adapters::credentials::FilesystemCredentialRepository::for_project(

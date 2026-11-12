@@ -508,6 +508,15 @@ fn pending(step: &PipelineStep) -> StepRun {
     }
 }
 
+pub fn with_step_prompt(input: String, step: &PipelineStep) -> String {
+    match &step.kind {
+        crate::domain::project::PipelineStepKind::Agent { prompt, .. } if !prompt.is_empty() => {
+            format!("Step instructions:\n{prompt}\n\nTask and prior handoff:\n{input}")
+        }
+        _ => input,
+    }
+}
+
 pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
     let previous_output = run.handoff.as_deref().unwrap_or(&run.task);
     if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task {
@@ -644,7 +653,7 @@ pub fn execute_graph(
             .iter()
             .find(|s| Some(&s.id) == run.current_step.as_ref())
             .ok_or("Unknown current step")?;
-        let input = step_input(&run, pipeline);
+        let input = with_step_prompt(step_input(&run, pipeline), step);
         let index = if let Some(i) = run
             .steps
             .iter()
@@ -943,6 +952,24 @@ mod tests {
             }],
         );
         assert!(run.trace.iter().any(|entry| entry.attempt == Some(2)));
+    }
+
+    #[test]
+    fn step_prompts_are_applied_per_step_without_mutating_agent_instructions() {
+        let first: PipelineStep = serde_json::from_value(serde_json::json!({
+            "id":"first", "name":"First", "type":"agent", "agentId":"shared", "prompt":"Draft"
+        }))
+        .unwrap();
+        let second: PipelineStep = serde_json::from_value(serde_json::json!({
+            "id":"second", "name":"Second", "type":"agent", "agentId":"shared", "prompt":"Review"
+        }))
+        .unwrap();
+        let first_input = with_step_prompt("Task".into(), &first);
+        let second_input = with_step_prompt("Task".into(), &second);
+        assert!(first_input.contains("Step instructions:\nDraft"));
+        assert!(second_input.contains("Step instructions:\nReview"));
+        assert!(!first_input.contains("Review"));
+        assert!(!second_input.contains("Draft"));
     }
 
     #[test]

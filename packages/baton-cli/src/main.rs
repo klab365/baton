@@ -8,32 +8,48 @@ use std::{
 
 const BATON_GITIGNORE: &str = "runs/\ntasks/\n";
 
-fn install_pi(
-    version: &str,
-    release_tag: Option<&str>,
-    pi: &std::path::Path,
-) -> anyhow::Result<()> {
+fn pi_install_source(version: &str, release_tag: Option<&str>) -> anyhow::Result<String> {
     let tag = format!("v{version}");
     if release_tag != Some(tag.as_str()) {
         anyhow::bail!(
             "This development build has no matching published Pi package. Install an official Baton release, or use `pi install /absolute/path/to/baton` for local development."
         );
     }
+    Ok(format!("git:github.com/klab365/baton@{tag}"))
+}
+
+fn install_pi_with(
+    version: &str,
+    release_tag: Option<&str>,
+    pi: &std::path::Path,
+    run: impl FnOnce(&std::path::Path, &[&str]) -> std::io::Result<bool>,
+) -> anyhow::Result<()> {
+    let tag = format!("v{version}");
+    let source = pi_install_source(version, release_tag)?;
     println!("Installing Baton Pi package for {tag}...");
     io::stdout().flush()?;
-    let source = format!("git:github.com/klab365/baton@{tag}");
-    let status = std::process::Command::new(pi)
-        .args(["install", &source])
-        .status()
-        .map_err(|error| {
-            anyhow::anyhow!("Could not run Pi: {error}. Install Pi and make sure `pi` is on PATH.")
-        })?;
-    if !status.success() {
+    let status = run(pi, &["install", &source]).map_err(|error| {
+        anyhow::anyhow!("Could not run Pi: {error}. Install Pi and make sure `pi` is on PATH.")
+    })?;
+    if !status {
         anyhow::bail!(
-            "Pi could not install {source} ({status}). Check that the release tag exists and Pi can access GitHub, then retry `baton install pi`."
+            "Pi could not install {source} (nonzero exit status). Check that the release tag exists and Pi can access GitHub, then retry `baton install pi`."
         );
     }
     Ok(())
+}
+
+fn install_pi(
+    version: &str,
+    release_tag: Option<&str>,
+    pi: &std::path::Path,
+) -> anyhow::Result<()> {
+    install_pi_with(version, release_tag, pi, |program, args| {
+        std::process::Command::new(program)
+            .args(args)
+            .status()
+            .map(|status| status.success())
+    })
 }
 
 fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
@@ -306,32 +322,38 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
-    fn installs_the_selected_release_and_reports_failures() {
-        use std::os::unix::fs::PermissionsExt;
+    fn selected_release_install_arguments_and_failures_are_validated() {
         let temp = tempfile::tempdir().unwrap();
         let pi = temp.path().join("pi");
-        let output = temp.path().join("args");
-        std::fs::write(
-            &pi,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
-                output.display()
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
         for version in ["0.4.0", "0.5.0"] {
-            install_pi(version, Some(&format!("v{version}")), &pi).unwrap();
+            let mut invocation = None;
+            install_pi_with(
+                version,
+                Some(&format!("v{version}")),
+                &pi,
+                |program, args| {
+                    invocation = Some((
+                        program.to_owned(),
+                        args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                    ));
+                    Ok(true)
+                },
+            )
+            .unwrap();
             assert_eq!(
-                std::fs::read_to_string(&output).unwrap(),
-                format!("install\ngit:github.com/klab365/baton@v{version}\n")
+                invocation,
+                Some((
+                    pi.clone(),
+                    vec![
+                        "install".to_owned(),
+                        format!("git:github.com/klab365/baton@v{version}")
+                    ]
+                ))
             );
         }
-        std::fs::write(&pi, "#!/bin/sh\nexit 1\n").unwrap();
         assert!(
-            install_pi("0.5.0", Some("v0.5.0"), &pi)
+            install_pi_with("0.5.0", Some("v0.5.0"), &pi, |_, _| Ok(false))
                 .unwrap_err()
                 .to_string()
                 .contains("release tag exists")
@@ -341,6 +363,12 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("on PATH")
+        );
+        assert!(
+            pi_install_source("0.5.0", Some("main"))
+                .unwrap_err()
+                .to_string()
+                .contains("development build")
         );
     }
 

@@ -89,8 +89,8 @@ fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
             } else {
                 assert!(agent.skill_ids.is_empty());
             }
-            assert!(!agent.system_prompt.contains("must never reach runtime"));
-            assert!(!agent.system_prompt.contains("authorized skill body"));
+            assert!(!agent.instructions.contains("must never reach runtime"));
+            assert!(!agent.instructions.contains("authorized skill body"));
             Ok("done".into())
         }
     }
@@ -107,6 +107,65 @@ fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
     assert_eq!(
         run.config_snapshot.unwrap().agents[0].skill_ids,
         ["assigned"]
+    );
+}
+
+#[test]
+fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let pipeline = &mut config.pipelines[0];
+    pipeline.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
+        agent_id: "writer".into(),
+        prompt: "Draft the change".into(),
+    };
+    pipeline.steps[1].kind = baton_core::domain::project::PipelineStepKind::Agent {
+        agent_id: "writer".into(),
+        prompt: "Review the change".into(),
+    };
+    #[derive(Default)]
+    struct RecordingRuntime {
+        agents: Vec<String>,
+        inputs: Vec<String>,
+    }
+    impl AgentRuntime for RecordingRuntime {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            agent: &baton_core::domain::project::Agent,
+            input: &str,
+        ) -> Result<String, String> {
+            self.agents.push(agent.instructions.clone());
+            self.inputs.push(input.to_owned());
+            Ok("done".into())
+        }
+    }
+    let mut runtime = RecordingRuntime::default();
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "prompt-test",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(runtime.inputs.len(), 2);
+    assert_eq!(runtime.agents, ["Write clearly", "Write clearly"]);
+    assert!(runtime.inputs[0].starts_with("Step instructions:\nDraft the change"));
+    assert!(runtime.inputs[1].starts_with("Step instructions:\nReview the change"));
+    assert_eq!(
+        run.steps[0].input.as_deref(),
+        Some(runtime.inputs[0].as_str())
+    );
+    assert_eq!(
+        run.steps[1].input.as_deref(),
+        Some(runtime.inputs[1].as_str())
+    );
+    assert!(
+        run.config_snapshot.as_ref().unwrap().agents[0]
+            .instructions
+            .contains("Write clearly")
     );
 }
 
@@ -179,6 +238,10 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
     let fixture = Fixture::new();
     let mut config = config();
     let pipeline = &mut config.pipelines[0];
+    pipeline.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
+        agent_id: "writer".into(),
+        prompt: "Resume with the saved writer prompt".into(),
+    };
     pipeline.steps[0].transitions = vec![
         Transition {
             outcome: Outcome::Blocked,
@@ -215,19 +278,28 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
             input: &str,
         ) -> Result<String, String> {
             self.calls += 1;
-            let (outcome, summary) = match self.calls {
-                1 => (Outcome::Blocked, "Which backends?"),
-                2 => {
-                    assert!(input.contains("Tokio, WASM and Embassy"));
-                    (Outcome::Completed, "Plan ready")
-                }
-                3 => {
-                    assert!(input.contains("Plan ready"));
-                    assert!(input.contains("Tokio, WASM and Embassy"));
-                    (Outcome::Completed, "Built")
-                }
-                _ => panic!("unexpected call"),
-            };
+            let (outcome, summary) =
+                match self.calls {
+                    1 => {
+                        assert!(input.starts_with(
+                            "Step instructions:\nResume with the saved writer prompt"
+                        ));
+                        (Outcome::Blocked, "Which backends?")
+                    }
+                    2 => {
+                        assert!(input.starts_with(
+                            "Step instructions:\nResume with the saved writer prompt"
+                        ));
+                        assert!(input.contains("Tokio, WASM and Embassy"));
+                        (Outcome::Completed, "Plan ready")
+                    }
+                    3 => {
+                        assert!(input.contains("Plan ready"));
+                        assert!(input.contains("Tokio, WASM and Embassy"));
+                        (Outcome::Completed, "Built")
+                    }
+                    _ => panic!("unexpected call"),
+                };
             self.decision = Some(AgentDecision {
                 outcome,
                 summary: summary.into(),

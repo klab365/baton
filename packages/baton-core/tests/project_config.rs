@@ -141,6 +141,20 @@ fn legacy_progress_is_readable_but_not_a_pipeline_transition() {
 }
 
 #[test]
+fn legacy_system_prompt_and_optional_step_prompt_are_compatible() {
+    let config: ProjectConfig = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 7,
+        "agents": [{"id":"writer", "systemPrompt":"Write clearly", "skillIds":[]}],
+        "pipelines": [{"id":"draft", "steps":[{"id":"write", "name":"Write", "type":"agent", "agentId":"writer"}]}]
+    })).unwrap();
+    assert_eq!(config.agents[0].instructions, "Write clearly");
+    let saved = serde_json::to_value(config).unwrap();
+    assert_eq!(saved["agents"][0]["instructions"], "Write clearly");
+    assert!(saved["agents"][0].get("systemPrompt").is_none());
+    assert_eq!(saved["pipelines"][0]["steps"][0]["prompt"], "");
+}
+
+#[test]
 fn actionable_validation_failures() {
     for (pointer, replacement, message) in [
         (
@@ -171,7 +185,7 @@ fn actionable_validation_failures() {
         (
             "/agents/0/systemPrompt",
             serde_json::json!(" "),
-            "systemPrompt must not be empty",
+            "agent.instructions must not be empty",
         ),
         (
             "/pipelines/0/steps/1/id",

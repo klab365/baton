@@ -40,7 +40,8 @@ impl<'de> Deserialize<'de> for Pipeline {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Agent {
     pub id: String,
-    pub system_prompt: String,
+    #[serde(alias = "systemPrompt")]
+    pub instructions: String,
     #[serde(default)]
     pub runtime_kind: crate::domain::runtime::RuntimeKind,
     #[serde(default)]
@@ -91,6 +92,8 @@ pub struct PipelineStep {
 pub enum PipelineStepKind {
     Agent {
         agent_id: String,
+        #[serde(default)]
+        prompt: String,
     },
     Human,
     Shell {
@@ -115,6 +118,8 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 name: String,
                 agent_id: String,
                 #[serde(default)]
+                prompt: String,
+                #[serde(default)]
                 transitions: Vec<Transition>,
             },
             Human {
@@ -138,11 +143,12 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 id,
                 name,
                 agent_id,
+                prompt,
                 transitions,
             } => Self {
                 id,
                 name,
-                kind: PipelineStepKind::Agent { agent_id },
+                kind: PipelineStepKind::Agent { agent_id, prompt },
                 transitions,
             },
             Wire::Human {
@@ -180,7 +186,7 @@ impl PipelineStep {
     }
     pub fn agent_id(&self) -> &str {
         match &self.kind {
-            PipelineStepKind::Agent { agent_id } => agent_id,
+            PipelineStepKind::Agent { agent_id, .. } => agent_id,
             _ => "",
         }
     }
@@ -263,7 +269,7 @@ impl ProjectConfig {
         ids("pipelines", self.pipelines.iter().map(|x| x.id.as_str()))?;
         let agents = ids("agents", self.agents.iter().map(|x| x.id.as_str()))?;
         for agent in &self.agents {
-            nonempty("agent.systemPrompt", &agent.system_prompt)?;
+            nonempty("agent.instructions", &agent.instructions)?;
             if agent.model.as_ref().is_some_and(|model| {
                 model.provider.trim().is_empty() || model.model.trim().is_empty()
             }) {
@@ -315,7 +321,7 @@ impl ProjectConfig {
                         }
                     }
                     PipelineStepKind::Human => {}
-                    PipelineStepKind::Agent { agent_id } => {
+                    PipelineStepKind::Agent { agent_id, .. } => {
                         reference(&format!("{step_path}.agentId"), agent_id, &agents)?;
                         if !step.transitions.is_empty()
                             && self
@@ -690,6 +696,7 @@ mod project_identity_tests {
                 r#"{"id":"a","name":"Agent","type":"agent","agentId":"worker"}"#,
                 PipelineStepKind::Agent {
                     agent_id: "worker".into(),
+                    prompt: String::new(),
                 },
             ),
             (

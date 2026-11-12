@@ -134,7 +134,7 @@ pub fn resolve(
             .iter()
             .find(|skill| &skill.id == id)
             .ok_or_else(|| format!("Assigned skill {id:?} is missing from .agents/skills"))?;
-        resolved.system_prompt.push_str(&format!(
+        resolved.instructions.push_str(&format!(
             "\n\nAssigned skill {}:\n{}",
             skill.id,
             instruction_body(&skill.instructions)?

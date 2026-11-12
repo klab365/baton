@@ -138,7 +138,63 @@ fn encode(config: &ProjectConfig) -> Result<BTreeMap<String, String>, String> {
     };
     let mut files = BTreeMap::from([("project.yml".to_owned(), yaml(&metadata)?)]);
     for agent in &config.agents {
-        files.insert(format!("agents/{}.yml", agent.id), yaml(agent)?);
+        let trailing_newlines = agent
+            .instructions
+            .chars()
+            .rev()
+            .take_while(|&c| c == '\n')
+            .count();
+        let unsafe_literal = trailing_newlines > 1
+            || agent
+                .instructions
+                .chars()
+                .any(|c| c == '\r' || (c.is_control() && c != '\n' && c != '\t'));
+        let mut contents = if unsafe_literal {
+            yaml(agent)?
+        } else {
+            let mut sentinel_agent = agent.clone();
+            sentinel_agent.instructions = "BATON_INSTRUCTIONS_SENTINEL".into();
+            yaml(&sentinel_agent)?
+        };
+        let key = "instructions: BATON_INSTRUCTIONS_SENTINEL";
+        if !unsafe_literal {
+            let newline_count = agent
+                .instructions
+                .chars()
+                .rev()
+                .take_while(|&c| c == '\n')
+                .count();
+            let indicator = match newline_count {
+                0 => "|2-",
+                1 => "|2",
+                _ => "|2+",
+            };
+            let block = format!(
+                "instructions: {indicator}\n{}",
+                agent
+                    .instructions
+                    .split_terminator('\n')
+                    .map(|line| format!("  {line}\n"))
+                    .collect::<String>()
+                    .trim_end_matches('\n')
+            );
+            let mut replaced = false;
+            contents = contents
+                .split_inclusive('\n')
+                .map(|line| {
+                    if !replaced && line.trim_end_matches('\n') == key {
+                        replaced = true;
+                        block.clone() + if line.ends_with('\n') { "\n" } else { "" }
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect();
+            if !replaced {
+                return Err("Could not locate serialized agent instructions".into());
+            }
+        }
+        files.insert(format!("agents/{}.yml", agent.id), contents);
     }
     for pipeline in &config.pipelines {
         files.insert(format!("pipelines/{}.yml", pipeline.id), yaml(pipeline)?);
@@ -408,7 +464,7 @@ mod tests {
         let mut config = ProjectConfig::CURRENT;
         config.agents.push(Agent {
             id: "test".into(),
-            system_prompt: "hello".into(),
+            instructions: "hello".into(),
             runtime_kind: Default::default(),
             model: None,
             credential_id: None,
@@ -438,6 +494,60 @@ mod tests {
         assert!(!agent_path.exists());
     }
 
+    #[test]
+    fn instruction_yaml_round_trips_styles_and_falls_back_for_unsafe_literals() {
+        for instructions in [
+            "single line",
+            "line one\nline two",
+            "  indented\nless indented",
+            "line\n",
+            "line\n\n\n",
+            "carriage\rreturn",
+            "control\u{0001}char",
+            "tab\there",
+        ] {
+            let mut config = ProjectConfig::CURRENT;
+            config.agents.push(Agent {
+                id: "test".into(),
+                instructions: instructions.into(),
+                runtime_kind: Default::default(),
+                model: None,
+                credential_id: None,
+                skill_ids: vec![],
+                allowed_tools: None,
+            });
+            let files = encode(&config).unwrap();
+            let serialized = &files["agents/test.yml"];
+            assert_eq!(decode(&files).unwrap(), config, "{instructions:?}");
+            if !instructions.contains('\r')
+                && !instructions.contains('\u{0001}')
+                && !instructions.ends_with("\n\n")
+            {
+                assert!(serialized.contains("instructions: |2"), "{serialized}");
+            }
+        }
+    }
+
+    #[test]
+    fn instructions_replacement_does_not_touch_matching_model_text() {
+        let mut config = ProjectConfig::CURRENT;
+        config.agents.push(Agent {
+            id: "test".into(),
+            instructions: "hello".into(),
+            runtime_kind: Default::default(),
+            model: Some(baton_core::domain::runtime::RuntimeModel {
+                provider: "instructions: hello".into(),
+                model: "model".into(),
+            }),
+            credential_id: None,
+            skill_ids: vec![],
+            allowed_tools: None,
+        });
+        let files = encode(&config).unwrap();
+        assert_eq!(decode(&files).unwrap(), config);
+        assert!(files["agents/test.yml"].contains("provider:"));
+    }
+
     #[tokio::test]
     async fn yaml_files_round_trip_and_detect_external_changes() {
         let root = tempfile::tempdir().unwrap();
@@ -445,15 +555,21 @@ mod tests {
         let mut config = ProjectConfig::CURRENT;
         config.agents.push(Agent {
             id: "test".into(),
-            system_prompt: "hello".into(),
+            instructions: "hello".into(),
             runtime_kind: Default::default(),
             model: None,
             credential_id: None,
             skill_ids: vec![],
             allowed_tools: None,
         });
+        config.agents[0].instructions = "hello".into();
         repo.create(&config).await.unwrap();
-        assert!(root.path().join(".baton/agents/test.yml").exists());
+        let agent_path = root.path().join(".baton/agents/test.yml");
+        assert!(
+            fs::read_to_string(&agent_path)
+                .unwrap()
+                .contains("instructions: |2-\n  hello")
+        );
         let ConfigState::Ready(snapshot) = repo.load().await.unwrap() else {
             panic!("expected configuration")
         };

@@ -20,7 +20,8 @@ pub struct ProjectConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Agent {
     pub id: String,
-    pub system_prompt: String,
+    #[serde(alias = "systemPrompt")]
+    pub instructions: String,
     pub runtime_kind: RuntimeKind,
     pub model: Option<RuntimeModel>,
     pub credential_id: Option<String>,
@@ -63,6 +64,8 @@ pub struct PipelineStep {
 pub enum PipelineStepKind {
     Agent {
         agent_id: String,
+        #[serde(default)]
+        prompt: String,
     },
     Human,
     Shell {
@@ -145,7 +148,7 @@ impl From<domain::Agent> for Agent {
         Self {
             allowed_tools: value.allowed_tools,
             id: value.id,
-            system_prompt: value.system_prompt,
+            instructions: value.instructions,
             runtime_kind: value.runtime_kind.into(),
             model: value.model.map(Into::into),
             credential_id: value.credential_id,
@@ -159,7 +162,7 @@ impl From<Agent> for domain::Agent {
         Self {
             allowed_tools: value.allowed_tools,
             id: value.id,
-            system_prompt: value.system_prompt,
+            instructions: value.instructions,
             runtime_kind: value.runtime_kind.into(),
             model: value.model.map(Into::into),
             credential_id: value.credential_id,
@@ -198,8 +201,8 @@ impl From<domain::PipelineStep> for PipelineStep {
             id: value.id,
             name: value.name,
             kind: match value.kind {
-                domain::PipelineStepKind::Agent { agent_id } => {
-                    PipelineStepKind::Agent { agent_id }
+                domain::PipelineStepKind::Agent { agent_id, prompt } => {
+                    PipelineStepKind::Agent { agent_id, prompt }
                 }
                 domain::PipelineStepKind::Human => PipelineStepKind::Human,
                 domain::PipelineStepKind::Shell {
@@ -221,8 +224,8 @@ impl From<PipelineStep> for domain::PipelineStep {
             id: value.id,
             name: value.name,
             kind: match value.kind {
-                PipelineStepKind::Agent { agent_id } => {
-                    domain::PipelineStepKind::Agent { agent_id }
+                PipelineStepKind::Agent { agent_id, prompt } => {
+                    domain::PipelineStepKind::Agent { agent_id, prompt }
                 }
                 PipelineStepKind::Human => domain::PipelineStepKind::Human,
                 PipelineStepKind::Shell {
