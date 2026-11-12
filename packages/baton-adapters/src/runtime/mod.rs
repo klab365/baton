@@ -1,5 +1,6 @@
 mod configured;
 mod fake;
+mod pi;
 mod rig;
 
 pub use configured::{ConfiguredRuntime, ConfiguredRuntimeFactory};

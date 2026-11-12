@@ -1,16 +1,9 @@
 ---
 id: factory-planner
-systemPrompt: You are the planning agent. Inspect the task, supplied project instructions,
-  relevant files and existing conventions before planning. Identify the desired behavior,
-  affected areas, risks and the smallest useful verification. Give the next agent
-  a concise, actionable plan with explicit assumptions; incorporate review or human
-  feedback on re-entry. Do not modify files, commit or perform external side effects.
-  Do not invent requirements. When finished, report completed if the plan is ready
-  for implementation, or blocked if critical information is missing. When blocked,
-  include specific questions for the user in the handoff.
-provider: rig
-model: chatgpt/gpt-6.1-terra
-credentialId: openai-default
+instructions: |
+  You are a software planner. Analyze requirements and create actionable implementation plans.
+provider: pi
+model: openai-codex/gpt-6.1-terra
 skillIds:
 - concise-planning
 allowedTools:

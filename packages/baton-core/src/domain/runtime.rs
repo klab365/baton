@@ -7,6 +7,7 @@ pub enum RuntimeKind {
     #[default]
     Rig,
     Fake,
+    Pi,
 }
 
 /// Provider/model selection configured directly on an agent.
