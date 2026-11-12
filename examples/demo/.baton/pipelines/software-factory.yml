@@ -4,6 +4,9 @@ steps:
 - id: plan
   name: Analyze and plan
   agentId: factory-planner
+  prompt: |
+    Analyze the task and produce an actionable implementation plan. Include the
+    plan and relevant evidence in your handoff for the builder.
   transitions:
   - outcome: completed
     to: build
@@ -13,6 +16,10 @@ steps:
 - id: build
   name: Implement and verify
   agentId: factory-builder
+  prompt: |
+    Implement and verify the task using the plan and any review feedback in the
+    handoff. Report the changes and verification, or describe the blocker and
+    what has been tried.
   transitions:
   - outcome: completed
     to: review
@@ -22,6 +29,10 @@ steps:
 - id: review
   name: Independent review
   agentId: factory-reviewer
+  prompt: |
+    Independently review the changes against the task and prior handoff. Approve
+    only when appropriate; otherwise provide actionable findings for the builder
+    or planner, or explain the blocker.
   transitions:
   - outcome: approved
     to: approval
@@ -45,6 +56,9 @@ steps:
 - id: commit
   name: Create commit
   agentId: factory-committer
+  prompt: |
+    Commit the approved changes. Report the commit or explain the blocker and
+    any side effects.
   transitions:
   - outcome: completed
     to: null
