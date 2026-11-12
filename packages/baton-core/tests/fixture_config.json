@@ -4,11 +4,8 @@
     {
       "id": "writer",
       "systemPrompt": "Write clearly",
-      "runtimeKind": "rig",
-      "model": {
-        "provider": "openai",
-        "model": "gpt-4.1"
-      },
+      "provider": "rig",
+      "model": "openai/gpt-4.1",
       "credentialId": null,
       "skillIds": [
 
@@ -17,11 +14,8 @@
     {
       "id": "reviewer",
       "systemPrompt": "Review carefully",
-      "runtimeKind": "rig",
-      "model": {
-        "provider": "openai",
-        "model": "gpt-4.1"
-      },
+      "provider": "rig",
+      "model": "openai/gpt-4.1",
       "credentialId": null,
       "skillIds": [
 

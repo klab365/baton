@@ -57,7 +57,7 @@ async fn json(response: axum::response::Response) -> serde_json::Value {
 fn configure_fake(directory: &std::path::Path) {
     let mut config = common::read_config(directory);
     for agent in config["agents"].as_array_mut().unwrap() {
-        agent["runtimeKind"] = "fake".into();
+        agent["provider"] = "fake".into();
         agent["model"] = serde_json::Value::Null;
     }
     let steps = config["pipelines"][0]["steps"].as_array_mut().unwrap();

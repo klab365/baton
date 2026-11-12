@@ -10,10 +10,8 @@ instructions: 'You are the independent review agent. Inspect the task, supplied 
   if the approach needs reconsideration, or blocked if essential review cannot continue
   without human help. Give a concise handoff with findings, file locations, verification
   and residual risks.'
-runtimeKind: rig
-model:
-  provider: chatgpt
-  model: gpt-6.1-sol
+provider: rig
+model: chatgpt/gpt-6.1-sol
 credentialId: openai-default
 skillIds:
 - code-review-excellence

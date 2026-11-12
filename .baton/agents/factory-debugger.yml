@@ -9,10 +9,8 @@ systemPrompt: You diagnose blocked builder runs independently. Inspect the origi
   when three debugger attempts have not resolved the blocker; explain the attempts
   and the exact help needed. Incomplete work or failing tests alone do not require
   human intervention. Never claim checks passed without running them.
-runtimeKind: rig
-model:
-  provider: chatgpt
-  model: gpt-6.1-terra
+provider: rig
+model: chatgpt/gpt-6.1-terra
 credentialId: openai-default
 skillIds: []
 allowedTools:

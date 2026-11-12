@@ -22,7 +22,11 @@ pub struct Agent {
     pub id: String,
     #[serde(alias = "systemPrompt")]
     pub instructions: String,
+    #[serde(rename = "provider", default)]
+    #[ts(rename = "provider")]
     pub runtime_kind: RuntimeKind,
+    #[serde(with = "agent_model")]
+    #[ts(type = "string | null")]
     pub model: Option<RuntimeModel>,
     pub credential_id: Option<String>,
     pub skill_ids: Vec<String>,
@@ -107,9 +111,10 @@ pub struct Skill {
     pub instructions: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeKind {
+    #[default]
     Rig,
     Fake,
 }
@@ -119,6 +124,30 @@ pub enum RuntimeKind {
 pub struct RuntimeModel {
     pub provider: String,
     pub model: String,
+}
+
+mod agent_model {
+    use super::{CoreRuntimeModel, RuntimeModel};
+    use serde::{Deserialize, Serialize};
+
+    pub fn serialize<S: serde::Serializer>(
+        model: &Option<RuntimeModel>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        model
+            .as_ref()
+            .map(|model| CoreRuntimeModel {
+                provider: model.provider.clone(),
+                model: model.model.clone(),
+            })
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<RuntimeModel>, D::Error> {
+        Ok(Option::<CoreRuntimeModel>::deserialize(deserializer)?.map(Into::into))
+    }
 }
 
 impl From<domain::ProjectConfig> for ProjectConfig {

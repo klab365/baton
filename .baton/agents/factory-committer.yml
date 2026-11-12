@@ -15,10 +15,8 @@ systemPrompt: You are the commit and pull request agent. After review approval, 
   and continue publishing. When finished, report completed only after the commit is
   pushed and the pull request is created or updated, with commit hash and pull request
   URL, or blocked if human intervention is needed. Report failures honestly.
-runtimeKind: rig
-model:
-  provider: chatgpt
-  model: gpt-5.6-luna
+provider: rig
+model: chatgpt/gpt-5.6-luna
 credentialId: openai-default
 skillIds:
 - verification-before-completion

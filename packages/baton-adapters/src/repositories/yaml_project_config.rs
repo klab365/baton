@@ -202,13 +202,33 @@ fn encode(config: &ProjectConfig) -> Result<BTreeMap<String, String>, String> {
     Ok(files)
 }
 
+struct ProjectConfigLock(fs::File);
+
+impl ProjectConfigLock {
+    fn acquire(root: &Path, shared: bool) -> Result<Self, String> {
+        let file = fs::File::open(root).map_err(|e| e.to_string())?;
+        if shared {
+            file.try_lock_shared()
+        } else {
+            file.try_lock()
+        }
+        .map_err(|e| format!("Could not lock project configuration: {e}"))?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for ProjectConfigLock {
+    fn drop(&mut self) {
+        // A concurrently spawned child may briefly inherit the open file description.
+        let _ = self.0.unlock();
+    }
+}
+
 fn write_files(root: &Path, expected: Option<&str>, config: &ProjectConfig) -> Result<(), String> {
     let mut files = encode(config)?;
     let baton = root.join(".baton");
     fs::create_dir_all(&baton).map_err(|e| e.to_string())?;
-    let lock = fs::File::open(root).map_err(|e| e.to_string())?;
-    lock.try_lock()
-        .map_err(|e| format!("Could not lock project configuration: {e}"))?;
+    let _lock = ProjectConfigLock::acquire(root, false)?;
     let current = read_files(root)?;
     match (expected, &current) {
         (Some(expected), Some(current))
@@ -354,9 +374,7 @@ impl ProjectConfigRepository for YamlProjectConfigRepository {
     async fn load(&self) -> Result<ConfigState, String> {
         let root = self.project_dir.clone();
         tokio::task::spawn_blocking(move || {
-            let lock = fs::File::open(&root).map_err(|e| e.to_string())?;
-            lock.try_lock_shared()
-                .map_err(|e| format!("Could not lock project configuration: {e}"))?;
+            let _lock = ProjectConfigLock::acquire(&root, true)?;
             let Some(files) = read_files(&root)? else {
                 return Ok(ConfigState::Missing);
             };
@@ -413,6 +431,20 @@ pub fn ensure_project_identity(root: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_lock_is_released_even_if_descriptor_is_inherited() {
+        let root = tempfile::tempdir().unwrap();
+        for shared in [false, true] {
+            let lock = ProjectConfigLock::acquire(root.path(), shared).unwrap();
+            let inherited = lock.0.try_clone().unwrap();
+            assert!(ProjectConfigLock::acquire(root.path(), false).is_err());
+            drop(lock);
+            let next = ProjectConfigLock::acquire(root.path(), false).unwrap();
+            drop(next);
+            drop(inherited);
+        }
+    }
 
     #[test]
     fn identity_is_stable_and_does_not_overwrite_orphaned_files() {
@@ -529,6 +561,48 @@ mod tests {
     }
 
     #[test]
+    fn compact_model_round_trips_and_rejects_legacy_fields() {
+        let mut config = ProjectConfig::CURRENT;
+        config.agents.push(Agent {
+            id: "test".into(),
+            instructions: "hello".into(),
+            runtime_kind: Default::default(),
+            model: Some(baton_core::domain::runtime::RuntimeModel {
+                provider: "openai".into(),
+                model: "family/model".into(),
+            }),
+            credential_id: None,
+            skill_ids: vec![],
+            allowed_tools: None,
+        });
+        let mut files = encode(&config).unwrap();
+        assert!(files["agents/test.yml"].contains("model: openai/family/model"));
+        assert!(files["agents/test.yml"].contains("provider: rig"));
+        assert!(!files["agents/test.yml"].contains("runtimeKind"));
+        assert_eq!(decode(&files).unwrap(), config);
+        let agent = files.get_mut("agents/test.yml").unwrap();
+        *agent = agent.replace(
+            "model: openai/family/model",
+            "model:\n  provider: openai\n  model: family/model",
+        );
+        assert!(decode(&files).is_err());
+        files = encode(&config).unwrap();
+        let agent = files.get_mut("agents/test.yml").unwrap();
+        *agent = agent.replace("provider: rig", "runtimeKind: rig");
+        assert!(decode(&files).is_err());
+        files = encode(&config).unwrap();
+        let agent = files.get_mut("agents/test.yml").unwrap();
+        *agent = agent.replace("model: openai/family/model", "model: invalid");
+        assert!(decode(&files).is_err());
+
+        config.agents[0].runtime_kind = baton_core::domain::runtime::RuntimeKind::Fake;
+        config.agents[0].model = None;
+        let files = encode(&config).unwrap();
+        assert!(files["agents/test.yml"].contains("provider: fake"));
+        assert_eq!(decode(&files).unwrap(), config);
+    }
+
+    #[test]
     fn instructions_replacement_does_not_touch_matching_model_text() {
         let mut config = ProjectConfig::CURRENT;
         config.agents.push(Agent {
@@ -545,7 +619,7 @@ mod tests {
         });
         let files = encode(&config).unwrap();
         assert_eq!(decode(&files).unwrap(), config);
-        assert!(files["agents/test.yml"].contains("provider:"));
+        assert!(files["agents/test.yml"].contains("instructions: hello/model"));
     }
 
     #[tokio::test]

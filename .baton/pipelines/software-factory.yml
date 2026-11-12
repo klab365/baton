@@ -13,6 +13,7 @@ steps:
   - outcome: blocked
     to: help
   type: agent
+
 - id: build
   name: Implement and verify
   agentId: factory-builder
@@ -41,6 +42,7 @@ steps:
   - outcome: blocked
     to: help
   type: agent
+
 - id: review
   name: Independent review
   agentId: factory-reviewer
@@ -58,6 +60,7 @@ steps:
   - outcome: blocked
     to: help
   type: agent
+
 - id: commit
   name: Commit and publish pull request
   agentId: factory-committer
@@ -70,6 +73,7 @@ steps:
   - outcome: blocked
     to: help
   type: agent
+
 - id: ci
   name: Verify pull request CI
   agentId: factory-ci
@@ -84,6 +88,7 @@ steps:
   - outcome: blocked
     to: ci-help
   type: agent
+
 - id: ci-help
   name: Resolve CI blocker
   transitions:
@@ -92,6 +97,7 @@ steps:
   - outcome: rejected
     to: null
   type: human
+
 - id: help
   name: Resolve blocker
   transitions:

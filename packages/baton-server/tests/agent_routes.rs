@@ -46,7 +46,7 @@ async fn agent_routes_accept_direct_runtime_configuration_and_enforce_pipeline_r
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     let mut agent: Agent = config.agents[0].clone();
     agent.id = "new-agent".into();
-    agent.model.as_mut().unwrap().provider.clear();
+    agent.model.as_mut().unwrap().provider = " ".into();
 
     let response = app
         .clone()

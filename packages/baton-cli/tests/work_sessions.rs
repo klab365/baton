@@ -75,7 +75,7 @@ fn submission(run: &Value, outcome: &str) -> Value {
 async fn execute_runs_configured_agent_in_existing_workspace() {
     let f = Fixture::new();
     let mut config = common::read_config(&f.path);
-    config["agents"][0]["runtimeKind"] = json!("fake");
+    config["agents"][0]["provider"] = json!("fake");
     config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
     config["pipelines"][0]["steps"][0]["prompt"] = json!("CLI-specific step prompt");
     common::write_config(&f.path, &config);
@@ -119,7 +119,7 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
 async fn missing_agent_outcome_stops_the_run() {
     let f = Fixture::new();
     let mut config = common::read_config(&f.path);
-    config["agents"][0]["runtimeKind"] = json!("fake");
+    config["agents"][0]["provider"] = json!("fake");
     common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 50, json!([])).await;

@@ -212,7 +212,7 @@ mod tests {
         ));
         let mut runtime =
             ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
-        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent", "systemPrompt":"test", "runtimeKind":"rig", "model":{"provider":"openai", "model":"gpt-4.1"}, "credentialId":"shared", "skillIds":[]})).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent", "systemPrompt":"test", "provider":"rig", "model":"openai/gpt-4.1", "credentialId":"shared", "skillIds":[]})).unwrap();
         let error = runtime.execute(root.path(), &agent, "test").unwrap_err();
         assert!(
             error.contains("shared") && error.contains("unavailable"),
