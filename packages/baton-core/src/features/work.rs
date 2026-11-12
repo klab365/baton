@@ -5,7 +5,7 @@ use crate::{
         project::{Agent, ConfigState, Outcome, Pipeline, PipelineStep, ProjectConfig, Skill},
         work::*,
     },
-    features::pipeline_engine::{publish, utc_now},
+    features::pipeline_engine::{append_bounded_trace, elapsed_ms, publish, utc_now},
     ports::{
         project_config::ProjectConfigRepository, runs::RunRepository, runtime::MAX_HANDOFF_BYTES,
         skills::SkillRepository, work::WorkCheckRunner,
@@ -199,7 +199,9 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
     let attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
     if attempt > run.session.as_ref().ok_or("Missing session")?.max_attempts {
         run.status = Status::LimitExhausted;
-        run.ended_at = Some(utc_now());
+        let ended_at = utc_now();
+        run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+        run.ended_at = Some(ended_at);
         return Ok(());
     }
     let status = if step.is_human() {
@@ -213,8 +215,9 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         vec![]
     };
     run.status = status.clone();
+    let agent_id = step.agent_id().to_owned();
     run.steps.push(StepRun {
-        agent_id: step.agent_id().to_owned(),
+        agent_id: agent_id.clone(),
         step_id: step.id,
         status,
         input: None,
@@ -223,6 +226,15 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         outcome: None,
         selected_transition: None,
         attempt,
+        started_at: Some(utc_now()),
+        ended_at: None,
+        duration_ms: None,
+        model: run
+            .config_snapshot
+            .as_ref()
+            .and_then(|config| config.agents.iter().find(|agent| agent.id == agent_id))
+            .and_then(|agent| agent.model.clone()),
+        usage: None,
     });
     Ok(())
 }
@@ -441,6 +453,12 @@ fn complete(
     let (_, pipeline) = graph(run)?;
     let pipeline = pipeline.clone();
     run.steps[index].status = Status::Succeeded;
+    let ended_at = utc_now();
+    run.steps[index].duration_ms = run.steps[index]
+        .started_at
+        .as_deref()
+        .and_then(|started| elapsed_ms(started, &ended_at));
+    run.steps[index].ended_at = Some(ended_at);
     run.steps[index].output = Some(summary.clone());
     run.steps[index].outcome = Some(outcome.clone());
     run.status = Status::Running;
@@ -449,7 +467,9 @@ fn complete(
     run.session.as_mut().ok_or("Missing session")?.revision += 1;
     prepare(run)?;
     if !matches!(run.status, Status::Running | Status::WaitingHuman) {
-        run.ended_at = Some(utc_now());
+        let ended_at = utc_now();
+        run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+        run.ended_at = Some(ended_at);
     }
     Ok(())
 }
@@ -499,10 +519,11 @@ async fn submit_work_handler(
             }
         }
         run.steps[index].input = command.input;
-        run.trace.extend(command.trace.into_iter().map(|mut entry| {
+        let mut trace = command.trace;
+        for entry in &mut trace {
             entry.attempt = Some(result.attempt);
-            entry
-        }));
+        }
+        append_bounded_trace(&mut run, trace);
         run.session
             .as_mut()
             .ok_or("Missing session")?
@@ -550,14 +571,23 @@ async fn fail_work_handler(
         &permitted,
     )?;
     run.steps[index].status = Status::Failed;
+    let ended_at = utc_now();
+    run.steps[index].duration_ms = run.steps[index]
+        .started_at
+        .as_deref()
+        .and_then(|started| elapsed_ms(started, &ended_at));
+    run.steps[index].ended_at = Some(ended_at);
     run.steps[index].input = Some(command.input);
-    run.trace.extend(command.trace.into_iter().map(|mut entry| {
+    let mut trace = command.trace;
+    for entry in &mut trace {
         entry.attempt = Some(command.attempt);
-        entry
-    }));
+    }
+    append_bounded_trace(&mut run, trace);
     run.steps[index].error = Some("Agent did not report a valid configured outcome".into());
     run.status = Status::Failed;
-    run.ended_at = Some(utc_now());
+    let ended_at = utc_now();
+    run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+    run.ended_at = Some(ended_at);
     run.session.as_mut().ok_or("Missing session")?.revision += 1;
     publish(
         resources.runs.as_ref(),

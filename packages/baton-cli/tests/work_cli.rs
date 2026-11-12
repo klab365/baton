@@ -153,6 +153,8 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
+    let (request_seen_tx, request_seen_rx) = std::sync::mpsc::channel();
+    let (continue_provider_tx, continue_provider_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for _ in 0..5 {
@@ -195,6 +197,12 @@ async fn cli_executes_rig_against_local_ollama_provider() {
                         break;
                     }
                 }
+            }
+            if requests.is_empty() {
+                request_seen_tx.send(()).unwrap();
+                continue_provider_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("test should release provider response");
             }
             let body = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
@@ -247,7 +255,45 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         "factory",
     ]);
     let id = start["id"].as_str().unwrap();
-    assert_eq!(f.value(&["execute", "--run", id])["status"], "waitingHuman");
+    let run_id = id.to_owned();
+    let workspace = f.path.clone();
+    let vault = f.vault.clone();
+    let execution = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_baton"))
+            .current_dir(workspace)
+            .env("BATON_CREDENTIAL_DIR", vault)
+            .args(["work", "execute", "--run", &run_id])
+            .output()
+            .unwrap()
+    });
+    request_seen_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    let active = f.value(&["status", "--run", id]);
+    assert!(
+        active["trace"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["kind"] == "modelRequest")
+    );
+    assert!(active["events"].as_array().unwrap().iter().any(|event| {
+        event["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Observed runtime activity")
+    }));
+    continue_provider_tx.send(()).unwrap();
+    let completed = execution.await.unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&completed.stdout).unwrap()["status"],
+        "waitingHuman"
+    );
     let response = f.path.join("human-response.json");
     fs::write(&response, json!({"revision":1,"stepId":"human","attempt":2,"outcome":"responded","response":"Include the human feedback"}).to_string()).unwrap();
     assert_eq!(
@@ -353,6 +399,11 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             .contains("Rig finished")
     );
     assert!(!status["trace"].as_array().unwrap().is_empty());
+    assert_eq!(status["steps"][0]["model"]["provider"], "ollama");
+    assert!(status["steps"][0]["usage"].is_null());
+    assert!(status["trace"].to_string().len() < 256 * 1024);
+    assert!(!status["trace"].to_string().contains("Implement feature"));
+    assert!(!status["trace"].to_string().contains("test-key"));
     assert!(!status.to_string().contains("test-key"));
 }
 

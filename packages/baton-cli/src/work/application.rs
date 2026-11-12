@@ -194,6 +194,8 @@ impl WorkApplication {
                 self.lock.lock().map_err(|e| e.to_string())?.take();
                 let repository = FilesystemWorkRepository(self.workspace.clone());
                 let cancellation_id = id.clone();
+                let observation_repository = FilesystemWorkRepository(self.workspace.clone());
+                let observation_step = step.id.clone();
                 let execution = tokio::task::spawn_blocking(move || -> Result<_, StepFailure> {
                     let cancelled = || {
                         repository
@@ -228,8 +230,47 @@ impl WorkApplication {
                         return Ok((outcome, summary, vec![]));
                     }
                     let agent = agent.ok_or("Current step has no configured agent")?;
-                    let output = runtime
-                        .execute_pipeline_step(&workspace, &agent, &input, &allowed, &cancelled)?;
+                    let mut observer = |mut entry: baton_core::domain::pipeline::RunTraceEntry| {
+                        let _lease =
+                            baton_core::features::pipeline_engine::acquire_action_lease_retry(
+                                &observation_repository,
+                                &cancellation_id,
+                                &cancelled,
+                            )?;
+                        let mut run = observation_repository.load(&cancellation_id)?;
+                        if run.status != baton_core::domain::pipeline::Status::Running
+                            || run.current_step.as_deref() != Some(&observation_step)
+                            || run.steps.last().is_none_or(|step| {
+                                step.attempt != attempt
+                                    || step.status != baton_core::domain::pipeline::Status::Running
+                            })
+                        {
+                            return Err("Work attempt changed while recording activity".into());
+                        }
+                        entry.attempt = Some(attempt);
+                        let kind = entry.kind.clone();
+                        baton_core::features::pipeline_engine::append_bounded_trace(
+                            &mut run,
+                            [entry.clone()],
+                        );
+                        let event = baton_core::domain::pipeline::RunEvent {
+                            run_id: run.id.clone(),
+                            status: run.status.clone(),
+                            occurred_at: entry.occurred_at,
+                            message: Some(format!("Observed runtime activity: {kind}")),
+                        };
+                        run.events.push(event.clone());
+                        observation_repository.save(&run)?;
+                        observation_repository.publish(&event)
+                    };
+                    let output = runtime.execute_pipeline_step_observed(
+                        &workspace,
+                        &agent,
+                        &input,
+                        &allowed,
+                        &cancelled,
+                        &mut observer,
+                    )?;
                     let trace = runtime.take_trace();
                     if allowed.is_empty() {
                         Ok((

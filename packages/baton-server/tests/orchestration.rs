@@ -377,7 +377,16 @@ fn restart_marks_interrupted_runs_failed_without_resuming() {
     let recovered = fixture.repo().load("interrupted-restart").unwrap();
     assert_eq!(recovered.status, Status::Failed);
     assert!(recovered.ended_at.is_some());
-    assert!(recovered.duration_ms.is_none());
+    assert!(recovered.duration_ms.is_some());
+    assert!(recovered.steps[0].started_at.is_some());
+    assert!(recovered.steps[0].ended_at.is_some());
+    assert!(recovered.steps[0].duration_ms.is_some());
+    assert!(
+        recovered.steps[0]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("reconcile side effects"))
+    );
     assert_eq!(
         fixture
             .repo()
@@ -471,6 +480,95 @@ fn allocation_collision_prevents_runtime_execution() {
 }
 
 #[test]
+fn cancellation_cannot_interleave_an_activity_observation_transaction() {
+    let fixture = Fixture::new();
+    let repository = fixture.repo();
+    let now = utc_now();
+    let run = PipelineRun {
+        id: "observer-cancel-race".into(),
+        task_id: None,
+        worktree: None,
+        setup_error: None,
+        session: None,
+        pipeline_id: "pipeline".into(),
+        task: "task".into(),
+        started_at: now,
+        ended_at: None,
+        duration_ms: None,
+        events: vec![],
+        trace: vec![],
+        status: Status::Running,
+        steps: vec![],
+        config_snapshot: None,
+        current_step: None,
+        handoff: None,
+        pending_actions: vec![],
+    };
+    repository.create(&run).unwrap();
+    let observation = repository.acquire_action_lease(&run.id).unwrap();
+    let root = fixture.0.clone();
+    let cancel = std::thread::spawn(move || {
+        let repository_for_cancel = FilesystemRunRepository(root);
+        baton_core::features::runs::cancel_run(&repository_for_cancel, "observer-cancel-race")
+    });
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert_eq!(repository.load(&run.id).unwrap().status, Status::Running);
+    drop(observation);
+    assert_eq!(cancel.join().unwrap().unwrap().status, Status::Cancelled);
+}
+
+#[test]
+fn observer_retries_until_a_cancellation_transaction_is_visible() {
+    let fixture = Fixture::new();
+    let repository = fixture.repo();
+    let run = PipelineRun {
+        id: "observer-cancel-retry".into(),
+        task_id: None,
+        worktree: None,
+        setup_error: None,
+        session: None,
+        pipeline_id: "pipeline".into(),
+        task: "task".into(),
+        started_at: utc_now(),
+        ended_at: None,
+        duration_ms: None,
+        events: vec![],
+        trace: vec![],
+        status: Status::Running,
+        steps: vec![],
+        config_snapshot: None,
+        current_step: None,
+        handoff: None,
+        pending_actions: vec![],
+    };
+    repository.create(&run).unwrap();
+    let lease = repository.acquire_action_lease(&run.id).unwrap();
+    let root = fixture.0.clone();
+    let cancel = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let repository = FilesystemRunRepository(root);
+        let mut run = repository.load("observer-cancel-retry").unwrap();
+        run.status = Status::Cancelled;
+        run.ended_at = Some(utc_now());
+        repository.save(&run).unwrap();
+        drop(lease);
+    });
+    let cancelled = || {
+        repository
+            .load(&run.id)
+            .is_ok_and(|run| run.status == Status::Cancelled)
+    };
+    let result = baton_core::features::pipeline_engine::acquire_action_lease_retry(
+        &repository,
+        &run.id,
+        &cancelled,
+    );
+    assert!(matches!(result, Err(error) if error.contains("cancelled")));
+    cancel.join().unwrap();
+    assert_eq!(repository.load(&run.id).unwrap().status, Status::Cancelled);
+}
+
+#[test]
 fn cancelled_run_retains_its_workspace() {
     struct Cancel(FilesystemRunRepository);
     impl AgentRuntime for Cancel {
@@ -499,6 +597,9 @@ fn cancelled_run_retains_its_workspace() {
     )
     .unwrap();
     assert_eq!(run.status, Status::Cancelled);
+    assert_eq!(run.steps[0].status, Status::Cancelled);
+    assert!(run.steps[0].ended_at.is_some());
+    assert!(run.steps[0].duration_ms.is_some());
     assert_eq!(run.steps[1].status, Status::Pending);
     let workspace = run.worktree.unwrap();
     assert_eq!(workspace.lifecycle, "retained");

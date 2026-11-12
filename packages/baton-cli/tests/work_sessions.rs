@@ -86,6 +86,10 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
         .unwrap();
     assert_eq!(result["currentStep"], "review");
     assert_eq!(result["steps"][0]["outcome"], "completed");
+    assert!(result["steps"][0]["startedAt"].is_string());
+    assert!(result["steps"][0]["endedAt"].is_string());
+    assert!(result["steps"][0]["durationMs"].is_number());
+    assert!(result["steps"][0]["usage"].is_null());
     assert!(
         result["steps"][0]["output"]
             .as_str()
@@ -117,6 +121,9 @@ async fn missing_agent_outcome_stops_the_run() {
         .await
         .unwrap();
     assert_eq!(status["status"], "failed");
+    assert!(status["steps"][0]["startedAt"].is_string());
+    assert!(status["steps"][0]["endedAt"].is_string());
+    assert!(status["steps"][0]["durationMs"].is_number());
     assert_eq!(status["steps"].as_array().unwrap().len(), 1);
     assert!(
         status["steps"][0]["error"]

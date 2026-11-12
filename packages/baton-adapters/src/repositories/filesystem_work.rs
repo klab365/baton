@@ -159,7 +159,27 @@ impl RunRepository for FilesystemWorkRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkProcessLock;
+    use super::{FilesystemWorkRepository, WorkProcessLock};
+    use baton_core::ports::runs::RunRepository;
+
+    #[test]
+    fn work_action_contention_is_retried_until_available() {
+        let workspace = tempfile::tempdir().unwrap();
+        let repository = FilesystemWorkRepository(workspace.path().to_path_buf());
+        let lease = repository.acquire_action_lease("work-run").unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            drop(lease);
+        });
+        let not_cancelled = || false;
+        let _lease = baton_core::features::pipeline_engine::acquire_action_lease_retry(
+            &repository,
+            "work-run",
+            &not_cancelled,
+        )
+        .unwrap();
+        release.join().unwrap();
+    }
 
     #[test]
     fn lock_is_released_even_if_a_descriptor_is_inherited() {

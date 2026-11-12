@@ -1,6 +1,6 @@
 use baton_core::{
     domain::pipeline::{PipelineRun, RunEvent, Status},
-    features::pipeline_engine::utc_now,
+    features::pipeline_engine::{elapsed_ms, utc_now},
     ports::{
         runs::{RunActionLease, RunRepository},
         worktrees::WorktreeManager,
@@ -126,12 +126,31 @@ impl FilesystemRunRepository {
         for mut run in self.list()? {
             if run.status == Status::Running {
                 run.status = Status::Failed;
-                run.ended_at = Some(utc_now());
-                run.duration_ms = None;
+                let ended_at = utc_now();
+                run.ended_at = Some(ended_at.clone());
+                run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+                if let Some(step) = run
+                    .steps
+                    .iter_mut()
+                    .rev()
+                    .find(|step| step.status == Status::Running)
+                {
+                    step.status = Status::Failed;
+                    step.error = Some(
+                        "Interrupted by server restart; reconcile side effects before resuming"
+                            .into(),
+                    );
+                    step.output = Some("Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile potentially completed external actions before continuing; do not repeat side effects blindly.".into());
+                    step.ended_at = Some(ended_at.clone());
+                    step.duration_ms = step
+                        .started_at
+                        .as_deref()
+                        .and_then(|started| elapsed_ms(started, &ended_at));
+                }
                 let event = RunEvent {
                     run_id: run.id.clone(),
                     status: Status::Failed,
-                    occurred_at: utc_now(),
+                    occurred_at: ended_at,
                     message: Some("Run interrupted by server restart".into()),
                 };
                 run.events.push(event.clone());

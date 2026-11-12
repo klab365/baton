@@ -127,6 +127,24 @@ impl AgentRuntime for ConfiguredRuntime {
         allowed_outcomes: &[Outcome],
         cancelled: &dyn Fn() -> bool,
     ) -> Result<String, String> {
+        self.execute_pipeline_step_observed(
+            directory,
+            agent,
+            input,
+            allowed_outcomes,
+            cancelled,
+            &mut |_| Ok(()),
+        )
+    }
+    fn execute_pipeline_step_observed(
+        &mut self,
+        directory: &Path,
+        agent: &Agent,
+        input: &str,
+        allowed_outcomes: &[Outcome],
+        cancelled: &dyn Fn() -> bool,
+        observer: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+    ) -> Result<String, String> {
         self.decision = None;
         self.trace.clear();
         let resolved = baton_core::features::skills::resolve(agent, &self.skills)?;
@@ -157,6 +175,7 @@ impl AgentRuntime for ConfiguredRuntime {
                             .credential_id
                             .as_ref()
                             .map(|id| self.auth_root.join("auth").join(id)),
+                        observer,
                     },
                     allowed_outcomes,
                     cancelled,

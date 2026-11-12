@@ -5,7 +5,7 @@ use crate::{
     },
     domain::project::{Agent, Outcome, PipelineStep, ProjectConfig},
     ports::{
-        runs::RunRepository,
+        runs::{RunActionLease, RunRepository},
         runtime::{AgentDecision, AgentRuntime, MAX_HANDOFF_BYTES},
     },
 };
@@ -41,6 +41,24 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
             self.cancelled,
         )
     }
+    fn execute_pipeline_step_observed(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+        allowed_outcomes: &[Outcome],
+        _cancelled: &dyn Fn() -> bool,
+        observer: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+    ) -> Result<String, String> {
+        self.runtime.execute_pipeline_step_observed(
+            directory,
+            agent,
+            input,
+            allowed_outcomes,
+            self.cancelled,
+            observer,
+        )
+    }
     fn take_decision(&mut self) -> Option<AgentDecision> {
         self.runtime.take_decision()
     }
@@ -49,6 +67,31 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
     }
     fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         self.runtime.take_trace()
+    }
+}
+
+pub fn acquire_action_lease_retry(
+    repository: &dyn RunRepository,
+    run_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Box<dyn RunActionLease>, String> {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if cancelled() {
+            return Err("Run cancelled".into());
+        }
+        match repository.acquire_action_lease(run_id) {
+            Ok(lease) => return Ok(lease),
+            Err(error)
+                if matches!(
+                    error.as_str(),
+                    "Run action is already in progress" | "Work action is already in progress"
+                ) && Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -67,6 +110,39 @@ pub(crate) fn publish(
     repository.save(run)?;
     repository.publish(&event)
 }
+fn acquire_active_run_lease(
+    repository: &dyn RunRepository,
+    run: &PipelineRun,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Box<dyn RunActionLease>, String> {
+    let lease = acquire_action_lease_retry(repository, &run.id, cancelled)?;
+    let persisted = repository.load(&run.id)?;
+    if persisted.status != Status::Running || persisted.current_step != run.current_step {
+        return Err("Run cancelled or active step changed".into());
+    }
+    Ok(lease)
+}
+
+fn acquire_current_attempt_lease(
+    repository: &dyn RunRepository,
+    run: &PipelineRun,
+    index: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Box<dyn RunActionLease>, String> {
+    let lease = acquire_action_lease_retry(repository, &run.id, cancelled)?;
+    let persisted = repository.load(&run.id)?;
+    if persisted.status != Status::Running
+        || !persisted.steps.iter().any(|step| {
+            step.step_id == run.steps[index].step_id
+                && step.attempt == run.steps[index].attempt
+                && step.status == Status::Running
+        })
+    {
+        return Err("Run cancelled or attempt changed".into());
+    }
+    Ok(lease)
+}
+
 fn cancelled_run(
     repository: &dyn RunRepository,
     run: &PipelineRun,
@@ -80,6 +156,21 @@ fn cancelled_run(
     if current.worktree.is_none() && run.worktree.is_some() {
         current.worktree = run.worktree.clone();
     }
+    let ended_at = utc_now();
+    if let Some(step) = current
+        .steps
+        .iter_mut()
+        .rev()
+        .find(|step| step.status == Status::Running)
+    {
+        step.status = Status::Cancelled;
+        step.ended_at = Some(ended_at.clone());
+        step.duration_ms = step
+            .started_at
+            .as_deref()
+            .and_then(|start| elapsed_ms(start, &ended_at));
+    }
+    current.ended_at.get_or_insert(ended_at);
     for event in &run.events {
         if !current.events.contains(event) {
             current.events.push(event.clone());
@@ -89,9 +180,100 @@ fn cancelled_run(
     Ok(Some(current))
 }
 
-fn finish_run(run: &mut PipelineRun, started: Instant) {
-    run.ended_at = Some(utc_now());
-    account_duration(run, started);
+pub fn append_bounded_trace(
+    run: &mut PipelineRun,
+    entries: impl IntoIterator<Item = RunTraceEntry>,
+) {
+    const MAX_TRACE_BYTES: usize = 256 * 1024;
+    const MAX_TRACE_ENTRIES: usize = 512;
+    const RUN_LIMIT_MARKER: &str = "Run trace limits reached; later events omitted";
+    const MAX_ENTRY_BYTES: usize = 8 * 1024;
+    const TRUNCATION_RESERVE: usize = 128;
+    if run
+        .trace
+        .iter()
+        .any(|entry| entry.kind == "traceTruncated" && entry.content == RUN_LIMIT_MARKER)
+    {
+        return;
+    }
+    let mut used = run.trace.iter().fold(0usize, |used, entry| {
+        used.saturating_add(entry.content.len())
+            .saturating_add(entry.kind.len())
+            .saturating_add(entry.occurred_at.len())
+    });
+    let mut truncated = false;
+    for mut entry in entries {
+        if run.trace.iter().any(|saved| {
+            saved.attempt == entry.attempt
+                && saved.kind == entry.kind
+                && saved.occurred_at == entry.occurred_at
+                && (saved.content == entry.content
+                    || matches!(
+                        (
+                            serde_json::from_str::<serde_json::Value>(&saved.content),
+                            serde_json::from_str::<serde_json::Value>(&entry.content)
+                        ),
+                        (Ok(saved), Ok(incoming)) if saved == incoming
+                    ))
+        }) {
+            continue;
+        }
+        if run.trace.len() >= MAX_TRACE_ENTRIES - 1 || used >= MAX_TRACE_BYTES - TRUNCATION_RESERVE
+        {
+            truncated = true;
+            break;
+        }
+        let overhead = entry.kind.len() + entry.occurred_at.len();
+        let available = (MAX_TRACE_BYTES - TRUNCATION_RESERVE)
+            .saturating_sub(used)
+            .saturating_sub(overhead);
+        let allowed = available.min(MAX_ENTRY_BYTES.saturating_sub(overhead));
+        if allowed == 0 {
+            truncated = true;
+            break;
+        }
+        if entry.content.len() > allowed {
+            truncated = true;
+            let marker = "…[truncated]";
+            let mut end = if allowed > marker.len() {
+                allowed - marker.len()
+            } else {
+                allowed
+            };
+            while !entry.content.is_char_boundary(end) {
+                end -= 1;
+            }
+            entry.content.truncate(end);
+            if allowed > marker.len() {
+                entry.content.push_str(marker);
+            }
+        }
+        used += entry.content.len() + overhead;
+        run.trace.push(entry);
+        if truncated {
+            break;
+        }
+    }
+    if truncated {
+        run.trace.push(RunTraceEntry {
+            attempt: None,
+            occurred_at: utc_now(),
+            kind: "traceTruncated".into(),
+            content: RUN_LIMIT_MARKER.into(),
+        });
+    }
+}
+
+fn finish_run(run: &mut PipelineRun, _started: Instant) {
+    let ended_at = utc_now();
+    run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+    run.ended_at = Some(ended_at);
+}
+
+fn finish_step_attempt(step: &mut StepRun, started: Instant) {
+    let ended = utc_now();
+    step.duration_ms = Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+    step.ended_at = Some(ended);
 }
 
 fn account_duration(run: &mut PipelineRun, started: Instant) {
@@ -100,6 +282,54 @@ fn account_duration(run: &mut PipelineRun, started: Instant) {
             .unwrap_or(0)
             .saturating_add(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
     );
+}
+
+pub fn elapsed_ms(start: &str, end: &str) -> Option<u64> {
+    fn parse(value: &str) -> Option<i64> {
+        let b = value.as_bytes();
+        if b.len() != 24
+            || b[4] != b'-'
+            || b[7] != b'-'
+            || b[10] != b'T'
+            || b[13] != b':'
+            || b[16] != b':'
+            || b[19] != b'.'
+            || b[23] != b'Z'
+        {
+            return None;
+        }
+        let number = |range: std::ops::Range<usize>| {
+            std::str::from_utf8(&b[range]).ok()?.parse::<i64>().ok()
+        };
+        let (y, m, d, hh, mm, ss, ms) = (
+            number(0..4)?,
+            number(5..7)?,
+            number(8..10)?,
+            number(11..13)?,
+            number(14..16)?,
+            number(17..19)?,
+            number(20..23)?,
+        );
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let month_days = match m {
+            2 if leap => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            _ => return None,
+        };
+        if !(1..=month_days).contains(&d) || hh > 23 || mm > 59 || ss > 60 || ms > 999 {
+            return None;
+        }
+        let y = y - i64::from(m <= 2);
+        let era = if y >= 0 { y } else { y - 399 } / 400;
+        let yoe = y - era * 400;
+        let mp = m + if m > 2 { -3 } else { 9 };
+        let doy = (153 * mp + 2) / 5 + d - 1;
+        let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        Some((((days * 24 + hh) * 60 + mm) * 60 + ss) * 1000 + ms)
+    }
+    parse(end)?.checked_sub(parse(start)?)?.try_into().ok()
 }
 
 pub fn utc_now() -> String {
@@ -216,6 +446,11 @@ pub fn start_pipeline_for_task_with_worktree(
                 outcome: None,
                 selected_transition: None,
                 attempt: 0,
+                started_at: None,
+                ended_at: None,
+                duration_ms: None,
+                model: None,
+                usage: None,
             })
             .collect(),
     };
@@ -265,6 +500,11 @@ fn pending(step: &PipelineStep) -> StepRun {
         outcome: None,
         selected_transition: None,
         attempt: 0,
+        started_at: None,
+        ended_at: None,
+        duration_ms: None,
+        model: None,
+        usage: None,
     }
 }
 
@@ -382,7 +622,7 @@ fn repeated_blocker(
     false
 }
 
-pub(crate) fn execute_graph(
+pub fn execute_graph(
     config: &ProjectConfig,
     mut run: PipelineRun,
     runtime: &mut dyn AgentRuntime,
@@ -415,9 +655,26 @@ pub(crate) fn execute_graph(
             run.steps.push(pending(step));
             run.steps.len() - 1
         };
+        let cancellation_id = run.id.clone();
+        let cancelled = || {
+            repository
+                .load(&cancellation_id)
+                .map(|r| r.status == Status::Cancelled)
+                .unwrap_or(true)
+        };
+        let activation_lease = match acquire_active_run_lease(repository, &run, &cancelled) {
+            Ok(lease) => lease,
+            Err(error) => {
+                if let Some(cancelled) = cancelled_run(repository, &run)? {
+                    return Ok(cancelled);
+                }
+                return Err(error);
+            }
+        };
         run.steps[index].attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
         run.steps[index].input = Some(input.clone());
         if step.is_human() {
+            run.steps[index].started_at = Some(utc_now());
             run.steps[index].status = Status::WaitingHuman;
             run.status = Status::WaitingHuman;
             run.pending_actions = if step.transitions.is_empty() {
@@ -437,18 +694,14 @@ pub(crate) fn execute_graph(
             return Ok(run);
         }
         run.steps[index].status = Status::Running;
+        run.steps[index].started_at = Some(utc_now());
+        let step_clock = Instant::now();
         publish(
             repository,
             &mut run,
             Some(format!("Step {} started", step.id)),
         )?;
-        let cancellation_id = run.id.clone();
-        let cancelled = || {
-            repository
-                .load(&cancellation_id)
-                .map(|r| r.status == Status::Cancelled)
-                .unwrap_or(true)
-        };
+        drop(activation_lease);
         if let Some(command) = step.command() {
             let result = runtime.execute_shell(
                 &run.worktree.as_ref().ok_or("Missing worktree")?.path,
@@ -459,6 +712,15 @@ pub(crate) fn execute_graph(
             if let Some(cancelled) = cancelled_run(repository, &run)? {
                 return Ok(cancelled);
             }
+            let _lease = match acquire_current_attempt_lease(repository, &run, index, &cancelled) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    if let Some(cancelled) = cancelled_run(repository, &run)? {
+                        return Ok(cancelled);
+                    }
+                    return Err(error);
+                }
+            };
             match result {
                 Ok(result) => {
                     let outcome = if result.exit_code == Some(0) {
@@ -485,6 +747,7 @@ pub(crate) fn execute_graph(
                     run.status = Status::Failed;
                 }
             }
+            finish_step_attempt(&mut run.steps[index], step_clock);
             publish(
                 repository,
                 &mut run,
@@ -502,31 +765,40 @@ pub(crate) fn execute_graph(
             .iter()
             .map(|transition| transition.outcome.clone())
             .collect::<Vec<_>>();
+        run.steps[index].model = agent.model.clone();
         let assigned = agent.clone();
         runtime.set_history_required(run.steps.iter().any(|attempt| {
             attempt.agent_id == agent.id && attempt.attempt > 0 && attempt.output.is_some()
         }));
-        let cancellation_id = run.id.clone();
-        let cancelled = || {
-            repository
-                .load(&cancellation_id)
-                .map(|r| r.status == Status::Cancelled)
-                .unwrap_or(true)
-        };
+        let worktree_path = run
+            .worktree
+            .as_ref()
+            .ok_or("Missing isolated worktree")?
+            .path
+            .clone();
         let mut guarded = CancellableRuntime {
             runtime,
             cancelled: &cancelled,
         };
+        let mut observer = |mut entry: RunTraceEntry| {
+            let _lease = acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
+            entry.attempt = Some(run.steps[index].attempt);
+            let kind = entry.kind.clone();
+            append_bounded_trace(&mut run, [entry]);
+            publish(
+                repository,
+                &mut run,
+                Some(format!("Observed runtime activity: {kind}")),
+            )
+        };
         let result = guarded
-            .execute_pipeline_step(
-                &run.worktree
-                    .as_ref()
-                    .ok_or("Missing isolated worktree")?
-                    .path,
+            .execute_pipeline_step_observed(
+                &worktree_path,
                 &assigned,
                 &input,
                 &allowed_outcomes,
                 &cancelled,
+                &mut observer,
             )
             .and_then(|output| {
                 if output.len() > MAX_HANDOFF_BYTES {
@@ -549,11 +821,11 @@ pub(crate) fn execute_graph(
                     Ok((decision.outcome, decision.summary))
                 }
             });
-        run.trace
-            .extend(runtime.take_trace().into_iter().map(|mut entry| {
-                entry.attempt = Some(run.steps[index].attempt);
-                entry
-            }));
+        let mut trace = runtime.take_trace();
+        for entry in &mut trace {
+            entry.attempt = Some(run.steps[index].attempt);
+        }
+        append_bounded_trace(&mut run, trace);
         for message in runtime.take_events() {
             run.events.push(RunEvent {
                 run_id: run.id.clone(),
@@ -565,6 +837,15 @@ pub(crate) fn execute_graph(
         if let Some(cancelled) = cancelled_run(repository, &run)? {
             return Ok(cancelled);
         }
+        let _lease = match acquire_current_attempt_lease(repository, &run, index, &cancelled) {
+            Ok(lease) => lease,
+            Err(error) => {
+                if let Some(cancelled) = cancelled_run(repository, &run)? {
+                    return Ok(cancelled);
+                }
+                return Err(error);
+            }
+        };
         match result {
             Ok((outcome, output)) => {
                 let repeated =
@@ -591,6 +872,7 @@ pub(crate) fn execute_graph(
                 run.status = Status::Failed;
             }
         }
+        finish_step_attempt(&mut run.steps[index], step_clock);
         publish(
             repository,
             &mut run,
@@ -605,6 +887,80 @@ pub(crate) fn execute_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_storage_is_bounded_by_bytes_entries_and_per_entry_size() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "r", "pipelineId": "p", "task": "t", "startedAt": "2026-01-01T00:00:00.000Z",
+            "status": "running", "steps": [], "trace": [], "configSnapshot": null
+        }))
+        .unwrap();
+        let entries = (0..600).map(|_| RunTraceEntry {
+            attempt: Some(2),
+            occurred_at: utc_now(),
+            kind: "metadata".into(),
+            content: "x".repeat(9000),
+        });
+        append_bounded_trace(&mut run, entries);
+        assert!(run.trace.len() <= 512);
+        assert!(
+            run.trace
+                .iter()
+                .map(|entry| entry.content.len() + entry.kind.len() + entry.occurred_at.len())
+                .sum::<usize>()
+                <= 256 * 1024
+        );
+        assert!(run.trace.iter().all(|entry| entry.kind == "traceTruncated"
+            || (entry.attempt == Some(2) && entry.content.len() <= 8 * 1024)));
+        assert!(
+            run.trace
+                .iter()
+                .any(|entry| entry.content.ends_with("…[truncated]"))
+        );
+        assert_eq!(run.trace.last().unwrap().kind, "traceTruncated");
+    }
+
+    #[test]
+    fn capture_truncation_does_not_stop_later_run_or_attempt_traces() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id": "r", "pipelineId": "p", "task": "t", "startedAt": "2026-01-01T00:00:00.000Z",
+            "status": "running", "steps": [], "trace": [], "configSnapshot": null
+        }))
+        .unwrap();
+        run.trace.push(RunTraceEntry {
+            attempt: Some(1),
+            occurred_at: utc_now(),
+            kind: "traceTruncated".into(),
+            content: "Runtime activity capture limits reached; later events omitted".into(),
+        });
+        append_bounded_trace(
+            &mut run,
+            [RunTraceEntry {
+                attempt: Some(2),
+                occurred_at: utc_now(),
+                kind: "modelRequest".into(),
+                content: "later attempt data".into(),
+            }],
+        );
+        assert!(run.trace.iter().any(|entry| entry.attempt == Some(2)));
+    }
+
+    #[test]
+    fn computes_restart_safe_elapsed_time_from_persisted_timestamps() {
+        assert_eq!(
+            elapsed_ms("2024-02-29T23:59:59.500Z", "2024-03-01T00:00:00.250Z"),
+            Some(750)
+        );
+        assert_eq!(
+            elapsed_ms("2026-01-01T00:00:01.000Z", "2026-01-01T00:00:00.000Z"),
+            None
+        );
+        assert_eq!(elapsed_ms("unavailable", "2026-01-01T00:00:00.000Z"), None);
+        assert_eq!(
+            elapsed_ms("2026-02-31T00:00:00.000Z", "2026-03-01T00:00:00.000Z"),
+            None
+        );
+    }
 
     #[test]
     fn detects_only_repeated_blockers_after_human_response() {

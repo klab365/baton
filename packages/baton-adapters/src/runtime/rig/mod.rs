@@ -6,7 +6,7 @@ mod tools;
 mod wire_trace;
 
 use self::{
-    plugins::{Completed, StepPlugin},
+    plugins::{Activities, Completed, RegisteredTools, StepPlugin},
     tools::{ReportOutcome, outcome_name},
 };
 use baton_core::{
@@ -48,6 +48,67 @@ use std::{
 
 const MAX_PROJECT_INSTRUCTIONS_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
+
+pub(super) fn push_activity(entries: &mut Vec<String>, content: String) {
+    const MAX_ENTRIES: usize = 128;
+    const MAX_BYTES: usize = 64 * 1024;
+    const MAX_ENTRY_BYTES: usize = 4096;
+    if entries.iter().any(|entry| {
+        serde_json::from_str::<serde_json::Value>(entry)
+            .ok()
+            .is_some_and(|value| {
+                value.get("captureTruncated").and_then(|v| v.as_bool()) == Some(true)
+            })
+    }) {
+        return;
+    }
+    let used = entries.iter().map(String::len).sum::<usize>();
+    let marker = serde_json::json!({
+        "kind": "traceTruncated",
+        "occurredAt": baton_core::features::pipeline_engine::utc_now(),
+        "captureTruncated": true,
+        "content": "Runtime activity capture limits reached; later events omitted",
+    })
+    .to_string();
+    if entries.len() >= MAX_ENTRIES - 1
+        || content.len() > MAX_ENTRY_BYTES
+        || used
+            .saturating_add(content.len())
+            .saturating_add(marker.len())
+            > MAX_BYTES
+    {
+        entries.push(marker);
+    } else {
+        entries.push(content);
+    }
+}
+
+fn trace_kind(content: &str, fallback: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| value.get("kind")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn sort_trace_entries(entries: &mut [RunTraceEntry]) {
+    entries.sort_by(|left, right| left.occurred_at.cmp(&right.occurred_at));
+}
+
+fn captured_entry(content: &str, fallback: &str) -> RunTraceEntry {
+    RunTraceEntry {
+        attempt: None,
+        occurred_at: trace_timestamp(content),
+        kind: trace_kind(content, fallback),
+        content: content.to_owned(),
+    }
+}
+
+fn trace_timestamp(content: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| value.get("occurredAt")?.as_str().map(str::to_owned))
+        .unwrap_or_else(baton_core::features::pipeline_engine::utc_now)
+}
 
 fn validate_context_size(conversation: &Conversation) -> Result<(), String> {
     let bytes =
@@ -140,6 +201,7 @@ pub struct RigAgentContext<'a> {
     pub history_required: bool,
     pub credential: Option<(baton_core::domain::credentials::Credential, Option<String>)>,
     pub auth_store_dir: Option<std::path::PathBuf>,
+    pub observer: &'a mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
 }
 impl RigRuntime {
     pub fn execute(
@@ -365,6 +427,7 @@ impl RigRuntime {
             .map_err(|e| format!("Write Rig execution marker: {e}"))?;
         drop(marker);
         let workspace: Arc<dyn Workspace> = Arc::new(Local);
+        let activities: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let mut app = App::new();
         app.insert_resource(ProjectRoot(root.clone()))
             .insert_resource(ProjectWorkspace(workspace.clone()))
@@ -373,6 +436,7 @@ impl RigRuntime {
                 &session,
             )))
             .insert_resource(Invoked::default())
+            .insert_resource(Activities(activities.clone()))
             .set_error_handler(rig_harness::error::warn)
             .add_plugins((
                 HeadlessPlugins
@@ -444,6 +508,12 @@ impl RigRuntime {
                 decision.clone(),
             ));
         }
+        app.insert_resource(RegisteredTools(
+            registered_tools
+                .iter()
+                .map(|tool| (*tool).to_owned())
+                .collect(),
+        ));
         app.finish();
         app.cleanup();
         app.update();
@@ -481,12 +551,13 @@ impl RigRuntime {
             kind: "runtimeSetup".into(),
             content: serde_json::json!({
                 "agentId": baton_agent.id,
-                "systemPrompt": preamble,
+                "model": model_reference,
                 "registeredTools": registered_tools,
                 "allowedOutcomes": allowed_outcomes.iter().map(outcome_name).collect::<Vec<_>>(),
             })
             .to_string(),
         };
+        (agent_context.observer)(setup_trace.clone())?;
         let world = app.world_mut();
         let agents = world
             .query_filtered::<Entity, (With<Agent>, Without<SpawnedBy>)>()
@@ -518,8 +589,48 @@ impl RigRuntime {
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
+        let mut observed_requests = 0;
+        let mut observed_wire = 0;
+        let mut observed_activities = 0;
         loop {
             app.update();
+            let mut observed = Vec::new();
+            let requests = request_traces
+                .lock()
+                .map_err(|_| "Runtime request trace is unavailable".to_owned())?;
+            observed.extend(
+                requests
+                    .iter()
+                    .skip(observed_requests)
+                    .map(|content| captured_entry(content, "runtimeRequest")),
+            );
+            observed_requests = requests.len();
+            drop(requests);
+            let wire = wire_traces
+                .lock()
+                .map_err(|_| "Runtime wire trace is unavailable".to_owned())?;
+            observed.extend(
+                wire.iter()
+                    .skip(observed_wire)
+                    .map(|content| captured_entry(content, "runtimeWireRequest")),
+            );
+            observed_wire = wire.len();
+            drop(wire);
+            let activities = activities
+                .lock()
+                .map_err(|_| "Runtime activity trace is unavailable".to_owned())?;
+            observed.extend(
+                activities
+                    .iter()
+                    .skip(observed_activities)
+                    .map(|content| captured_entry(content, "runtimeActivity")),
+            );
+            observed_activities = activities.len();
+            drop(activities);
+            sort_trace_entries(&mut observed);
+            for entry in observed {
+                (agent_context.observer)(entry)?;
+            }
             if let Some(outcome) = app.world_mut().resource_mut::<Completed>().0.take() {
                 if let Some(failure) = app
                     .world()
@@ -538,38 +649,7 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
-                let mut transcript: Vec<RunTraceEntry> = app
-                    .world()
-                    .get::<Conversation>(entity)
-                    .and_then(|conversation| serde_json::to_string_pretty(&conversation.0).ok())
-                    .map(|content| RunTraceEntry {
-                        attempt: None,
-                        occurred_at: baton_core::features::pipeline_engine::utc_now(),
-                        kind: "runtimeTranscript".into(),
-                        content,
-                    })
-                    .into_iter()
-                    .collect();
-                let requests = request_traces
-                    .lock()
-                    .map_err(|_| "Runtime request trace is unavailable".to_owned())?;
-                let mut trace = vec![setup_trace];
-                trace.extend(requests.iter().map(|content| RunTraceEntry {
-                    attempt: None,
-                    occurred_at: baton_core::features::pipeline_engine::utc_now(),
-                    kind: "runtimeRequest".into(),
-                    content: content.clone(),
-                }));
-                let wire = wire_traces
-                    .lock()
-                    .map_err(|_| "Runtime wire trace is unavailable".to_owned())?;
-                trace.extend(wire.iter().map(|content| RunTraceEntry {
-                    attempt: None,
-                    occurred_at: baton_core::features::pipeline_engine::utc_now(),
-                    kind: "runtimeWireRequest".into(),
-                    content: content.clone(),
-                }));
-                trace.append(&mut transcript);
+                let trace = Vec::new();
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
                 if let Some(failure) = app
@@ -600,8 +680,8 @@ impl RigRuntime {
 
 #[cfg(test)]
 mod outcome_prompt_tests {
-    use super::append_outcome_instruction;
-    use baton_core::domain::project::Outcome;
+    use super::{append_outcome_instruction, push_activity, sort_trace_entries};
+    use baton_core::domain::{pipeline::RunTraceEntry, project::Outcome};
 
     #[test]
     fn outcome_prompt_uses_only_configured_choices_without_global_blocked_policy() {
@@ -619,6 +699,57 @@ mod outcome_prompt_tests {
         assert!(other_policy.contains("Plan only; do not modify files."));
         assert!(other_policy.contains("approved, rejected"));
         assert!(!other_policy.contains("completed"));
+    }
+
+    #[test]
+    fn activity_capture_marks_omitted_events_at_entry_and_size_limits() {
+        let mut entries = Vec::new();
+        for index in 0..200 {
+            push_activity(&mut entries, format!("{index}"));
+        }
+        let marker: serde_json::Value = serde_json::from_str(entries.last().unwrap()).unwrap();
+        assert_eq!(entries.len(), 128);
+        assert_eq!(marker["kind"], "traceTruncated");
+        let prior = entries.len();
+        push_activity(&mut entries, "more".into());
+        assert_eq!(entries.len(), prior);
+
+        let mut oversized = Vec::new();
+        push_activity(&mut oversized, "x".repeat(4097));
+        let marker: serde_json::Value = serde_json::from_str(oversized.last().unwrap()).unwrap();
+        assert_eq!(marker["captureTruncated"], true);
+    }
+
+    #[test]
+    fn merged_activity_batch_is_sorted_by_observation_timestamp() {
+        let mut entries = vec![
+            RunTraceEntry {
+                attempt: Some(2),
+                occurred_at: "2026-01-01T00:00:02.000Z".into(),
+                kind: "toolResult".into(),
+                content: "2".into(),
+            },
+            RunTraceEntry {
+                attempt: Some(2),
+                occurred_at: "2026-01-01T00:00:01.000Z".into(),
+                kind: "modelResponse".into(),
+                content: "1".into(),
+            },
+            RunTraceEntry {
+                attempt: Some(2),
+                occurred_at: "2026-01-01T00:00:03.000Z".into(),
+                kind: "wireRequest".into(),
+                content: "3".into(),
+            },
+        ];
+        sort_trace_entries(&mut entries);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.content.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"]
+        );
     }
 
     #[test]

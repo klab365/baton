@@ -28,6 +28,29 @@ pub struct StepRun {
     pub selected_transition: Option<crate::domain::project::Transition>,
     #[serde(default)]
     pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<crate::domain::runtime::RuntimeModel>,
+    /// Absent means provider usage was unavailable or not collected, never zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ModelUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+    pub estimated_cost: Option<String>,
+    pub price_source: Option<String>,
+    pub price_checked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,10 +126,16 @@ mod tests {
         let run: PipelineRun = serde_json::from_value(serde_json::json!({
             "id": "run-1", "pipelineId": "pipeline", "task": "task",
             "startedAt": "2026-01-01T00:00:00Z", "endedAt": null,
-            "durationMs": null, "events": [], "status": "running", "steps": [],
-            "configSnapshot": null
+            "durationMs": null, "events": [], "status": "running",
+            "configSnapshot": null,
+            "steps": [{ "stepId": "build", "agentId": "builder", "status": "succeeded", "input": null, "output": null, "error": null }]
         }))
         .unwrap();
         assert!(run.trace.is_empty());
+        assert_eq!(run.steps[0].started_at, None);
+        assert_eq!(run.steps[0].ended_at, None);
+        assert_eq!(run.steps[0].duration_ms, None);
+        assert_eq!(run.steps[0].model, None);
+        assert_eq!(run.steps[0].usage, None);
     }
 }

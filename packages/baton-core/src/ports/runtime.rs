@@ -65,6 +65,19 @@ pub trait AgentRuntime: Send {
         self.execute_cancellable(directory, agent, input, cancelled)
     }
 
+    /// Executes a step while forwarding bounded, sanitized activity as it is observed.
+    fn execute_pipeline_step_observed(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+        allowed_outcomes: &[Outcome],
+        cancelled: &dyn Fn() -> bool,
+        _observer: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+    ) -> Result<String, String> {
+        self.execute_pipeline_step(directory, agent, input, allowed_outcomes, cancelled)
+    }
+
     /// Takes the structured decision reported by the last pipeline step, if any.
     fn take_decision(&mut self) -> Option<AgentDecision> {
         None

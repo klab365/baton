@@ -1,23 +1,22 @@
 use crate::{
     domain::{
         pipeline::{PipelineRun, Status, transitions::route},
-        project::Outcome,
+        project::{Outcome, ProjectConfig},
     },
-    features::pipeline_engine::{execute_graph, publish},
+    features::pipeline_engine::{elapsed_ms, execute_graph, publish, utc_now},
     ports::{
         runs::RunRepository,
         runtime::{AgentRuntime, MAX_HANDOFF_BYTES},
     },
 };
 
-/// Explicit user action only. Invalid actions do not consume or mutate the wait.
-pub fn resume_human(
+/// Validate and persist an explicit human decision before releasing the action lease.
+pub fn prepare_human_resume(
     id: &str,
     outcome: Outcome,
     response: &str,
-    runtime: &mut dyn AgentRuntime,
     repository: &dyn RunRepository,
-) -> Result<PipelineRun, String> {
+) -> Result<(ProjectConfig, PipelineRun), String> {
     let mut run = repository.load(id)?;
     if run.status != Status::WaitingHuman {
         return Err("Run is not waiting for a human".into());
@@ -62,6 +61,12 @@ pub fn resume_human(
         .iter()
         .rposition(|attempt| attempt.status == Status::WaitingHuman)
         .ok_or("Missing human attempt")?;
+    let ended_at = utc_now();
+    run.steps[index].ended_at = Some(ended_at.clone());
+    run.steps[index].duration_ms = run.steps[index]
+        .started_at
+        .as_deref()
+        .and_then(|started| elapsed_ms(started, &ended_at));
     run.handoff = Some(response.into());
     run.steps[index].output = Some(response.into());
     run.steps[index].outcome = Some(outcome.clone());
@@ -74,5 +79,17 @@ pub fn resume_human(
         &mut run,
         Some("Explicit human action received".into()),
     )?;
+    Ok((config, run))
+}
+
+/// Explicit user action only. Invalid actions do not consume or mutate the wait.
+pub fn resume_human(
+    id: &str,
+    outcome: Outcome,
+    response: &str,
+    runtime: &mut dyn AgentRuntime,
+    repository: &dyn RunRepository,
+) -> Result<PipelineRun, String> {
+    let (config, run) = prepare_human_resume(id, outcome, response, repository)?;
     execute_graph(&config, run, runtime, repository)
 }

@@ -18,7 +18,9 @@ let error = $state("");
 let responseText = $state("");
 let connection = $state<"connecting" | "live" | "reconnecting">("connecting");
 let refreshError = $state(false);
+let clock = $state(Date.now());
 onMount(() => {
+	const clockInterval = window.setInterval(() => (clock = Date.now()), 1000);
 	let refreshing = false;
 	let pending = false;
 	let stopped = false;
@@ -61,6 +63,7 @@ onMount(() => {
 	document.addEventListener("visibilitychange", visible);
 	return () => {
 		stopped = true;
+		window.clearInterval(clockInterval);
 		source.close();
 		window.clearInterval(interval);
 		document.removeEventListener("visibilitychange", visible);
@@ -73,6 +76,15 @@ const pipeline = $derived(
 );
 const humanActions = $derived(data.run.pendingActions ?? []);
 const attempts = $derived(replaySteps<any>(data.run.steps));
+const legacyTraceMayContainSensitiveContent = $derived(
+	(data.run.trace ?? []).some(
+		(entry: { kind: string; content: string }) =>
+			entry.kind === "runtimeTranscript" ||
+			entry.content.includes('"systemPrompt"') ||
+			entry.content.includes('"systemMessages"') ||
+			entry.content.includes('"messages"'),
+	),
+);
 const previousAttempt = $derived(attempts.at(-2));
 const failure = $derived(runFailure(data.run));
 function isHuman(stepId: string) {
@@ -169,11 +181,13 @@ async function cancel() {
 <div class="task-detail-layout">
 	<DetailPanel title="Replay · newest first" id="steps">
 		<p class="muted">{data.run.session ? "External work session: runtime activity and handoff context may not be recorded." : "Only persisted results, transitions and handoff context are shown."}{#if attempts.some((step: { attempt: number }) => !step.attempt)} Some older steps lack attempt numbers; their saved order is shown in reverse.{/if}</p>
-		{#if attempts.length}<ol class="run-steps timeline">{#each [...attempts].reverse() as step, index (index)}{@const stepTrace = (data.run.trace ?? []).filter((entry: { attempt?: number }) => step.attempt > 0 && entry.attempt === step.attempt)}<li id={`attempt-${step.attempt}`}><header><div class="step-heading"><span class="step-number">{step.attempt || "–"}</span><div><strong>{step.stepId}</strong><div class="step-meta">{isHuman(step.stepId) ? "Human decision" : step.agentId}</div></div></div><StatusBadge status={step.status} /></header>{#if step.outcome}<p class="step-route"><span>{step.outcome}</span>{#if step.selectedTransition}<span aria-hidden="true">→</span><span>{step.selectedTransition.to ?? "End run"}</span>{/if}</p>{/if}{#if step.output?.trim()}<div class="step-result"><span>{isHuman(step.stepId) ? "RESPONSE" : "RESULT"}</span>{#if step.output.length > 500}<Markdown value={step.output.slice(0, 350) + "…"} /><details><summary>Show full result</summary><Markdown value={step.output} /></details>{:else}<Markdown value={step.output} />{/if}</div>{:else if isHuman(step.stepId) && step.outcome}<p class="muted">No comment provided.</p>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}{#if stepTrace.length}<RunActivity entries={stepTrace} />{:else if !isHuman(step.stepId) && step.status !== "running"}<p class="muted">No activity linked to this attempt.</p>{/if}{#if step.input}<details><summary>Handoff / context received by this step</summary><pre>{step.input}</pre></details>{/if}</li>{/each}</ol>{:else}<p class="muted">No steps have started yet.</p>{/if}
+		{#if attempts.length}<ol class="run-steps timeline">{#each [...attempts].reverse() as step, index (index)}{@const stepTrace = (data.run.trace ?? []).filter((entry: { attempt?: number }) => step.attempt > 0 && entry.attempt === step.attempt)}<li id={`attempt-${step.attempt}`}><header><div class="step-heading"><span class="step-number">{step.attempt || "–"}</span><div><strong>{step.stepId}</strong><div class="step-meta">{isHuman(step.stepId) ? "Human decision" : step.agentId}</div></div></div><StatusBadge status={step.status} /></header><p class="muted">{step.startedAt ? `Started ${new Date(step.startedAt).toLocaleString()}` : "Start time unavailable"}{step.durationMs == null ? (step.status === "running" && step.startedAt ? ` · elapsed ${Math.floor(Math.max(0, clock - Date.parse(step.startedAt)) / 1000)}s` : step.status === "running" ? " · elapsed time unavailable" : " · duration unavailable") : ` · ${step.durationMs} ms`}</p><p class="muted">Model: {step.model ? `${step.model.provider}/${step.model.model}` : "not available"} · Input/output/cache tokens: {step.usage ? `${step.usage.inputTokens ?? "not available"}/${step.usage.outputTokens ?? "not available"}/${step.usage.cacheReadTokens ?? "not available"}/${step.usage.cacheWriteTokens ?? "not available"}` : "not available"} · Estimated cost: {step.usage?.estimatedCost ?? "not available"}{#if step.usage?.estimatedCost} ({step.usage.priceSource ?? "price source unavailable"}{step.usage.priceCheckedAt ? `, checked ${step.usage.priceCheckedAt}` : ""}){/if}</p>{#if step.outcome}<p class="step-route"><span>{step.outcome}</span>{#if step.selectedTransition}<span aria-hidden="true">→</span><span>{step.selectedTransition.to ?? "End run"}</span>{/if}</p>{/if}{#if step.output?.trim()}<div class="step-result"><span>{isHuman(step.stepId) ? "RESPONSE" : "RESULT"}</span>{#if step.output.length > 500}<Markdown value={step.output.slice(0, 350) + "…"} /><details><summary>Show full result</summary><Markdown value={step.output} /></details>{:else}<Markdown value={step.output} />{/if}</div>{:else if isHuman(step.stepId) && step.outcome}<p class="muted">No comment provided.</p>{/if}{#if step.error}<p class="field-error"><strong>Step failed:</strong> {step.error}</p>{/if}{#if stepTrace.length}<RunActivity entries={stepTrace} />{:else if !isHuman(step.stepId) && step.status !== "running"}<p class="muted">No activity linked to this attempt.</p>{/if}{#if step.input}<details><summary>Handoff / context received by this step</summary><pre>{step.input}</pre></details>{/if}</li>{/each}</ol>{:else}<p class="muted">No steps have started yet.</p>{/if}
 	</DetailPanel>
 	<DetailPanel title="Run details" id="diagnostics">
-		<dl class="task-facts"><div><dt>Task</dt><dd>{#if data.task}<a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a>{:else if data.run.taskId}Unavailable task ({data.run.taskId}){:else}No linked task{/if}</dd></div><div><dt>Run ID</dt><dd><code>{data.run.id}</code></dd></div><div><dt>Pipeline</dt><dd>{data.run.pipelineId}</dd></div><div><dt>Started</dt><dd>{new Date(data.run.startedAt).toLocaleString()}</dd></div><div><dt>Ended</dt><dd>{data.run.endedAt ? new Date(data.run.endedAt).toLocaleString() : "Not ended"}</dd></div><div><dt>Duration</dt><dd>{data.run.durationMs == null ? "Not available" : `${data.run.durationMs} ms`}</dd></div></dl>
-		<details><summary>Execution trace ({data.run.trace?.length ?? 0})</summary><p class="muted">Persisted agent messages, tool calls and results may contain sensitive information.</p>{#if data.run.trace?.length}<ol class="run-events">{#each data.run.trace as entry}<li><time datetime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString()}</time> <strong>{entry.kind}</strong><details><summary>Show entry</summary><pre>{entry.content}</pre></details></li>{/each}</ol>{:else}<p>No persisted runtime trace is available for this run.</p>{/if}</details>
+		<dl class="task-facts"><div><dt>Task</dt><dd>{#if data.task}<a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a>{:else if data.run.taskId}Unavailable task ({data.run.taskId}){:else}No linked task{/if}</dd></div><div><dt>Run ID</dt><dd><code>{data.run.id}</code></dd></div><div><dt>Pipeline</dt><dd>{data.run.pipelineId}</dd></div><div><dt>Started</dt><dd>{new Date(data.run.startedAt).toLocaleString()}</dd></div><div><dt>Ended</dt><dd>{data.run.endedAt ? new Date(data.run.endedAt).toLocaleString() : "Not ended"}</dd></div><div><dt>Duration</dt><dd>{["running", "waitingHuman"].includes(data.run.status) ? `${Math.floor(Math.max(0, clock - Date.parse(data.run.startedAt)) / 1000)} s elapsed` : data.run.durationMs == null ? "Not available" : `${data.run.durationMs} ms`}</dd></div></dl>
+		<p class="muted">Run-level token usage and cost: not available (provider telemetry is not collected).</p>
+		{#if ["running", "waitingHuman"].includes(data.run.status)}{@const latest = data.run.events.at(-1)}<p class="muted">Last persisted event: {latest ? `${new Date(latest.occurredAt).toLocaleString()} — ${latest.message ?? latest.status}` : "not available"}. This timestamp reports observation only; inactivity does not imply a stalled run.</p>{/if}
+		<details><summary>Execution trace ({data.run.trace?.length ?? 0})</summary><p class="muted">{legacyTraceMayContainSensitiveContent ? "This historical trace may contain prompts or transcript content; treat it as sensitive." : "Current traces show bounded model request/response and tool call/result status metadata only; prompts, arguments and result contents are omitted."} Rig session files may still contain sensitive content.</p>{#if data.run.trace?.length}<ol class="run-events">{#each data.run.trace as entry}<li><time datetime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString()}</time> <strong>{entry.kind}</strong><details><summary>Show entry</summary><pre>{entry.content}</pre></details></li>{/each}</ol>{:else}<p>No persisted runtime trace is available for this run.</p>{/if}</details>
 		<details><summary>Run events ({data.run.events.length})</summary><ol class="run-events">{#each data.run.events as event}<li><time datetime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time> — {event.message ?? event.status}</li>{/each}</ol></details>
 	</DetailPanel>
 </div>
