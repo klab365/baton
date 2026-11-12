@@ -4,7 +4,7 @@ use baton_core::{
 };
 #[test]
 fn resolves_only_assigned_skills_in_order_without_permission_changes() {
-    let mut agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent","systemPrompt":"Base","runtimeKind":"fake","model":null,"credentialId":null,"skillIds":["second","first"]})).unwrap();
+    let mut agent: Agent = serde_json::from_value(serde_json::json!({"id":"agent","systemPrompt":"Base","provider":"fake","model":null,"credentialId":null,"skillIds":["second","first"]})).unwrap();
     let skills = vec![
         Skill {
             id: "first".into(),

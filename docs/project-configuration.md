@@ -8,7 +8,16 @@ Project configuration lives in `.baton/`:
 
 The filename must match the object's `id`. Files are validated together before changes are saved; the revision token detects changes to any configuration file. Unchanged definitions retain their original formatting. Agent and pipeline files can be copied between projects, provided their references are available in the destination.
 
-Agents contain `id`, `instructions` (legacy `systemPrompt` is accepted when reading existing configuration), `runtimeKind`, optional `model` (`provider` and `model`), optional `credentialId`, `skillIds`, and optional `allowedTools`. Credential IDs are references only; secrets and OAuth records remain in the local credential vault.
+Agents contain `id`, `instructions`, `provider` (`rig` or `fake`), optional `model`, optional `credentialId`, `skillIds`, and optional `allowedTools`. The provider selects the agent runtime; a model is written as `model-provider/model-id`, for example `openai/gpt-4.1`. Credential IDs are references only; secrets and OAuth records remain in the local credential vault. Legacy `runtimeKind` and model objects are not supported; update old configuration and snapshots before loading them.
+
+```yaml
+id: builder
+instructions: Implement the task.
+provider: rig
+model: openai/gpt-4.1
+credentialId: openai-default
+skillIds: []
+```
 
 Pipelines contain an `id` and a nonempty ordered `steps` array. Each step has a `type`: `agent` requires `agentId`, and agent steps may define a `prompt` for their specific task, `human` waits for a decision, and `shell` requires `command` and optionally accepts `timeoutSeconds`. Steps do not contain runtime or credential configuration. Transitions refer to step IDs within the pipeline.
 

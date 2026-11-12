@@ -121,7 +121,7 @@ fn cli_execute_runs_runtime_and_saves_result_across_processes() {
         &f.path,
         &json!({
             "schemaVersion": 7,
-            "agents": [{"id":"worker", "systemPrompt":"Implement", "runtimeKind":"fake", "skillIds":[]}],
+            "agents": [{"id":"worker", "systemPrompt":"Implement", "provider":"fake", "skillIds":[]}],
             "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}]}]
         }),
     );
@@ -237,9 +237,9 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         &json!({
             "schemaVersion": 7,
             "agents": [
-                {"id":"worker", "systemPrompt":"Implement", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
-                {"id":"reviewer", "systemPrompt":"Review", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":[]},
-                {"id":"missing", "systemPrompt":"Work", "runtimeKind":"rig", "model":{"provider":"ollama", "model":"test"}, "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
+                {"id":"worker", "systemPrompt":"Implement", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":[]},
+                {"id":"reviewer", "systemPrompt":"Review", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":[]},
+                {"id":"missing", "systemPrompt":"Work", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
             ],
             "pipelines": [
                 {"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}, {"id":"human", "name":"Feedback", "type":"human"}, {"id":"continue", "name":"Continue", "type":"agent", "agentId":"worker"}, {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer"}]},
@@ -422,7 +422,7 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             .contains("Rig finished")
     );
     assert!(!status["trace"].as_array().unwrap().is_empty());
-    assert_eq!(status["steps"][0]["model"]["provider"], "ollama");
+    assert_eq!(status["steps"][0]["model"], "ollama/test");
     assert!(status["steps"][0]["usage"].is_null());
     assert!(status["trace"].to_string().len() < 256 * 1024);
     assert!(!status["trace"].to_string().contains("Implement feature"));

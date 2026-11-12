@@ -9,10 +9,8 @@ instructions: 'You are the implementation agent. Read the task, plan, supplied p
   finished call report_outcome exactly once: completed if ready for review, or blocked
   if essential work cannot continue without human help. Include a concise handoff
   describing changes, verification and remaining risks.'
-runtimeKind: rig
-model:
-  provider: chatgpt
-  model: gpt-6-luna
+provider: rig
+model: chatgpt/gpt-6-luna
 credentialId: openai-default
 skillIds:
 - ponytail

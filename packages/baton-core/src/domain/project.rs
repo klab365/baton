@@ -42,7 +42,7 @@ pub struct Agent {
     pub id: String,
     #[serde(alias = "systemPrompt")]
     pub instructions: String,
-    #[serde(default)]
+    #[serde(default, rename = "provider")]
     pub runtime_kind: crate::domain::runtime::RuntimeKind,
     #[serde(default)]
     pub model: Option<crate::domain::runtime::RuntimeModel>,
@@ -560,92 +560,11 @@ pub fn parse_config(contents: &str) -> Result<ProjectConfig, String> {
             }
         }
     }
-    let legacy_version = value["schemaVersion"].as_u64();
-    if legacy_version == Some(5) {
-        return Err("Pi runtime profiles are no longer supported; replace them with explicit Rig profiles before upgrading to schemaVersion 6".into());
-    }
-    if matches!(legacy_version, Some(2..=4)) {
-        if let Some(agents) = value["agents"].as_array_mut() {
-            for agent in agents {
-                let object = agent
-                    .as_object_mut()
-                    .ok_or("Invalid legacy agent; migrate to schemaVersion 4")?;
-                if let Some(model) = object.remove("model") {
-                    let model = model.as_object().ok_or(
-                        "Invalid legacy model; remove model and create a runtime profile in Settings",
-                    )?;
-                    if model.keys().any(|key| {
-                        !["provider", "model", "maxOutputTokens"].contains(&key.as_str())
-                    }) {
-                        return Err("Unsupported legacy model settings; remove direct runtime/provider settings and configure a profile in Settings".into());
-                    }
-                }
-                object.remove("toolIds");
-                if object.contains_key("runtimeProfileId") && legacy_version != Some(4) {
-                    return Err("Legacy configuration already contains runtimeProfileId; explicitly migrate to schemaVersion 4".into());
-                }
-                if legacy_version != Some(4) {
-                    object.insert("runtimeProfileId".into(), "rig.default".into());
-                }
-            }
-        }
-        value
-            .as_object_mut()
-            .ok_or("Invalid project configuration")?
-            .remove("tools");
-        if legacy_version != Some(4) {
-            value["runtimeProfiles"] = serde_json::json!([{"id":"rig.default", "name":"Rig default", "runtimeKind":"rig", "model":null}]);
-        }
-        value["schemaVersion"] = 6.into();
-    }
-    if value["schemaVersion"].as_u64() == Some(6) {
-        let profiles = value["runtimeProfiles"]
-            .as_array()
-            .ok_or("SchemaVersion 6 configuration has no runtimeProfiles to migrate")?
-            .clone();
-        let mut migrated_agents = Vec::new();
-        if let Some(agents) = value["agents"].as_array() {
-            for agent in agents {
-                let mut agent = agent.clone();
-                let object = agent
-                    .as_object_mut()
-                    .ok_or("Invalid agent while migrating runtime profiles")?;
-                let profile_id = object
-                    .remove("runtimeProfileId")
-                    .and_then(|value| value.as_str().map(str::to_owned))
-                    .ok_or("Agent is missing runtimeProfileId while migrating schemaVersion 6")?;
-                let profile = profiles
-                    .iter()
-                    .find(|profile| profile["id"].as_str() == Some(profile_id.as_str()))
-                    .ok_or_else(|| {
-                        format!("Agent references missing runtime profile {profile_id:?}")
-                    })?;
-                object.insert(
-                    "runtimeKind".into(),
-                    profile
-                        .get("runtimeKind")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::String("rig".into())),
-                );
-                object.insert(
-                    "model".into(),
-                    profile
-                        .get("model")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null),
-                );
-                if let Some(credential_id) = profile.get("credentialId") {
-                    object.insert("credentialId".into(), credential_id.clone());
-                }
-                migrated_agents.push(agent);
-            }
-        }
-        value["agents"] = serde_json::Value::Array(migrated_agents);
-        value
-            .as_object_mut()
-            .ok_or("Invalid project configuration")?
-            .remove("runtimeProfiles");
-        value["schemaVersion"] = 7.into();
+    if matches!(value["schemaVersion"].as_u64(), Some(2..=6)) {
+        return Err(
+            "Legacy runtime profiles are no longer supported; update the project configuration"
+                .into(),
+        );
     }
     let config: ProjectConfig = serde_json::from_value(value)
         .map_err(|error| format!("Invalid project configuration: {error}"))?;

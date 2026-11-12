@@ -65,13 +65,13 @@ function open(agent?: Agent) {
 		? {
 				...structuredClone(agent),
 				allowedTools: agent.allowedTools ?? [...tools],
-				model: agent.model ?? { provider: "", model: "" },
+				model: agent.model ?? null,
 			}
 		: {
 				id: crypto.randomUUID(),
 				instructions: "",
-				runtimeKind: "rig",
-				model: { provider: "openai", model: "" },
+				provider: "rig",
+				model: null,
 				credentialId: null,
 				skillIds: [],
 				allowedTools: [],
@@ -102,9 +102,11 @@ async function loadModels(credentialId: string) {
 		if (
 			draft?.credentialId === credentialId &&
 			draft.model &&
-			!models.some((model) => model.id === draft?.model?.model)
+			!models.some(
+				(model) => model.id === draft?.model?.split("/").slice(1).join("/"),
+			)
 		)
-			draft.model.model = "";
+			draft.model = null;
 	} catch (cause) {
 		modelsError =
 			cause instanceof Error ? cause.message : "Could not list models";
@@ -115,13 +117,7 @@ async function loadModels(credentialId: string) {
 async function selectCredential(credentialId: string) {
 	if (!draft) return;
 	draft.credentialId = credentialId || null;
-	const credential = (data.credentials as Credential[]).find(
-		(item) => item.id === credentialId,
-	);
-	const type = (data.credentialTypes as CredentialType[]).find(
-		(item) => item.id === credential?.credentialType,
-	);
-	draft.model = { provider: type?.provider ?? "", model: "" };
+	draft.model = null;
 	if (credentialId) await loadModels(credentialId);
 	else models = [];
 }
@@ -168,7 +164,7 @@ async function save(remove = false) {
 		<aside aria-label="Agent library" class="agent-list">
 			<div class="list-heading"><strong>Your agents</strong><span>{config.agents.length}</span></div>
 			{#each config.agents as agent (agent.id)}
-				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><span><strong>{agent.id}</strong><small>{agent.model ? `${agent.model.provider} · ${agent.model.model}` : agent.runtimeKind}</small></span></button>
+				<button class:selected={draft?.id === agent.id} class="agent-item" onclick={() => open(agent)}><span><strong>{agent.id}</strong><small>{agent.model || "No model selected"}</small></span></button>
 			{:else}<p class="muted">No agents yet. Create a reusable role for your pipelines.</p>{/each}
 		</aside>
 		<section class="agent-editor">
@@ -180,13 +176,13 @@ async function save(remove = false) {
 					<section class="form-section" aria-labelledby="agent-runtime-heading"><header><span class="eyebrow">Runtime</span><h3 id="agent-runtime-heading">Identity and model</h3></header><div class="form-grid">
 						<div class="agent-id-field"><Field label="Agent ID" for="agent-id" required hint="IDs cannot be changed after creation.">{#snippet children({ describedBy })}<input id="agent-id" bind:value={draft!.id} required disabled={busy || editing} aria-describedby={describedBy} />{/snippet}</Field></div>
 						<div class="credential-field"><Field label="Credential" for="agent-credential" required hint="Credentials are managed in Settings and can be reused by agents.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-credential" value={draft!.credentialId ?? ""} items={availableCredentials} placeholder="Select a credential" label="Available credentials" {describedBy} {invalid} required disabled={busy} onValueChange={(credentialId) => void selectCredential(credentialId)} />{/snippet}</Field></div>
-						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" bind:value={draft!.model!.model} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert" class="status-error">{modelsError}</small>{/if}{/snippet}</Field>
+						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" value={draft!.model?.split("/").slice(1).join("/") ?? ""} onValueChange={(model) => { if (draft) { const credential = (data.credentials as Credential[]).find((item) => item.id === draft?.credentialId); const type = (data.credentialTypes as CredentialType[]).find((item) => item.id === credential?.credentialType); draft.model = type?.provider && model ? `${type.provider}/${model}` : null; } }} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert" class="status-error">{modelsError}</small>{/if}{/snippet}</Field>
 					</div></section>
 					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="Instructions" for="agent-prompt" required hint="Define this agent’s reusable role, scope, and response style.">{#snippet children({ describedBy })}<MultilineInput id="agent-prompt" name="instructions" bind:value={draft!.instructions} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} {describedBy} required />{/snippet}</Field>
 					</section>
 					<section class="references form-section" aria-label="Tools">
 						<AssignedResources id="agent-add-tool" title="Tools" label="Assigned tools" addLabel="Add tool" emptyMessage="No tools assigned." items={tools.map((id) => ({ id }))} selected={draft.allowedTools ?? []} disabled={busy} onChange={(selected) => { if (draft) draft.allowedTools = selected; }} />
-						<p class="muted">Shell commands can modify files even without write or edit. A worktree is not a sandbox. Steps with transitions require report_outcome.</p>
+						<p class="muted">Tool selection is not a security sandbox. Shell commands can access and modify files outside the worktree, even without write or edit. Steps with transitions require report_outcome.</p>
 					</section>
 					<section class="references form-section" aria-label="Skills">
 						<AssignedResources id="agent-add-skill" title="Skills" label="Assigned skills" addLabel="Add skill" emptyMessage="No skills assigned." items={config.skills} selected={draft.skillIds} disabled={busy} onChange={(selected) => { if (draft) draft.skillIds = selected; }} />

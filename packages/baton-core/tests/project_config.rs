@@ -3,7 +3,7 @@ use baton_core::domain::project::{ProjectConfig, parse_config};
 fn example() -> serde_json::Value {
     serde_json::json!({
         "schemaVersion": 7,
-        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "runtimeKind":"rig", "model":{"provider":"openai","model":"gpt-4.1"}, "credentialId":null, "rules":[], "skillIds":["style"]}],
+        "agents":[{"id":"writer", "systemPrompt":"Write clearly", "provider":"rig", "model":"openai/gpt-4.1", "credentialId":null, "rules":[], "skillIds":["style"]}],
         "pipelines":[{"id":"draft", "name":"Draft", "steps":[
             {"id":"plan", "name":"Plan", "type":"agent", "agentId":"writer"},
             {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
@@ -168,8 +168,8 @@ fn actionable_validation_failures() {
             "name must not be empty",
         ),
         (
-            "/agents/0/model/provider",
-            serde_json::json!(" "),
+            "/agents/0/model",
+            serde_json::json!(" /gpt"),
             "invalid provider or model",
         ),
         (
@@ -205,7 +205,7 @@ fn actionable_validation_failures() {
         (
             "/schemaVersion",
             serde_json::json!(5),
-            "Pi runtime profiles are no longer supported",
+            "Legacy runtime profiles are no longer supported",
         ),
     ] {
         let mut value = example();

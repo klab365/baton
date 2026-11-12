@@ -11,10 +11,8 @@ systemPrompt: You are the independent review agent. Inspect the task, supplied p
   defects, revise_plan if the approach needs reconsideration, or blocked if a required
   check cannot run or essential review needs human help. Give a concise handoff with
   findings, file locations, verification and residual risks.
-runtimeKind: rig
-model:
-  provider: chatgpt
-  model: gpt-6.1-terra
+provider: rig
+model: chatgpt/gpt-6.1-terra
 credentialId: openai-default
 skillIds:
 - code-review-excellence
