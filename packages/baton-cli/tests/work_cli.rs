@@ -71,6 +71,26 @@ impl Drop for Server {
 }
 
 #[test]
+fn pipelines_lists_configured_ids_and_reports_invalid_configuration() {
+    let f = Fixture::new();
+    let pipelines = f.value(&["pipelines"]);
+    assert!(pipelines.as_array().unwrap().contains(&json!("factory")));
+
+    common::write_config(
+        &f.path,
+        &json!({"schemaVersion": 7, "agents": [], "pipelines": []}),
+    );
+    assert_eq!(f.value(&["pipelines"]), json!([]));
+
+    fs::write(f.path.join(".baton/project.yml"), "not: [valid").unwrap();
+    let output = f.work(&["pipelines"]);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert!(error["error"].as_str().unwrap().contains("Invalid"));
+}
+
+#[test]
 fn cli_persists_steps_across_processes_and_emits_parseable_errors() {
     let f = Fixture::new();
     let start = f.value(&[

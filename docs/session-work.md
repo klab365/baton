@@ -24,6 +24,7 @@ Run commands in an existing Git worktree, or supply `--workspace PATH`:
 
 ```sh
 baton work start --issue 'Task and acceptance criteria' --pipeline factory
+baton work pipelines
 baton work status
 baton work next --run RUN_ID
 baton work execute --run RUN_ID
@@ -31,7 +32,7 @@ baton work respond --run RUN_ID --result human-response.json
 baton work cancel --run RUN_ID
 ```
 
-If only one pipeline exists, `--pipeline` may be omitted. Start creates a new run; use its ID to resume. `next` returns the current step, attempt, revision, allowed outcomes, checks and latest handoff without replaying the full trace. `execute` runs one agent or shell step and submits its result through Baton. Repeat until completion, an error, or a human pause. Outputs are JSON; errors are JSON on stderr with a nonzero exit code. `status --run ID` returns the persisted run.
+`baton work pipelines` lists configured pipeline IDs as JSON for interactive integrations such as Pi. If only one pipeline exists, `--pipeline` may be omitted. Start creates a new run; use its ID to resume. `next` returns the current step, attempt, revision, allowed outcomes, checks and latest handoff without replaying the full trace. `execute` runs one agent or shell step and submits its result through Baton. Repeat until completion, an error, or a human pause. Outputs are JSON; errors are JSON on stderr with a nonzero exit code. `status --run ID` returns the persisted run.
 
 Human steps require an explicit user decision via `respond`. Supply a JSON file containing the current `revision`, `stepId`, `attempt`, `outcome`, and `response`. This is a protocol distinction, not identity authentication: a process with shell access can invoke `respond`.
 

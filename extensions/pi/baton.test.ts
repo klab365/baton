@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { drive } from "./baton";
+import { choosePipeline, drive } from "./baton";
 
 function ui(
 	overrides: Partial<Parameters<typeof drive>[2]> = {},
@@ -14,6 +14,37 @@ function ui(
 		...overrides,
 	};
 }
+
+test("chooses a pipeline from the keyboard-selectable list", async () => {
+	const calls: string[][] = [];
+	const selected = await choosePipeline(
+		async (args) => {
+			calls.push(args);
+			return ["factory", "review"];
+		},
+		ui({ select: async (_prompt, options) => options[1] }),
+	);
+	expect(calls).toEqual([["pipelines"]]);
+	expect(selected).toBe("review");
+});
+
+test("pipeline selection cancellation and empty configuration do not select", async () => {
+	const warnings: string[] = [];
+	expect(
+		await choosePipeline(async () => ["factory"], ui({ select: async () => undefined })),
+	).toBeUndefined();
+	expect(
+		await choosePipeline(
+			async () => [],
+			ui({ notify: (message) => warnings.push(message) }),
+		),
+	).toBeUndefined();
+	expect(warnings).toEqual(["Baton: no pipelines are configured"]);
+});
+
+test("surfaces pipeline listing errors", async () => {
+	await expect(choosePipeline(async () => { throw new Error("invalid config"); }, ui())).rejects.toThrow("invalid config");
+});
 
 const human = {
 	runId: "run",

@@ -23,6 +23,12 @@ steps:
     debugger diagnosis in the handoff. Report the changes and verification, or
     describe the blocker and what has been tried. Run applicable checks and verify
     the target branch is an ancestor of HEAD. Do not commit, push or create a PR.
+    For each behavior change, add or update a focused test before changing the
+    implementation. Run it and confirm it fails for the expected reason, then
+    implement the smallest change and rerun it until it passes. In the handoff,
+    report the test commands, red and green results, and any exceptions. If
+    test-first is impractical, explain why and report the alternative verification;
+    never claim a red result that was not observed.
   transitions:
   - outcome: completed
     to: review
@@ -55,6 +61,11 @@ steps:
     only when appropriate; otherwise provide actionable findings for the builder
     or planner, or explain the blocker. Inspect the actual diff and tests, run a
     relevant regression test and verify the target branch is an ancestor of HEAD.
+    Check the builder's TDD evidence in the handoff and available session history:
+    distinguish an observed test failure before implementation from a passing test
+    added afterward. Report missing evidence or exceptions; do not claim TDD was
+    followed based on a passing test alone. Request clarification or additional
+    verification when needed; do not ask the builder to fabricate a past red run.
     Use approved only when checks pass; otherwise use revise_build, revise_plan or
     blocked. Do not modify files or commit.
   transitions:
