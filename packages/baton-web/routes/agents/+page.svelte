@@ -69,7 +69,7 @@ function open(agent?: Agent) {
 			}
 		: {
 				id: crypto.randomUUID(),
-				systemPrompt: "",
+				instructions: "",
 				runtimeKind: "rig",
 				model: { provider: "openai", model: "" },
 				credentialId: null,
@@ -182,7 +182,7 @@ async function save(remove = false) {
 						<div class="credential-field"><Field label="Credential" for="agent-credential" required hint="Credentials are managed in Settings and can be reused by agents.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-credential" value={draft!.credentialId ?? ""} items={availableCredentials} placeholder="Select a credential" label="Available credentials" {describedBy} {invalid} required disabled={busy} onValueChange={(credentialId) => void selectCredential(credentialId)} />{/snippet}</Field></div>
 						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" bind:value={draft!.model!.model} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert" class="status-error">{modelsError}</small>{/if}{/snippet}</Field>
 					</div></section>
-					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="System prompt" for="agent-prompt" required hint="Define this agent’s role, scope, and response style.">{#snippet children({ describedBy })}<MultilineInput id="agent-prompt" name="systemPrompt" bind:value={draft!.systemPrompt} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} {describedBy} required />{/snippet}</Field>
+					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="Instructions" for="agent-prompt" required hint="Define this agent’s reusable role, scope, and response style.">{#snippet children({ describedBy })}<MultilineInput id="agent-prompt" name="instructions" bind:value={draft!.instructions} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} {describedBy} required />{/snippet}</Field>
 					</section>
 					<section class="references form-section" aria-label="Tools">
 						<AssignedResources id="agent-add-tool" title="Tools" label="Assigned tools" addLabel="Add tool" emptyMessage="No tools assigned." items={tools.map((id) => ({ id }))} selected={draft.allowedTools ?? []} disabled={busy} onChange={(selected) => { if (draft) draft.allowedTools = selected; }} />

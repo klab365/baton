@@ -2,4 +2,4 @@
 import type { RuntimeKind } from "./RuntimeKind";
 import type { RuntimeModel } from "./RuntimeModel";
 
-export type Agent = { id: string, systemPrompt: string, runtimeKind: RuntimeKind, model: RuntimeModel | null, credentialId: string | null, skillIds: Array<string>, allowedTools?: Array<string>, };
+export type Agent = { id: string, instructions: string, runtimeKind: RuntimeKind, model: RuntimeModel | null, credentialId: string | null, skillIds: Array<string>, allowedTools?: Array<string>, };

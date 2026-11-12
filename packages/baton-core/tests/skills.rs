@@ -28,11 +28,11 @@ fn resolves_only_assigned_skills_in_order_without_permission_changes() {
     let resolved = resolve(&agent, &skills).unwrap();
     assert!(resolved.skill_ids.is_empty());
     assert!(
-        resolved.system_prompt.find("Second instruction").unwrap()
-            < resolved.system_prompt.find("First instruction").unwrap()
+        resolved.instructions.find("Second instruction").unwrap()
+            < resolved.instructions.find("First instruction").unwrap()
     );
-    assert!(!resolved.system_prompt.contains("Never include"));
-    assert!(!resolved.system_prompt.contains("description: metadata"));
+    assert!(!resolved.instructions.contains("Never include"));
+    assert!(!resolved.instructions.contains("description: metadata"));
     assert_eq!(resolved.runtime_kind, agent.runtime_kind);
     agent.skill_ids.push("missing".into());
     assert!(resolve(&agent, &skills).unwrap_err().contains("missing"));

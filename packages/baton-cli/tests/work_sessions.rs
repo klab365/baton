@@ -77,6 +77,7 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
     let mut config = common::read_config(&f.path);
     config["agents"][0]["runtimeKind"] = json!("fake");
     config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
+    config["pipelines"][0]["steps"][0]["prompt"] = json!("CLI-specific step prompt");
     common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 5, json!([])).await;
@@ -86,6 +87,18 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
         .unwrap();
     assert_eq!(result["currentStep"], "review");
     assert_eq!(result["steps"][0]["outcome"], "completed");
+    assert!(
+        result["steps"][0]["input"]
+            .as_str()
+            .unwrap()
+            .contains("CLI-specific step prompt")
+    );
+    assert!(
+        result["steps"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("CLI-specific step prompt")
+    );
     assert!(result["steps"][0]["startedAt"].is_string());
     assert!(result["steps"][0]["endedAt"].is_string());
     assert!(result["steps"][0]["durationMs"].is_number());
@@ -439,7 +452,7 @@ async fn rework_and_human_wait_survive_reopening_without_runtime_or_worktree_all
         .await
         .unwrap();
     assert_eq!(
-        next["agent"]["systemPrompt"],
+        next["agent"]["instructions"],
         "Follow the original issue and its acceptance criteria"
     );
     assert_eq!(

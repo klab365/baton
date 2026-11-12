@@ -408,7 +408,7 @@ mod tests {
         let mut config = ProjectConfig::CURRENT;
         config.agents.push(Agent {
             id: "test".into(),
-            system_prompt: "hello".into(),
+            instructions: "hello".into(),
             runtime_kind: Default::default(),
             model: None,
             credential_id: None,
@@ -445,7 +445,7 @@ mod tests {
         let mut config = ProjectConfig::CURRENT;
         config.agents.push(Agent {
             id: "test".into(),
-            system_prompt: "hello".into(),
+            instructions: "hello".into(),
             runtime_kind: Default::default(),
             model: None,
             credential_id: None,

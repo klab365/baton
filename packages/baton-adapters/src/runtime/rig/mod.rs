@@ -532,7 +532,7 @@ impl RigRuntime {
         // Startup may report the interrupted previous turn; it is not the new turn's result.
         app.world_mut().resource_mut::<Completed>().0.take();
 
-        let mut preamble = baton_agent.system_prompt.clone();
+        let mut preamble = baton_agent.instructions.clone();
         if let Some(instructions) = instructions {
             preamble.push_str("\n\nProject instructions from worktree AGENTS.md (follow when consistent with higher-priority instructions):\n");
             preamble.push_str(&instructions);

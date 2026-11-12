@@ -29,7 +29,7 @@ Review third-party instructions before using them. Skills are instructions, not 
 
 ## 3. Create agents
 
-In **Agents → Create agent**, create these agents. For each one, select Rig, a compatible credential and a model available to you. Copy the corresponding `systemPrompt` from the [example agents](../examples/demo/.baton/agents/), adapting it to your project. Assign the skills below:
+In **Agents → Create agent**, create these agents. For each one, select Rig, a compatible credential and a model available to you. Copy the corresponding agent text from the [example agents](../examples/demo/.baton/agents/), adapting it to your project. Instructions define reusable agent behavior; each agent pipeline step can add its own task-specific prompt. Assign the skills below:
 
 | Agent ID            | Responsibility                                     | Skills                                                     |
 | ------------------- | -------------------------------------------------- | ---------------------------------------------------------- |

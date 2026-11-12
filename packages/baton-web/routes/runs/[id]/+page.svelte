@@ -81,6 +81,7 @@ const legacyTraceMayContainSensitiveContent = $derived(
 		(entry: { kind: string; content: string }) =>
 			entry.kind === "runtimeTranscript" ||
 			entry.content.includes('"systemPrompt"') ||
+			entry.content.includes('"instructions"') ||
 			entry.content.includes('"systemMessages"') ||
 			entry.content.includes('"messages"'),
 	),

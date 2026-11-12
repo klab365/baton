@@ -220,7 +220,7 @@ mod tests {
             baton_core::features::skills::resolve(
                 &baton_core::domain::project::Agent {
                     id: "a".into(),
-                    system_prompt: String::new(),
+                    instructions: String::new(),
                     runtime_kind: Default::default(),
                     model: None,
                     credential_id: None,
@@ -230,7 +230,7 @@ mod tests {
                 &repo.list().unwrap()
             )
             .unwrap()
-            .system_prompt,
+            .instructions,
             "\n\nAssigned skill style:\nBe concise"
         );
         repo.delete("style").unwrap();

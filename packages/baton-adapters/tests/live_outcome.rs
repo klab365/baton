@@ -24,7 +24,7 @@ fn missing_outcome_is_not_retried_automatically() {
     let mut agent = config.agents.first().unwrap().clone();
     agent.skill_ids.clear();
     agent.allowed_tools = Some(vec!["report_outcome".into()]);
-    agent.system_prompt = "For this test, answer your first request with the word READY without calling any tools. On a follow-up request, follow its instructions.".into();
+    agent.instructions = "For this test, answer your first request with the word READY without calling any tools. On a follow-up request, follow its instructions.".into();
     let credentials = FilesystemCredentialRepository::for_project(&project).unwrap();
     let auth_root = credentials.root_path().to_path_buf();
     let mut runtime = ConfiguredRuntime::new(Arc::new(credentials), auth_root, vec![]);
