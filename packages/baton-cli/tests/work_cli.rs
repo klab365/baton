@@ -269,20 +269,35 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     request_seen_rx
         .recv_timeout(Duration::from_secs(10))
         .unwrap();
-    let active = f.value(&["status", "--run", id]);
-    assert!(
-        active["trace"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["kind"] == "modelRequest")
-    );
-    assert!(active["events"].as_array().unwrap().iter().any(|event| {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut active = f.value(&["status", "--run", id]);
+    while (!active["trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "modelRequest")
+        || !active["events"].as_array().unwrap().iter().any(|event| {
+            event["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Observed runtime activity")
+        }))
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(20));
+        active = f.value(&["status", "--run", id]);
+    }
+    let saw_model_request = active["trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["kind"] == "modelRequest");
+    let saw_runtime_activity = active["events"].as_array().unwrap().iter().any(|event| {
         event["message"]
             .as_str()
             .unwrap_or_default()
             .contains("Observed runtime activity")
-    }));
+    });
     continue_provider_tx.send(()).unwrap();
     let completed = execution.await.unwrap();
     assert!(
@@ -293,6 +308,14 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     assert_eq!(
         serde_json::from_slice::<Value>(&completed.stdout).unwrap()["status"],
         "waitingHuman"
+    );
+    assert!(
+        saw_model_request,
+        "modelRequest trace was not persisted before provider release"
+    );
+    assert!(
+        saw_runtime_activity,
+        "runtime activity event was not persisted before provider release"
     );
     let response = f.path.join("human-response.json");
     fs::write(&response, json!({"revision":1,"stepId":"human","attempt":2,"outcome":"responded","response":"Include the human feedback"}).to_string()).unwrap();
