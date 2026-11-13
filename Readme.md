@@ -44,14 +44,22 @@ Agents can be configured with an explicit allowed tool list in the Agents UI. An
 Copy this prompt into your coding agent from the Git repository where you want to use Baton:
 
 ```text
-Help me set up Baton for this repository. First read the current agent setup guide:
-https://github.com/klab365/baton/blob/main/docs/getting-started-for-agents.md
-Follow it, inspect my environment and existing configuration, and ask me before
-making changes or taking actions that need my approval. Do not overwrite existing
-configuration or ask me to paste secrets into this conversation.
+Help me set up Baton for this repository. First inspect the repository, Git status,
+project instructions, and existing Baton configuration and skills without changing files
+or accessing the network. Then interview me about the project and its users, technology
+stack, preferred workflow, and capabilities I want agents to provide. Adapt your questions
+to what the repository already tells you. Summarize what you learned and recommend a
+minimal setup and only skills that fit my answers and this repository; explain each skill's
+value and name its source and revision. Prefer existing skills. Ask for my explicit approval
+before any network access, and separately before installing each third-party skill. After
+I approve fetching a skill, inspect its source and contents and explain any concerns; do not
+install untrusted skills. Install and assign a skill only after I explicitly approve it, and
+never overwrite existing configuration, skills, or assignments. Ask before installing
+software, changing project files, starting tasks, or running agents. Report what changed,
+checks and results, failures, and any manual steps. Do not ask me to paste secrets into this
+conversation.
 ```
 
-See the [agent setup guide](docs/getting-started-for-agents.md) for what the agent will do and for links to the full documentation.
 
 ## Development
 
@@ -75,7 +83,7 @@ mise run build
 ## Documentation
 
 - [User guide](docs/user-guide.md) — features, workflows, CLI and troubleshooting
-- [Getting started: build a Software Factory](docs/getting-started.md), [setup for coding agents](docs/getting-started-for-agents.md), and the [example project](examples/demo/)
+- [Getting started: build a Software Factory](docs/getting-started.md) and the [example project](examples/demo/)
 - [Architecture and request lifecycle](docs/architecture.md)
 - [Project configuration](docs/project-configuration.md)
 - [Pipelines](docs/pipelines.md) and [workflow transitions](docs/workflow-transitions.md)
