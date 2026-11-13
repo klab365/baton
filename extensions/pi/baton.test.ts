@@ -27,6 +27,7 @@ test("lists and inspects persisted work sessions without executing them", async 
 	expect(await manage("list", exec, ui(), (text) => messages.push(text))).toBe(true);
 	expect(await manage("inspect run-1", exec, ui(), (text) => messages.push(text))).toBe(true);
 	expect(calls).toEqual([["status"], ["status", "--run", "run-1"]]);
+	expect(messages.join("\\n")).toContain("Work sessions");
 	expect(messages.join("\\n")).toContain("run-1");
 });
 
@@ -62,6 +63,7 @@ test("marks omitted work sessions and inspection data when output is bounded", a
 	await manage("inspect run-1", async () => ({
 		id: "run-1", steps: Array.from({ length: 32 }, (_, i) => ({ stepId: `step-${i}`, output: "x".repeat(1200) })),
 	}), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Work session details");
 	expect(messages[0]).toContain("2 earlier steps omitted");
 	expect(messages[0]).toContain("output truncated");
 });
@@ -150,6 +152,7 @@ const human = {
 test("runs steps through CLI and shows the result", async () => {
 	const commands: string[] = [];
 	const messages: string[] = [];
+	const statuses: (string | undefined)[] = [];
 	let completed = false;
 	await drive(
 		"run",
@@ -170,11 +173,53 @@ test("runs steps through CLI and shows the result", async () => {
 						attempt: 1,
 					};
 		},
-		ui(),
+		ui({ setStatus: (_key, value) => statuses.push(value) }),
 		(text) => messages.push(text),
 	);
 	expect(commands).toEqual(["next", "execute", "next", "next"]);
+	expect(messages.join("\n")).toContain("Baton run — RUNNING");
+	expect(statuses).toContain("Baton · RUNNING · Build · attempt 1");
+	expect(messages.join("\n")).toContain("Attempt: 1");
 	expect(messages.join("\n")).toContain("Done");
+});
+
+test("formats extension failures as Baton error feedback", async () => {
+	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
+	const notices: string[] = [];
+	const pi = {
+		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
+		exec: async () => ({ code: 1, killed: false, truncated: false, stderr: "offline", stdout: "" }),
+	} as unknown as ExtensionAPI;
+	baton(pi);
+	await handler("run-1", { hasUI: true, cwd: "/tmp", ui: { notify: (message: string) => notices.push(message), setStatus() {} } } as any);
+	expect(notices[0]).toContain("Baton run-1 — ERROR");
+	expect(notices[0]).toContain("offline");
+});
+
+test("makes a human handoff prominent with decisions and resume instructions", async () => {
+	const messages: string[] = [];
+	await drive("run-1", async () => human, ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Waiting for your decision");
+	expect(messages[0]).toContain("approved, rejected");
+	expect(messages[0]).toContain("resume run-1");
+});
+
+test("pages long human handoffs on demand without flooding the terminal", async () => {
+	const messages: string[] = [];
+	const choices: string[] = [];
+	const output = `${"A".repeat(7000)}${"B".repeat(7000)}${"C".repeat(7000)}`;
+	await drive("run-1", async () => ({ ...human, lastResult: { ...human.lastResult!, output } }), ui({
+		select: async (prompt, options) => {
+			choices.push(prompt);
+			return prompt.includes("handoff") ? options[0] : undefined;
+		},
+	}), (text) => messages.push(text));
+	expect(messages).toHaveLength(4);
+	expect(messages[0]).toContain("resume run-1");
+	expect(messages[0].indexOf("resume run-1")).toBeLessThan(messages[0].indexOf("Prior handoff:"));
+	expect(messages.slice(1)).toEqual(["A".repeat(7000), "B".repeat(7000), "C".repeat(7000)]);
+	expect(messages.every((message) => message.length <= 8000)).toBe(true);
+	expect(choices.filter((prompt) => prompt.includes("handoff"))).toHaveLength(2);
 });
 
 test("does not submit a human decision when selection is cancelled", async () => {
