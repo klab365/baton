@@ -12,44 +12,102 @@ fn pi_install_source(version: &str, release_tag: Option<&str>) -> anyhow::Result
     let tag = format!("v{version}");
     if release_tag != Some(tag.as_str()) {
         anyhow::bail!(
-            "This development build has no matching published Pi package. Install an official Baton release, or use `pi install /absolute/path/to/baton` for local development."
+            "This development build has no matching published Pi extension; install an official Baton release."
         );
     }
-    Ok(format!("git:github.com/klab365/baton@{tag}"))
+    Ok(format!(
+        "https://github.com/klab365/baton/raw/refs/tags/{tag}/extensions/pi/baton.ts"
+    ))
+}
+
+fn create_staging_file(
+    target: &std::path::Path,
+    nonce: &str,
+) -> io::Result<(PathBuf, std::fs::File)> {
+    let path = target.join(format!(".baton.ts.{nonce}.tmp"));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    Ok((path, file))
 }
 
 fn install_pi_with(
     version: &str,
     release_tag: Option<&str>,
-    pi: &std::path::Path,
-    run: impl FnOnce(&std::path::Path, &[&str]) -> std::io::Result<bool>,
+    target: &std::path::Path,
+    download: impl FnOnce(&str) -> anyhow::Result<Vec<u8>>,
 ) -> anyhow::Result<()> {
-    let tag = format!("v{version}");
-    let source = pi_install_source(version, release_tag)?;
-    println!("Installing Baton Pi package for {tag}...");
-    io::stdout().flush()?;
-    let status = run(pi, &["install", &source]).map_err(|error| {
-        anyhow::anyhow!("Could not run Pi: {error}. Install Pi and make sure `pi` is on PATH.")
+    let url = pi_install_source(version, release_tag)?;
+    let contents = download(&url)
+        .map_err(|error| anyhow::anyhow!("Could not download Baton Pi extension: {error}"))?;
+    std::fs::create_dir_all(target).map_err(|error| {
+        anyhow::anyhow!(
+            "Could not create Pi extensions directory {}: {error}",
+            target.display()
+        )
     })?;
-    if !status {
-        anyhow::bail!(
-            "Pi could not install {source} (nonzero exit status). Check that the release tag exists and Pi can access GitHub, then retry `baton install pi`."
+    let destination = target.join("baton.ts");
+    let mut staged_file = None;
+    for attempt in 0..100 {
+        let nonce = format!(
+            "{}.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
+            attempt
         );
+        match create_staging_file(target, &nonce) {
+            Ok(staged) => {
+                staged_file = Some(staged);
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "Could not stage Baton Pi extension: {error}"
+                ));
+            }
+        }
     }
-    Ok(())
+    let (temporary, mut staged) = staged_file
+        .ok_or_else(|| anyhow::anyhow!("Could not allocate a unique Baton Pi staging file"))?;
+    let result = staged
+        .write_all(&contents)
+        .map_err(|error| anyhow::anyhow!("Could not stage Baton Pi extension: {error}"))
+        .and_then(|()| {
+            drop(staged);
+            std::fs::rename(&temporary, &destination)
+                .map_err(|error| anyhow::anyhow!("Could not install Baton Pi extension: {error}"))
+        });
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
 }
 
-fn install_pi(
-    version: &str,
-    release_tag: Option<&str>,
-    pi: &std::path::Path,
-) -> anyhow::Result<()> {
-    install_pi_with(version, release_tag, pi, |program, args| {
-        std::process::Command::new(program)
-            .args(args)
-            .status()
-            .map(|status| status.success())
-    })
+fn install_pi(version: &str, release_tag: Option<&str>) -> anyhow::Result<()> {
+    let home =
+        env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let target = PathBuf::from(home).join(".pi/agent/extensions");
+    install_pi_with(version, release_tag, &target, |url| {
+        let output = std::process::Command::new("curl")
+            .args(["-fLsS", url])
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "curl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(output.stdout)
+    })?;
+    println!(
+        "Installed Baton Pi extension to {}",
+        target.join("baton.ts").display()
+    );
+    Ok(())
 }
 
 fn bootstrap_project(project: &std::path::Path) -> anyhow::Result<bool> {
@@ -131,11 +189,7 @@ async fn main() -> anyhow::Result<()> {
         if args != ["pi"] {
             anyhow::bail!("Usage: baton install pi");
         }
-        return install_pi(
-            env!("CARGO_PKG_VERSION"),
-            option_env!("BATON_RELEASE_TAG"),
-            std::path::Path::new("pi"),
-        );
+        return install_pi(env!("CARGO_PKG_VERSION"), option_env!("BATON_RELEASE_TAG"));
     }
     if env::args().nth(1).as_deref() == Some("work") {
         return work::run(env::args().skip(2).collect()).await;
@@ -315,55 +369,63 @@ mod tests {
     #[test]
     fn development_and_mismatched_release_builds_are_rejected() {
         for tag in [None, Some("v0.4.0"), Some("main")] {
-            let error = install_pi("0.5.0", tag, std::path::Path::new("pi"))
-                .unwrap_err()
-                .to_string();
+            let error = pi_install_source("0.5.0", tag).unwrap_err().to_string();
             assert!(error.contains("development build"));
         }
     }
 
     #[test]
-    fn selected_release_install_arguments_and_failures_are_validated() {
+    fn staging_collision_does_not_modify_existing_file() {
         let temp = tempfile::tempdir().unwrap();
-        let pi = temp.path().join("pi");
-        for version in ["0.4.0", "0.5.0"] {
-            let mut invocation = None;
-            install_pi_with(
-                version,
-                Some(&format!("v{version}")),
-                &pi,
-                |program, args| {
-                    invocation = Some((
-                        program.to_owned(),
-                        args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
-                    ));
-                    Ok(true)
-                },
-            )
-            .unwrap();
+        let existing = temp.path().join(".baton.ts.test.tmp");
+        std::fs::write(&existing, "keep me").unwrap();
+        assert_eq!(
+            create_staging_file(temp.path(), "test").unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read_to_string(existing).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn release_extension_installs_only_baton_and_surfaces_download_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("extensions");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("other.ts"), "keep").unwrap();
+        std::fs::write(target.join("baton.ts"), "old extension").unwrap();
+        install_pi_with("0.5.0", Some("v0.5.0"), &target, |url| {
             assert_eq!(
-                invocation,
-                Some((
-                    pi.clone(),
-                    vec![
-                        "install".to_owned(),
-                        format!("git:github.com/klab365/baton@v{version}")
-                    ]
-                ))
+                url,
+                "https://github.com/klab365/baton/raw/refs/tags/v0.5.0/extensions/pi/baton.ts"
             );
-        }
-        assert!(
-            install_pi_with("0.5.0", Some("v0.5.0"), &pi, |_, _| Ok(false))
-                .unwrap_err()
-                .to_string()
-                .contains("release tag exists")
+            Ok(b"extension".to_vec())
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(target.join("baton.ts")).unwrap(),
+            b"extension"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("other.ts")).unwrap(),
+            "keep"
         );
         assert!(
-            install_pi("0.5.0", Some("v0.5.0"), &temp.path().join("missing"))
-                .unwrap_err()
-                .to_string()
-                .contains("on PATH")
+            install_pi_with("0.5.0", Some("v0.5.0"), &target, |_| Err(anyhow::anyhow!(
+                "offline"
+            )))
+            .unwrap_err()
+            .to_string()
+            .contains("offline")
         );
+        let blocked_target = temp.path().join("blocked");
+        std::fs::create_dir_all(blocked_target.join("baton.ts")).unwrap();
+        assert!(
+            install_pi_with("0.5.0", Some("v0.5.0"), &blocked_target, |_| Ok(
+                b"new".to_vec()
+            ))
+            .is_err()
+        );
+        assert!(blocked_target.join("baton.ts").is_dir());
         assert!(
             pi_install_source("0.5.0", Some("main"))
                 .unwrap_err()
