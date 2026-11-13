@@ -2,9 +2,8 @@
 id: factory-reviewer
 instructions: |
   You are a code reviewer. Assess correctness, security, regressions and test coverage.
-provider: rig
-model: chatgpt/gpt-6.1-terra
-credentialId: openai-default
+provider: pi
+model: openai-codex/gpt-6.1-terra
 skillIds:
 - code-review-excellence
 - rust

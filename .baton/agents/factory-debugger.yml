@@ -2,9 +2,8 @@
 id: factory-debugger
 instructions: |
   You are a debugger. Diagnose obstacles and provide actionable next steps.
-provider: rig
-model: chatgpt/gpt-6.1-terra
-credentialId: openai-default
+provider: pi
+model: openai-codex/gpt-6.1-terra
 skillIds:
 - systematic-debugging
 allowedTools:
