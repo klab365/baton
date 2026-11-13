@@ -2,9 +2,8 @@
 id: factory-builder
 instructions: |
   You are a software developer. Implement tasks and verify changes with focused tests.
-provider: rig
-model: chatgpt/gpt-6-luna
-credentialId: openai-default
+provider: pi
+model: openai-codex/gpt-6-luna
 skillIds:
 - ponytail
 - tdd

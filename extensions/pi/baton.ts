@@ -57,7 +57,7 @@ function listRecords(value: unknown, page: number): string {
 	if (!Number.isSafeInteger(page) || page < 1) throw new Error("List page must be a positive integer");
 	if (page > pages.length) throw new Error(`Page ${page} does not exist; list has ${pages.length} page(s)`);
 	const navigation = `Page ${page} of ${pages.length}${page > 1 ? ` — previous: /baton list ${page - 1}` : ""}${page < pages.length ? ` — next: /baton list ${page + 1}` : ""}`;
-	return boundedText(`${navigation}\n${JSON.stringify(pages[page - 1], null, 2)}`);
+	return boundedText(`Work sessions — ${navigation}\n${JSON.stringify(pages[page - 1], null, 2)}`);
 }
 
 function inspectRecord(value: unknown): string {
@@ -75,7 +75,7 @@ function inspectRecord(value: unknown): string {
 		.filter((key) => run[key] !== undefined).map((key) => [key, run[key]]));
 	if (allSteps.length > steps.length) record.omittedEarlierSteps = `${allSteps.length - steps.length} earlier steps omitted`;
 	record.steps = steps;
-	return boundedText(JSON.stringify(record, null, 2));
+	return boundedText(`Work session details\n${JSON.stringify(record, null, 2)}`);
 }
 
 export async function manage(
@@ -123,8 +123,17 @@ export async function drive(
 					throw new Error("Invalid human work item");
 				const context = item.lastResult?.output;
 				show(
-					`Baton ${runId}: human decision for ${item.step.name}\n\n${context ?? "No prior handoff."}`,
+					`Baton ${runId} — Waiting for your decision\nStep: ${item.step.name}\nBlocked on: ${item.allowedOutcomes.join(", ")}\n\nChoose a decision above, enter a response, and confirm to continue. To leave it waiting, cancel; resume later with /baton resume ${runId}.\n\nPrior handoff:`,
 				);
+				const handoff = context ?? "No prior handoff.";
+				for (let offset = 0; offset < handoff.length; offset += 7000) {
+					show(handoff.slice(offset, offset + 7000));
+					if (offset + 7000 < handoff.length) {
+						const next = await ui.select("Baton: continue reading handoff?", ["Next handoff section", "Continue to decision"]);
+					if (next === undefined) return;
+					if (next === "Continue to decision") break;
+				}
+				}
 				ui.setStatus("baton", `Baton: waiting for ${item.step.name}`);
 				const outcome = await ui.select(
 					"Baton: choose a decision (Esc leaves the run waiting)",
@@ -166,29 +175,25 @@ export async function drive(
 				continue;
 			}
 			if (item.status !== "running") {
-				show(`Baton ${runId}: ${item.status}`);
-				ui.notify(
-					`Baton ${runId}: ${item.status}`,
-					item.status === "succeeded" ? "info" : "warning",
-				);
+				const message = `Baton ${runId} — ${item.status.toUpperCase()}`;
+				show(message);
+				ui.notify(message, item.status === "succeeded" ? "info" : "warning");
 				return;
 			}
 			if (!item.step || item.attempt === null)
 				throw new Error("Invalid running work item");
 			ui.setStatus(
 				"baton",
-				`Baton: ${item.step.name} (attempt ${item.attempt})`,
+				`Baton · RUNNING · ${item.step.name} · attempt ${item.attempt}`,
 			);
-			show(
-				`Baton ${runId}: executing ${item.step.name} (attempt ${item.attempt})`,
-			);
+			show(`Baton ${runId} — RUNNING\nStep: ${item.step.name}\nAttempt: ${item.attempt}`);
 			await exec(["execute", "--run", runId]);
 			const next = (await exec(["next", "--run", runId])) as WorkItem;
 			const output =
 				next.lastResult?.attempt === item.attempt
 					? next.lastResult.output
 					: undefined;
-			if (output) show(`Baton ${runId}: ${item.step.name} result\n\n${output}`);
+			if (output) show(`Baton ${runId} — RESULT · ${item.step.name}\n\n${output}`);
 		}
 	} finally {
 		ui.setStatus("baton", undefined);
@@ -239,7 +244,7 @@ export default function baton(pi: ExtensionAPI) {
 				await drive(runId, exec, ctx.ui, show);
 			} catch (error) {
 				ctx.ui.notify(
-					`Baton${runId ? ` ${runId}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
+					`Baton${runId ? ` ${runId}` : ""} — ERROR\n${error instanceof Error ? error.message : String(error)}`,
 					"error",
 				);
 			}
