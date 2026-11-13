@@ -87,8 +87,9 @@ steps:
     the commit and pull request, or explain the blocker and any side effects.
     Stage only intended changes; stop if staged changes or scope are unclear. Check
     the staged diff, use a Conventional Commit, and push without force. Include actual
-    verification and a closing issue reference when applicable. Never rewrite history,
-    merge, push a protected branch or create duplicate commits on re-entry.
+    verification and a closing issue reference when applicable. Tell the next step
+    about pending CI checks and requested reviews. Never rewrite history, merge, push
+    a protected branch or create duplicate commits on re-entry.
   transitions:
   - outcome: completed
     to: ci
@@ -102,9 +103,12 @@ steps:
   prompt: |
     Verify the pull request's CI results. Report successful checks, actionable
     failures for the builder, or external blockers requiring human assistance.
-    Check all applicable required checks against the current PR head; missing, pending
-    or inconclusive checks are not success. Report checks, results and URLs. Use
-    revise_build for actionable failures and blocked for external blockers.
+    Check all applicable required checks and requested reviews against the current PR
+    head. Wait up to 30 minutes, checking at least once per minute, for pending or
+    missing checks and requested reviews before treating them as external blockers.
+    Process actionable review feedback and CI failures with revise_build; use blocked
+    for unresolved external blockers. Missing, pending or inconclusive checks and
+    outstanding requested reviews are not success. Report results and URLs.
   transitions:
   - outcome: completed
     to: null
