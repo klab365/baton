@@ -1,5 +1,6 @@
 use anyhow::{Context, bail};
 use baton_core::domain::work::{WorkCheck, WorkHumanAction, WorkSubmission};
+use baton_core::{domain::project::ConfigState, ports::project_config::ProjectConfigRepository};
 pub mod application;
 use application::{WorkApplication, WorkCommand};
 use std::{
@@ -8,7 +9,8 @@ use std::{
     process::Command,
 };
 
-const HELP: &str = "Usage: baton work <start|next|execute|submit|status|respond|cancel> [options]
+const HELP: &str =
+    "Usage: baton work <start|next|execute|submit|status|respond|cancel|pipelines> [options]
   start --issue <task text> [--pipeline ID]
         [--max-attempts 50] [--check STEP=COMMAND ...]
   next --run ID
@@ -17,6 +19,7 @@ const HELP: &str = "Usage: baton work <start|next|execute|submit|status|respond|
   status [--run ID]
   respond --run ID --result FILE  (explicit human decision only)
   cancel --run ID
+  pipelines
 Common: --workspace PATH (current Git worktree by default)
 Output: JSON on stdout; errors are JSON on stderr with a nonzero exit status.
 Baton executes configured agents in the existing worktree; it does not create or delete it.";
@@ -41,6 +44,7 @@ impl Options {
                     .arg(option("max-attempts"))
                     .arg(option("check").action(ArgAction::Append)),
             )
+            .subcommand(common(Command::new("pipelines")))
             .subcommand(common(Command::new("next")).arg(option("run")))
             .subcommand(common(Command::new("execute")).arg(option("run")))
             .subcommand(common(Command::new("status")).arg(option("run")))
@@ -90,6 +94,23 @@ impl Options {
     }
 }
 
+async fn application_pipelines(directory: &Path) -> anyhow::Result<Vec<String>> {
+    let repository =
+        baton_adapters::repositories::yaml_project_config::YamlProjectConfigRepository::new(
+            directory.to_path_buf(),
+        );
+    match repository.load().await.map_err(anyhow::Error::msg)? {
+        ConfigState::Ready(snapshot) => Ok(snapshot
+            .config
+            .pipelines
+            .into_iter()
+            .map(|pipeline| pipeline.id)
+            .collect()),
+        ConfigState::Missing => Ok(vec![]),
+        ConfigState::Invalid(error) => bail!("Invalid project configuration: {error}"),
+    }
+}
+
 fn workspace(path: &Path) -> anyhow::Result<PathBuf> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -125,6 +146,13 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
             .map(PathBuf::from)
             .unwrap_or(std::env::current_dir()?),
     )?;
+    if options.action == "pipelines" {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&application_pipelines(&directory).await?)?
+        );
+        return Ok(());
+    }
     let command = match options.action.as_str() {
         "start" => {
             let checks = options

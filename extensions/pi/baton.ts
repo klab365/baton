@@ -22,6 +22,15 @@ type UI = Pick<
 	"select" | "editor" | "confirm" | "notify" | "setStatus"
 >;
 
+export async function choosePipeline(exec: Exec, ui: UI): Promise<string | undefined> {
+	const pipelines = (await exec(["pipelines"])) as string[];
+	if (pipelines.length === 0) {
+		ui.notify("Baton: no pipelines are configured", "warning");
+		return;
+	}
+	return ui.select("Baton: choose a pipeline", pipelines);
+}
+
 /** Run the CLI state machine; the UI never chooses a human outcome on its own. */
 export async function drive(
 	runId: string,
@@ -143,13 +152,9 @@ export default function baton(pi: ExtensionAPI) {
 						"",
 					);
 					if (!task?.trim()) return;
-					const pipeline = await ctx.ui.input(
-						"Pipeline ID (leave empty if the project has one pipeline)",
-						"",
-					);
+					const pipeline = await choosePipeline(exec, ctx.ui);
 					if (pipeline === undefined) return;
-					const startArgs = ["start", "--issue", task];
-					if (pipeline.trim()) startArgs.push("--pipeline", pipeline.trim());
+					const startArgs = ["start", "--issue", task, "--pipeline", pipeline];
 					const started = (await exec(startArgs)) as Progress;
 					runId = started.id;
 					show(`Baton run started: ${runId}`);
