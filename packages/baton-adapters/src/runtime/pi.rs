@@ -38,13 +38,21 @@ fn kill_process_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+struct CollectedPiIo {
+    stdout: Vec<u8>,
+    stdout_truncated: bool,
+    stderr: Vec<u8>,
+    stderr_truncated: bool,
+    prompt_error: Option<String>,
+}
+
 fn collect_pi_io(
     child: &mut std::process::Child,
     stdout: mpsc::Receiver<(Vec<u8>, bool)>,
     stderr: mpsc::Receiver<(Vec<u8>, bool)>,
     prompt: mpsc::Receiver<std::io::Result<()>>,
     cancelled: &dyn Fn() -> bool,
-) -> Result<(Vec<u8>, bool, Vec<u8>, bool, Option<String>), String> {
+) -> Result<CollectedPiIo, String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let (mut stdout_result, mut stderr_result, mut prompt_result) = (None, None, None);
     while stdout_result.is_none() || stderr_result.is_none() || prompt_result.is_none() {
@@ -72,13 +80,13 @@ fn collect_pi_io(
     let prompt_error = prompt_result
         .and_then(Result::err)
         .map(|error| format!("Could not send Pi prompt: {error}"));
-    Ok((
-        output,
-        truncated,
-        diagnostics,
-        diagnostics_truncated,
+    Ok(CollectedPiIo {
+        stdout: output,
+        stdout_truncated: truncated,
+        stderr: diagnostics,
+        stderr_truncated: diagnostics_truncated,
         prompt_error,
-    ))
+    })
 }
 
 fn session_file(directory: &Path, worktree: &Path) -> Result<Option<std::path::PathBuf>, String> {
@@ -401,13 +409,12 @@ fn execute_once(
         }
         thread::sleep(Duration::from_millis(25));
     };
-    let (stdout, stdout_truncated, stderr, stderr_truncated, prompt_error) =
-        collect_pi_io(&mut child, stdout_rx, stderr_rx, prompt_rx, cancelled)?;
-    if stdout_truncated {
+    let collected = collect_pi_io(&mut child, stdout_rx, stderr_rx, prompt_rx, cancelled)?;
+    if collected.stdout_truncated {
         return Err("Pi output exceeded the 16 MiB limit".into());
     }
     if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr).to_ascii_lowercase();
+        let stderr = String::from_utf8_lossy(&collected.stderr).to_ascii_lowercase();
         let stderr = stderr.trim();
         let diagnostic =
             if stderr.starts_with("authentication failed") || stderr.starts_with("unauthorized") {
@@ -425,18 +432,18 @@ fn execute_once(
             };
         return Err(format!(
             "Pi CLI failed with status {status}: {diagnostic}{}",
-            if stderr_truncated {
+            if collected.stderr_truncated {
                 " (diagnostics truncated)"
             } else {
                 ""
             }
         ));
     }
-    if let Some(error) = prompt_error {
+    if let Some(error) = collected.prompt_error {
         return Err(error);
     }
-    let output =
-        String::from_utf8(stdout).map_err(|_| "Pi returned non-UTF-8 output".to_owned())?;
+    let output = String::from_utf8(collected.stdout)
+        .map_err(|_| "Pi returned non-UTF-8 output".to_owned())?;
     if !allowed_outcomes.is_empty() {
         let path = extension_dir
             .as_ref()
