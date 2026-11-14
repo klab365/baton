@@ -226,7 +226,11 @@ impl AgentRuntime for ConfiguredRuntime {
 mod tests {
     use super::*;
     use crate::credentials::FilesystemCredentialRepository;
-    use baton_core::ports::credentials::CredentialRepository;
+    use baton_core::{
+        domain::runtime::RuntimeKind,
+        features::pipeline_engine::start_pipeline,
+        ports::{credentials::CredentialRepository, runs::RunRepository},
+    };
     use std::time::Duration;
 
     #[cfg(unix)]
@@ -278,7 +282,8 @@ printf 'done'
         let repository = Arc::new(FilesystemCredentialRepository::new(
             root.path().join("vault"),
         ));
-        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
         runtime.pi_command = pi.clone().into();
         let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "model":"openai/gpt-4.1", "credentialId":null, "skillIds":[], "allowedTools":["read", "shell", "report_outcome"]})).unwrap();
         let large_prompt = format!("- {}", "x".repeat(256 * 1024));
@@ -332,9 +337,133 @@ printf 'done'
             .unwrap();
         assert!(runtime.take_decision().is_none());
         assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xxxxxx");
-        std::fs::write(&pi, "#!/bin/sh\necho secret-token >&2\nexit 7\n").unwrap();
+        std::fs::write(
+            &pi,
+            "#!/bin/sh\necho 'Error: Unknown option: secret-token' >&2\nexit 7\n",
+        )
+        .unwrap();
         let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
-        assert!(error.contains("pi auth") && !error.contains("secret-token"));
+        assert!(error.contains("unsupported CLI option"));
+        assert!(!error.contains("secret-token"));
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        std::fs::write(
+            &pi,
+            "#!/bin/sh\necho 'Error: Model \"fake/nonexistent-secret\" not found. Use --list-models to see available models.' >&2\nexit 7\n",
+        )
+        .unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("configured model was not found"), "{error}");
+        assert!(!error.contains("nonexistent-secret"));
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        std::fs::write(
+            &pi,
+            "#!/bin/sh\necho 'No API key found for private-provider.' >&2\nexit 7\n",
+        )
+        .unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(
+            error.contains("provider API key is not configured"),
+            "{error}"
+        );
+        assert!(!error.contains("private-provider"));
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        std::fs::write(&pi, "#!/bin/sh\necho 'opaque-secret' >&2\nexit 7\n").unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("no safe diagnostic available"), "{error}");
+        assert!(!error.contains("opaque-secret") && !error.contains("credentials"));
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        std::fs::write(&pi, "#!/bin/sh\ncat >/dev/null\nexit 7\n").unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("no safe diagnostic available"));
+        let root = tempfile::tempdir().unwrap();
+        let mut runtime =
+            ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.clone().into();
+        std::fs::write(
+            &pi,
+            "#!/bin/sh\nprintf 'unauthorized %0100000d' 0 >&2\nexit 7\n",
+        )
+        .unwrap();
+        let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
+        assert!(error.contains("authentication failed"));
+        assert!(error.contains("diagnostics truncated"));
+        assert!(!error.contains("000000"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_failure_diagnostic_survives_pipeline_repository_reload() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(root.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init"]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ]);
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, "#!/bin/sh\necho 'Error: Model \"fake/private-model\" not found. Use --list-models to see available models.' >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut config: baton_core::domain::project::ProjectConfig = serde_json::from_str(
+            include_str!("../../../baton-core/tests/fixture_config.json"),
+        )
+        .unwrap();
+        config.agents[0].runtime_kind = RuntimeKind::Pi;
+        config.pipelines[0].steps.truncate(1);
+        config.pipelines[0].steps[0].transitions.clear();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().join("vault"), vec![]);
+        runtime.pi_command = pi.into();
+        let runs = crate::repositories::filesystem_run::FilesystemRunRepository(root.path().into());
+        let run =
+            start_pipeline(&config, "draft", "task", "pi-failure", &mut runtime, &runs).unwrap();
+        assert_eq!(run.status, baton_core::domain::pipeline::Status::Failed);
+        assert!(
+            run.steps[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("configured model was not found")
+        );
+        assert!(
+            !serde_json::to_string(&run)
+                .unwrap()
+                .contains("private-model")
+        );
+        let reopened = runs.load("pi-failure").unwrap();
+        assert_eq!(reopened.steps[0].error, run.steps[0].error);
+        assert_eq!(reopened.steps[0].agent_id, "writer");
+        assert_eq!(reopened.steps[0].attempt, 1);
     }
 
     #[cfg(unix)]
@@ -502,7 +631,7 @@ printf 'handoff'
             .execute(root.path(), &agent, &"x".repeat(1024 * 1024))
             .unwrap_err();
         assert!(
-            error.contains("provider credentials") && !error.contains("private-detail"),
+            error.contains("no safe diagnostic available") && !error.contains("private-detail"),
             "{error}"
         );
     }

@@ -44,7 +44,7 @@ fn collect_pi_io(
     stderr: mpsc::Receiver<(Vec<u8>, bool)>,
     prompt: mpsc::Receiver<std::io::Result<()>>,
     cancelled: &dyn Fn() -> bool,
-) -> Result<(Vec<u8>, bool, Option<String>), String> {
+) -> Result<(Vec<u8>, bool, Vec<u8>, bool, Option<String>), String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let (mut stdout_result, mut stderr_result, mut prompt_result) = (None, None, None);
     while stdout_result.is_none() || stderr_result.is_none() || prompt_result.is_none() {
@@ -68,10 +68,17 @@ fn collect_pi_io(
         std::thread::sleep(Duration::from_millis(20));
     }
     let (output, truncated) = stdout_result.unwrap();
+    let (diagnostics, diagnostics_truncated) = stderr_result.unwrap();
     let prompt_error = prompt_result
         .and_then(Result::err)
         .map(|error| format!("Could not send Pi prompt: {error}"));
-    Ok((output, truncated, prompt_error))
+    Ok((
+        output,
+        truncated,
+        diagnostics,
+        diagnostics_truncated,
+        prompt_error,
+    ))
 }
 
 fn session_file(directory: &Path, worktree: &Path) -> Result<Option<std::path::PathBuf>, String> {
@@ -394,14 +401,35 @@ fn execute_once(
         }
         thread::sleep(Duration::from_millis(25));
     };
-    let (stdout, stdout_truncated, prompt_error) =
+    let (stdout, stdout_truncated, stderr, stderr_truncated, prompt_error) =
         collect_pi_io(&mut child, stdout_rx, stderr_rx, prompt_rx, cancelled)?;
     if stdout_truncated {
         return Err("Pi output exceeded the 16 MiB limit".into());
     }
     if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr).to_ascii_lowercase();
+        let stderr = stderr.trim();
+        let diagnostic =
+            if stderr.starts_with("authentication failed") || stderr.starts_with("unauthorized") {
+                "authentication failed"
+            } else if stderr.starts_with("error: unknown option:") {
+                "unsupported CLI option"
+            } else if stderr.starts_with("error: model ")
+                && stderr.contains(" not found. use --list-models to see available models.")
+            {
+                "configured model was not found"
+            } else if stderr.starts_with("no api key found for ") && stderr.lines().count() == 1 {
+                "provider API key is not configured"
+            } else {
+                "no safe diagnostic available"
+            };
         return Err(format!(
-            "Pi CLI failed with status {status}; ensure Pi provider credentials are configured (verify with `pi auth check --model provider/model`)"
+            "Pi CLI failed with status {status}: {diagnostic}{}",
+            if stderr_truncated {
+                " (diagnostics truncated)"
+            } else {
+                ""
+            }
         ));
     }
     if let Some(error) = prompt_error {

@@ -791,7 +791,13 @@ fn failure_stops_remaining_steps_and_survives_reopen() {
     assert_eq!(run.steps[0].status, Status::Failed);
     assert_eq!(run.steps[1].status, Status::Pending);
     assert!(run.steps[0].error.is_some());
-    assert_eq!(fixture.repo().load("failed").unwrap(), run);
+    assert_eq!(run.steps[0].attempt, 1);
+    assert_eq!(run.steps[0].agent_id, "writer");
+    let reopened = fixture.repo().load("failed").unwrap();
+    assert_eq!(reopened.steps[0].error, run.steps[0].error);
+    assert_eq!(reopened.steps[0].attempt, run.steps[0].attempt);
+    assert_eq!(reopened.steps[0].agent_id, run.steps[0].agent_id);
+    assert_eq!(reopened, run);
 }
 
 #[test]
