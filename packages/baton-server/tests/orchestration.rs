@@ -188,10 +188,7 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
     )
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
-    assert_eq!(
-        run.steps[0].output.as_deref(),
-        Some("short summary")
-    );
+    assert_eq!(run.steps[0].output.as_deref(), Some("short summary"));
     assert_eq!(
         fixture.repo().load("detailed").unwrap().steps[0].output,
         run.steps[0].output
