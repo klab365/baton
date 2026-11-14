@@ -179,13 +179,16 @@ impl WorkApplication {
                 };
                 let mut runtime = factory.create(config, &run.pipeline_id)?;
                 runtime.set_run_id(&run.id)?;
-                if let Some(agent) = &agent {
-                    runtime.set_history_required(
-                        run.steps.iter().any(|attempt| {
-                            attempt.agent_id == agent.id && attempt.output.is_some()
-                        }),
-                    );
-                }
+                let history_unavailable = if let Some(agent) = &agent {
+                    let required = run
+                        .steps
+                        .iter()
+                        .any(|attempt| attempt.agent_id == agent.id && attempt.output.is_some());
+                    runtime.set_history_required(required);
+                    required && !runtime.supports_session_resumption(agent)
+                } else {
+                    false
+                };
                 let workspace = self.workspace.clone();
                 let allowed = if step.transitions.is_empty() {
                     vec![]
@@ -232,6 +235,11 @@ impl WorkApplication {
                         return Ok((outcome, summary, vec![]));
                     }
                     let agent = agent.ok_or("Current step has no configured agent")?;
+                    if history_unavailable {
+                        return Err(StepFailure::Runtime(
+                            "Runtime does not support resuming this agent's session".into(),
+                        ));
+                    }
                     let mut observer = |mut entry: baton_core::domain::pipeline::RunTraceEntry| {
                         let _lease =
                             baton_core::features::pipeline_engine::acquire_action_lease_retry(

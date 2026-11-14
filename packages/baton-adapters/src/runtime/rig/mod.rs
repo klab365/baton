@@ -121,6 +121,24 @@ fn validate_context_size(conversation: &Conversation) -> Result<(), String> {
     Ok(())
 }
 
+fn outcome_followup(
+    allowed_outcomes: &[Outcome],
+    has_decision: bool,
+    attempts: usize,
+) -> Option<String> {
+    if allowed_outcomes.is_empty() || has_decision || attempts >= 2 {
+        return None;
+    }
+    let allowed = allowed_outcomes
+        .iter()
+        .map(outcome_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "You did not call report_outcome with an allowed outcome. Call report_outcome now with one of: {allowed}, then provide your complete handoff. Do not repeat the task."
+    ))
+}
+
 fn append_outcome_instruction(preamble: &mut String, allowed_outcomes: &[Outcome]) {
     if allowed_outcomes.is_empty() {
         return;
@@ -589,6 +607,7 @@ impl RigRuntime {
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
+        let mut followups = 0;
         let mut observed_requests = 0;
         let mut observed_wire = 0;
         let mut observed_activities = 0;
@@ -649,6 +668,19 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
+                let missing_decision = !allowed_outcomes.is_empty()
+                    && decision
+                        .lock()
+                        .map_err(|_| "Pipeline outcome state is unavailable".to_owned())?
+                        .is_none();
+                if let Some(prompt) =
+                    outcome_followup(allowed_outcomes, !missing_decision, followups)
+                {
+                    followups += 1;
+                    app.world_mut()
+                        .trigger(Deliver::new(entity, prompt, DeliveryMode::Queue));
+                    continue;
+                }
                 let trace = Vec::new();
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
@@ -680,8 +712,19 @@ impl RigRuntime {
 
 #[cfg(test)]
 mod outcome_prompt_tests {
-    use super::{append_outcome_instruction, push_activity, sort_trace_entries};
+    use super::{append_outcome_instruction, outcome_followup, push_activity, sort_trace_entries};
     use baton_core::domain::{pipeline::RunTraceEntry, project::Outcome};
+
+    #[test]
+    fn missing_outcome_followup_is_bounded_and_lists_allowed_choices() {
+        let allowed = [Outcome::Completed, Outcome::Blocked];
+        let prompt = outcome_followup(&allowed, false, 0).unwrap();
+        assert!(prompt.contains("completed, blocked"));
+        assert!(outcome_followup(&allowed, false, 1).is_some());
+        assert!(outcome_followup(&allowed, false, 2).is_none());
+        assert!(outcome_followup(&allowed, true, 0).is_none());
+        assert!(outcome_followup(&[], false, 0).is_none());
+    }
 
     #[test]
     fn outcome_prompt_uses_only_configured_choices_without_global_blocked_policy() {

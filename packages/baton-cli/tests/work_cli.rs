@@ -177,7 +177,7 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     let (continue_provider_tx, continue_provider_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..7 {
             let deadline = Instant::now() + Duration::from_secs(30);
             let mut stream = loop {
                 match listener.accept() {
@@ -407,7 +407,9 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             .contains("Missing outcome")
     );
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 7);
+    assert!(requests[5].contains("You did not call report_outcome"));
+    assert!(requests[6].contains("You did not call report_outcome"));
     assert!(requests[0].contains("Implement feature"));
     let assistant_messages = |request: &str| {
         let body = request.split_once("\r\n\r\n").unwrap().1;

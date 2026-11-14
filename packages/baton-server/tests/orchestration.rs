@@ -1,15 +1,23 @@
 use baton_adapters::repositories::filesystem_run::FilesystemRunRepository;
 use baton_adapters::runtime::FakeRuntime;
 use baton_core::{
-    domain::{pipeline::*, project::parse_config},
+    domain::{
+        pipeline::*,
+        project::{Agent, Outcome, parse_config},
+        runtime::RuntimeModel,
+        work::CheckResult,
+    },
     features::pipeline_engine::*,
     ports::{
         runs::RunRepository,
-        runtime::{AgentRuntime, MAX_HANDOFF_BYTES},
+        runtime::{AgentDecision, AgentRuntime, MAX_HANDOFF_BYTES},
     },
 };
 use baton_server::AppState;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -86,6 +94,64 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
         calls: usize,
     }
     impl AgentRuntime for Runtime {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -136,6 +202,67 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
 fn empty_and_oversized_agent_handoffs_fail_without_routing() {
     struct Runtime(String);
     impl AgentRuntime for Runtime {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -173,6 +300,67 @@ fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
     config.agents[0].skill_ids.push("assigned".into());
     struct Inspect;
     impl AgentRuntime for Inspect {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -226,6 +414,67 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
         inputs: Vec<String>,
     }
     impl AgentRuntime for RecordingRuntime {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -369,6 +618,64 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
         decision: Option<AgentDecision>,
     }
     impl AgentRuntime for Runtime {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -523,6 +830,67 @@ fn bounds_are_enforced() {
 fn restart_marks_interrupted_runs_failed_without_resuming() {
     struct Crash;
     impl AgentRuntime for Crash {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -575,6 +943,67 @@ fn restart_marks_interrupted_runs_failed_without_resuming() {
 fn interrupted_execution_leaves_durable_running_state_without_retry() {
     struct Crash;
     impl AgentRuntime for Crash {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             _: &std::path::Path,
@@ -742,6 +1171,67 @@ fn observer_retries_until_a_cancellation_transaction_is_visible() {
 fn cancelled_run_retains_its_workspace() {
     struct Cancel(FilesystemRunRepository);
     impl AgentRuntime for Cancel {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(&mut self) -> Result<Vec<RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &baton_core::domain::project::Agent) -> bool {
+            true
+        }
         fn execute(
             &mut self,
             directory: &std::path::Path,

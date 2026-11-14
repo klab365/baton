@@ -16,6 +16,39 @@ struct CancellableRuntime<'a, R: ?Sized> {
     cancelled: &'a (dyn Fn() -> bool + Sync),
 }
 impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
+    fn set_run_id(&mut self, run_id: &str) -> Result<(), String> {
+        self.runtime.set_run_id(run_id)
+    }
+    fn set_history_required(&mut self, required: bool) {
+        self.runtime.set_history_required(required);
+    }
+    fn execute_shell(
+        &mut self,
+        directory: &std::path::Path,
+        command: &str,
+        timeout: u32,
+        _: &dyn Fn() -> bool,
+    ) -> Result<crate::domain::work::CheckResult, String> {
+        self.runtime
+            .execute_shell(directory, command, timeout, self.cancelled)
+    }
+    fn list_models(&mut self) -> Result<Vec<crate::domain::runtime::RuntimeModel>, String> {
+        self.runtime.list_models()
+    }
+    fn execute_cancellable(
+        &mut self,
+        directory: &std::path::Path,
+        agent: &Agent,
+        input: &str,
+        _: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        self.runtime
+            .execute_cancellable(directory, agent, input, self.cancelled)
+    }
+    fn supports_session_resumption(&self, agent: &Agent) -> bool {
+        self.runtime.supports_session_resumption(agent)
+    }
+
     fn execute(
         &mut self,
         directory: &std::path::Path,
@@ -790,9 +823,11 @@ pub fn execute_graph(
             .collect::<Vec<_>>();
         run.steps[index].model = agent.model.clone();
         let assigned = agent.clone();
-        runtime.set_history_required(run.steps.iter().any(|attempt| {
+        let history_required = run.steps.iter().any(|attempt| {
             attempt.agent_id == agent.id && attempt.attempt > 0 && attempt.output.is_some()
-        }));
+        });
+        let history_unavailable = history_required && !runtime.supports_session_resumption(agent);
+        runtime.set_history_required(history_required);
         let worktree_path = run
             .worktree
             .as_ref()
@@ -814,8 +849,10 @@ pub fn execute_graph(
                 Some(format!("Observed runtime activity: {kind}")),
             )
         };
-        let result = guarded
-            .execute_pipeline_step_observed(
+        let result = if history_unavailable {
+            Err("Runtime does not support resuming this agent's session".to_owned())
+        } else {
+            guarded.execute_pipeline_step_observed(
                 &worktree_path,
                 &assigned,
                 &input,
@@ -823,30 +860,31 @@ pub fn execute_graph(
                 &cancelled,
                 &mut observer,
             )
-            .and_then(|output| {
-                if output.trim().is_empty() {
-                    return Err("Agent returned an empty handoff".into());
+        }
+        .and_then(|output| {
+            if output.trim().is_empty() {
+                return Err("Agent returned an empty handoff".into());
+            }
+            if output.len() > MAX_HANDOFF_BYTES {
+                return Err("Agent output exceeds 16384 bytes".into());
+            }
+            if allowed_outcomes.is_empty() {
+                Ok((Outcome::Completed, output))
+            } else {
+                let decision = guarded.take_decision().ok_or_else(|| {
+                    "Agent completed without reporting a pipeline outcome".to_owned()
+                })?;
+                if !allowed_outcomes.contains(&decision.outcome) {
+                    return Err(
+                        "Agent reported an outcome not allowed by this pipeline step".into(),
+                    );
                 }
-                if output.len() > MAX_HANDOFF_BYTES {
-                    return Err("Agent output exceeds 16384 bytes".into());
+                if decision.summary.len() > MAX_HANDOFF_BYTES {
+                    return Err("Pipeline outcome summary exceeds 16384 bytes".into());
                 }
-                if allowed_outcomes.is_empty() {
-                    Ok((Outcome::Completed, output))
-                } else {
-                    let decision = guarded.take_decision().ok_or_else(|| {
-                        "Agent completed without reporting a pipeline outcome".to_owned()
-                    })?;
-                    if !allowed_outcomes.contains(&decision.outcome) {
-                        return Err(
-                            "Agent reported an outcome not allowed by this pipeline step".into(),
-                        );
-                    }
-                    if decision.summary.len() > MAX_HANDOFF_BYTES {
-                        return Err("Pipeline outcome summary exceeds 16384 bytes".into());
-                    }
-                    Ok((decision.outcome, output))
-                }
-            });
+                Ok((decision.outcome, output))
+            }
+        });
         let mut trace = runtime.take_trace();
         for entry in &mut trace {
             entry.attempt = Some(run.steps[index].attempt);
