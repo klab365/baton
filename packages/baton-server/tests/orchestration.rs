@@ -160,8 +160,8 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
         ) -> Result<String, String> {
             self.calls += 1;
             if self.calls == 2 {
-                assert!(input.contains("complete detailed result"));
-                assert!(!input.contains("short summary"));
+                assert!(input.contains("short summary"));
+                assert!(!input.contains("complete detailed result"));
             }
             Ok("complete detailed result".into())
         }
@@ -188,10 +188,7 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
     )
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
-    assert_eq!(
-        run.steps[0].output.as_deref(),
-        Some("complete detailed result")
-    );
+    assert_eq!(run.steps[0].output.as_deref(), Some("short summary"));
     assert_eq!(
         fixture.repo().load("detailed").unwrap().steps[0].output,
         run.steps[0].output

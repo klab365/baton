@@ -862,13 +862,13 @@ pub fn execute_graph(
             )
         }
         .and_then(|output| {
-            if output.trim().is_empty() {
-                return Err("Agent returned an empty handoff".into());
-            }
-            if output.len() > MAX_HANDOFF_BYTES {
-                return Err("Agent output exceeds 16384 bytes".into());
-            }
             if allowed_outcomes.is_empty() {
+                if output.trim().is_empty() {
+                    return Err("Agent returned an empty handoff".into());
+                }
+                if output.len() > MAX_HANDOFF_BYTES {
+                    return Err("Agent output exceeds 16384 bytes".into());
+                }
                 Ok((Outcome::Completed, output))
             } else {
                 let decision = guarded.take_decision().ok_or_else(|| {
@@ -879,10 +879,13 @@ pub fn execute_graph(
                         "Agent reported an outcome not allowed by this pipeline step".into(),
                     );
                 }
+                if decision.summary.trim().is_empty() {
+                    return Err("Pipeline outcome summary must not be empty".into());
+                }
                 if decision.summary.len() > MAX_HANDOFF_BYTES {
                     return Err("Pipeline outcome summary exceeds 16384 bytes".into());
                 }
-                Ok((decision.outcome, output))
+                Ok((decision.outcome, decision.summary))
             }
         });
         let mut trace = runtime.take_trace();

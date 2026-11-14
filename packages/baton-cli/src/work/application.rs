@@ -282,8 +282,9 @@ impl WorkApplication {
                         &mut observer,
                     )?;
                     let trace = runtime.take_trace();
-                    if output.trim().is_empty()
-                        || output.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES
+                    if allowed.is_empty()
+                        && (output.trim().is_empty()
+                            || output.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES)
                     {
                         return Err(StepFailure::InvalidOutcome {
                             message: "Agent handoff is empty or exceeds 16384 bytes",
@@ -309,7 +310,16 @@ impl WorkApplication {
                                 trace,
                             });
                         }
-                        Ok((decision.outcome, output, trace))
+                        if decision.summary.trim().is_empty()
+                            || decision.summary.len()
+                                > baton_core::ports::runtime::MAX_HANDOFF_BYTES
+                        {
+                            return Err(StepFailure::InvalidOutcome {
+                                message: "Agent outcome handoff is empty or exceeds 16384 bytes",
+                                trace,
+                            });
+                        }
+                        Ok((decision.outcome, decision.summary, trace))
                     }
                 })
                 .await

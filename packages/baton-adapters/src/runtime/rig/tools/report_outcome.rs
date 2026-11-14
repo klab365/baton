@@ -52,7 +52,7 @@ impl Tool for ReportOutcome {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. Include a concise natural-language summary for the next step."
+            "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. Include the complete authoritative handoff for the next step in this summary."
         )
     }
 
