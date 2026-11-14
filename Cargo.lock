@@ -729,7 +729,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "baton-adapters"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "baton-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "baton-adapters",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "baton-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "baton-server"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "baton-web"
-version = "0.10.0"
+version = "0.11.0"
 
 [[package]]
 name = "bevy"
