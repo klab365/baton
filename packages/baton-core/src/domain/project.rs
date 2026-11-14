@@ -94,6 +94,8 @@ pub enum PipelineStepKind {
         agent_id: String,
         #[serde(default)]
         prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_task: Option<bool>,
     },
     Human,
     Shell {
@@ -120,6 +122,8 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 #[serde(default)]
                 prompt: String,
                 #[serde(default)]
+                include_task: Option<bool>,
+                #[serde(default)]
                 transitions: Vec<Transition>,
             },
             Human {
@@ -144,11 +148,16 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 name,
                 agent_id,
                 prompt,
+                include_task,
                 transitions,
             } => Self {
                 id,
                 name,
-                kind: PipelineStepKind::Agent { agent_id, prompt },
+                kind: PipelineStepKind::Agent {
+                    agent_id,
+                    prompt,
+                    include_task,
+                },
                 transitions,
             },
             Wire::Human {
@@ -616,6 +625,7 @@ mod project_identity_tests {
                 PipelineStepKind::Agent {
                     agent_id: "worker".into(),
                     prompt: String::new(),
+                    include_task: None,
                 },
             ),
             (

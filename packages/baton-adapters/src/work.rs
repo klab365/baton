@@ -9,15 +9,17 @@ use std::{
 
 const OUTPUT_LIMIT: usize = 16384;
 
-fn capture(mut input: impl Read) -> std::io::Result<Vec<u8>> {
+fn capture(mut input: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
     let mut output = Vec::new();
+    let mut truncated = false;
     let mut buffer = [0; 4096];
     loop {
         let count = input.read(&mut buffer)?;
         if count == 0 {
-            return Ok(output);
+            return Ok((output, truncated));
         }
         let remaining = (OUTPUT_LIMIT / 2).saturating_sub(output.len());
+        truncated |= count > remaining;
         output.extend_from_slice(&buffer[..count.min(remaining)]);
     }
 }
@@ -34,6 +36,25 @@ pub fn run_shell(
     command: &str,
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
+) -> Result<CheckResult, String> {
+    run_shell_inner(workspace, command, timeout_seconds, cancelled, false)
+}
+
+pub fn run_pipeline_shell(
+    workspace: &Path,
+    command: &str,
+    timeout_seconds: u32,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<CheckResult, String> {
+    run_shell_inner(workspace, command, timeout_seconds, cancelled, true)
+}
+
+fn run_shell_inner(
+    workspace: &Path,
+    command: &str,
+    timeout_seconds: u32,
+    cancelled: &dyn Fn() -> bool,
+    reject_truncated: bool,
 ) -> Result<CheckResult, String> {
     if cancelled() {
         return Err("Run cancelled".into());
@@ -81,14 +102,17 @@ pub fn run_shell(
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL);
     }
-    let mut bytes = stdout
+    let (mut bytes, stdout_truncated) = stdout
         .join()
         .map_err(|_| "Check stdout reader panicked")?
         .map_err(|e| e.to_string())?;
-    let errors = stderr
+    let (errors, stderr_truncated) = stderr
         .join()
         .map_err(|_| "Check stderr reader panicked")?
         .map_err(|e| e.to_string())?;
+    if reject_truncated && (stdout_truncated || stderr_truncated) {
+        return Err("Shell output exceeds capture limit (8192 bytes per stream)".into());
+    }
     bytes.extend_from_slice(&errors[..errors.len().min(OUTPUT_LIMIT.saturating_sub(bytes.len()))]);
     let mut output = String::from_utf8_lossy(&bytes).into_owned();
     if timed_out {
@@ -106,6 +130,13 @@ pub fn run_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pipeline_shell_rejects_truncated_output() {
+        let error =
+            run_pipeline_shell(Path::new("."), "yes x | head -c 9000", 10, &|| false).unwrap_err();
+        assert!(error.contains("capture limit"));
+    }
 
     #[test]
     fn discards_output_beyond_the_limit_without_blocking_the_check() {

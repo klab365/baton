@@ -53,7 +53,7 @@ In **Pipelines → Create pipeline**, add the steps in this order, then configur
 | `commit`   | `factory-committer` | `completed` → End; `blocked` → `help`                                                         |
 | `help`     | Human               | `responded` or `approved` → `plan`; `rejected` → End                                          |
 
-Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/pipelines/software-factory.yml). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff, but its sequential step cannot itself route to human help.
+Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/pipelines/software-factory.yml). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff and routes to human help.
 
 **Review loops have no automatic retry or cost limit.** Monitor the run and cancel it if agents repeat without progress. Human approval does not merge or push the branch. A rejected final human transition ends the run as failed. See [workflow transitions](workflow-transitions.md).
 

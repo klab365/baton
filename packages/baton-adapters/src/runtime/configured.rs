@@ -111,7 +111,7 @@ impl AgentRuntime for ConfiguredRuntime {
         timeout_seconds: u32,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<baton_core::domain::work::CheckResult, String> {
-        crate::work::run_shell(directory, command, timeout_seconds, cancelled)
+        crate::work::run_pipeline_shell(directory, command, timeout_seconds, cancelled)
     }
     fn execute(&mut self, directory: &Path, agent: &Agent, input: &str) -> Result<String, String> {
         self.execute_cancellable(directory, agent, input, &|| false)
@@ -288,9 +288,11 @@ printf 'done'
             runtime
                 .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
                 .unwrap(),
-            "handoff"
+            "done"
         );
-        assert_eq!(runtime.take_decision().unwrap().outcome, Outcome::Completed);
+        let decision = runtime.take_decision().unwrap();
+        assert_eq!(decision.outcome, Outcome::Completed);
+        assert_eq!(decision.summary, "handoff");
         std::fs::write(&pi, "#!/bin/sh\ncat > /dev/null\nprintf 'no tool call'\n").unwrap();
         let error = runtime
             .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
@@ -383,9 +385,10 @@ printf 'done'
             format!(
                 r#"#!/bin/sh
 BATON_PI_DESCENDANT_FILE='{}' '{}' --exact runtime::configured::tests::pi_detached_pipe_holder --nocapture &
+for i in $(seq 1 100); do [ -s '{}' ] && break; sleep 0.01; done
 exit 0
 "#,
-                escaped_pid.display(), std::env::current_exe().unwrap().display()
+                escaped_pid.display(), std::env::current_exe().unwrap().display(), escaped_pid.display()
             ),
         )
         .unwrap();

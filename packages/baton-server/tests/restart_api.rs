@@ -112,7 +112,7 @@ async fn api_stops_interrupted_rig_run_for_manual_reconciliation() {
             "schemaVersion":7,
             "agents":[{"id":"worker", "systemPrompt":"Complete the task", "provider":"rig", "model":"ollama/fake", "credentialId":"fake", "skillIds":[]}],
             "pipelines":[{"id":"factory", "steps":[
-                {"id":"build", "name":"Build", "type":"agent", "agentId":"worker"},
+                {"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "includeTask":true},
                 {"id":"approval", "name":"Human approval", "type":"human"}
             ]}]
         }),

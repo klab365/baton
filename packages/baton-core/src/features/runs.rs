@@ -168,19 +168,15 @@ pub fn resume_interrupted_run(
     runs.worktree_manager()?
         .validate(&workspace.owner, workspace)?;
     let mut runtime = factory.create(&config, &run.pipeline_id)?;
-    let note = "Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile any potentially completed external actions (including commits, pushes and pull requests) before continuing; do not repeat side effects blindly.";
-    if let Some(attempt) = run
-        .steps
-        .iter_mut()
-        .rev()
-        .find(|attempt| attempt.status == Status::Running)
-    {
+    if let Some(attempt) = run.steps.iter_mut().rev().find(|attempt| {
+        attempt.status == Status::Running
+            || attempt.error.as_deref()
+                == Some("Interrupted by server restart; reconcile side effects before resuming")
+    }) {
         attempt.status = Status::Failed;
         attempt.error =
             Some("Interrupted by server restart; outcome and side effects are unknown".into());
-        attempt.output = Some(note.into());
     }
-    run.handoff = Some(note.into());
     run.status = Status::Running;
     run.ended_at = None;
     publish(
