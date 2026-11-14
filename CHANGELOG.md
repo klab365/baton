@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/klab365/baton/compare/v0.10.0...v0.11.0) - 2026-11-14
+
+### Added
+
+- persist authoritative pipeline handoffs
+- reuse agent sessions across pipeline steps
+- pass handoffs along pipeline transitions
+- add pipeline listing and selection
+- simplify agent provider and model configuration
+- add reusable agent instructions and step prompts
+- add bounded run observability
+- store agents and pipelines in yaml
+- add Pi agent runtime
+- add prompts to factory pipeline steps
+
+### Fixed
+
+- install Pi extension from release tag
+- stop implicit progress retries
+- serialize agent instructions as YAML literal blocks
+- remove fixed rig agent timeout
+
+### Other
+
+- stabilize Pi installer process tests
+- stabilize local Ollama observability assertion
+- move factory prompt policy into configuration
+- format orchestration assertion
+
 ## [0.10.0](https://github.com/klab365/baton/compare/v0.9.0...v0.10.0) - 2026-11-11
 
 ### Added
