@@ -74,6 +74,7 @@ struct Script {
     history_required: Vec<bool>,
     decision: Option<AgentDecision>,
     emit_observed_activity: bool,
+    no_session: bool,
 }
 impl Script {
     fn new(outputs: &[&str]) -> Self {
@@ -84,6 +85,30 @@ impl Script {
     }
 }
 impl AgentRuntime for Script {
+    fn list_models(&mut self) -> Result<Vec<baton_core::domain::runtime::RuntimeModel>, String> {
+        Err("This runtime does not expose model discovery".into())
+    }
+    fn execute_cancellable(
+        &mut self,
+        directory: &Path,
+        agent: &Agent,
+        input: &str,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<String, String> {
+        if cancelled() {
+            return Err("Run cancelled".into());
+        }
+        self.execute(directory, agent, input)
+    }
+    fn take_events(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    fn take_trace(&mut self) -> Vec<baton_core::domain::pipeline::RunTraceEntry> {
+        Vec::new()
+    }
+    fn supports_session_resumption(&self, _: &Agent) -> bool {
+        !self.no_session
+    }
     fn set_run_id(&mut self, run_id: &str) -> Result<(), String> {
         self.run_ids.push(run_id.to_owned());
         Ok(())
@@ -384,6 +409,57 @@ fn cancellation_after_step_start_is_serialized_before_agent_side_effects() {
     }
     struct WaitForCancellation(Arc<AtomicBool>);
     impl AgentRuntime for WaitForCancellation {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<baton_core::domain::work::CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(
+            &mut self,
+        ) -> Result<Vec<baton_core::domain::runtime::RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &Agent) -> bool {
+            true
+        }
         fn execute(&mut self, _: &Path, _: &Agent, _: &str) -> Result<String, String> {
             self.0.store(true, Ordering::SeqCst);
             Ok("unexpected side effect".into())
@@ -488,6 +564,69 @@ fn cancellation_wins_over_a_non_observer_terminal_write() {
     }
     struct PausedRuntime(mpsc::Sender<()>, mpsc::Receiver<()>);
     impl AgentRuntime for PausedRuntime {
+        fn set_run_id(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_history_required(&mut self, _: bool) {}
+        fn execute_shell(
+            &mut self,
+            _: &Path,
+            _: &str,
+            _: u32,
+            _: &dyn Fn() -> bool,
+        ) -> Result<baton_core::domain::work::CheckResult, String> {
+            Err("Shell execution is not configured".into())
+        }
+        fn list_models(
+            &mut self,
+        ) -> Result<Vec<baton_core::domain::runtime::RuntimeModel>, String> {
+            Err("This runtime does not expose model discovery".into())
+        }
+        fn execute_cancellable(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            if c() {
+                return Err("Run cancelled".into());
+            }
+            self.execute(d, a, i)
+        }
+        fn execute_pipeline_step(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            _: &[Outcome],
+            c: &dyn Fn() -> bool,
+        ) -> Result<String, String> {
+            self.execute_cancellable(d, a, i, c)
+        }
+        fn execute_pipeline_step_observed(
+            &mut self,
+            d: &Path,
+            a: &Agent,
+            i: &str,
+            o: &[Outcome],
+            c: &dyn Fn() -> bool,
+            _: &mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+        ) -> Result<String, String> {
+            self.execute_pipeline_step(d, a, i, o, c)
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            None
+        }
+        fn take_events(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn take_trace(&mut self) -> Vec<RunTraceEntry> {
+            Vec::new()
+        }
+        fn supports_session_resumption(&self, _: &Agent) -> bool {
+            true
+        }
         fn execute(&mut self, _: &Path, _: &Agent, _: &str) -> Result<String, String> {
             self.0.send(()).unwrap();
             self.1.recv().unwrap();
@@ -954,6 +1093,38 @@ fn human_restart_reader() {
     let run = resume_human("review", Outcome::Approved, "Ship it", &mut runtime, &repo).unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(runtime.directories.len(), 1);
+}
+
+#[test]
+fn repeated_agent_fails_when_runtime_cannot_resume() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::ReviseBuild,
+        to: Some(step.id.clone()),
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = Script::new(&[r#"{"outcome":"revise_build","output":"first"}"#]);
+    runtime.no_session = true;
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "no-session",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Failed);
+    assert_eq!(runtime.directories.len(), 1);
+    assert!(
+        run.steps[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("does not support resuming")
+    );
 }
 
 #[test]

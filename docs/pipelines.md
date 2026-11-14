@@ -2,7 +2,7 @@
 
 Create agents in the **Agents** UI before building a pipeline. With no agents, pipeline creation is disabled. Agent definitions are stored in `.baton/agents/`; each agent directly selects its provider/model and credential. Runtime/provider/model selection never belongs on a step.
 
-A pipeline is an ordered graph of agent and human-decision steps. Transitions have no traversal limit; repeated cycles continue until an outcome takes a different edge or the run is cancelled. For agent steps with transitions, Rig exposes a `report_outcome` tool limited to that step's configured outcomes. Agents report a decision through the tool and provide their complete handoff in their natural-language final response; Baton rejects missing or disallowed decisions. Baton records step inputs, outputs, outcomes and handoffs in the run state.
+A pipeline is an ordered graph of agent and human-decision steps. Transitions have no traversal limit; repeated cycles continue until an outcome takes a different edge or the run is cancelled. For agent steps with transitions, Rig and Pi expose a `report_outcome` tool limited to that step's configured outcomes. Agents report a decision through the tool and provide their complete handoff in their natural-language final response. If a decision is missing or disallowed, Baton asks up to twice in the same session and fails the attempt if no valid decision is reported. Baton records step inputs, outputs, outcomes and handoffs in the run state.
 
 Agent create and update requests validate direct runtime configuration. Credential references are IDs only; secret values are never accepted through pipeline or run APIs. Deleting an agent referenced by a pipeline returns 409 with the pipeline and step to update.
 

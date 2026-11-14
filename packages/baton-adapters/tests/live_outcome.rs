@@ -10,7 +10,7 @@ use std::{path::PathBuf, sync::Arc};
 
 #[test]
 #[ignore = "requires BATON_LIVE_PROJECT with an authenticated provider; incurs model costs"]
-fn missing_outcome_is_not_retried_automatically() {
+fn missing_outcome_is_retried_in_the_same_session() {
     let project =
         PathBuf::from(std::env::var_os("BATON_LIVE_PROJECT").expect("set BATON_LIVE_PROJECT"));
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -38,13 +38,5 @@ fn missing_outcome_is_not_retried_automatically() {
             &|| false,
         )
         .expect("provider call failed");
-    let decision = runtime.take_decision();
-    let trace = runtime.take_trace();
-    assert!(decision.is_none(), "model unexpectedly reported an outcome");
-    assert!(
-        !trace
-            .iter()
-            .any(|entry| entry.content.contains("You did not call report_outcome")),
-        "missing outcomes must not trigger another model turn"
-    );
+    assert_eq!(runtime.take_decision().unwrap().outcome, Outcome::Completed);
 }

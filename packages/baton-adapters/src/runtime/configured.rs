@@ -12,13 +12,13 @@ use std::{path::Path, sync::Arc};
 /// Dispatch strictly by the agent's configured runtime. Never fall back.
 pub struct ConfiguredRuntime {
     skills: Vec<baton_core::domain::project::Skill>,
-    run_id: String,
-    history_required: bool,
+    pub(super) run_id: String,
+    pub(super) history_required: bool,
     fake: super::FakeRuntime,
     pub(super) decision: Option<AgentDecision>,
     pub(super) trace: Vec<RunTraceEntry>,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
-    auth_root: std::path::PathBuf,
+    pub(super) auth_root: std::path::PathBuf,
     _credential_leases: Option<Box<dyn baton_core::ports::credentials::CredentialLease>>,
     pub(super) pi_command: std::ffi::OsString,
 }
@@ -88,6 +88,16 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
 }
 
 impl AgentRuntime for ConfiguredRuntime {
+    fn list_models(&mut self) -> Result<Vec<baton_core::domain::runtime::RuntimeModel>, String> {
+        Err("This runtime does not expose model discovery".into())
+    }
+    fn take_events(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    fn supports_session_resumption(&self, agent: &Agent) -> bool {
+        matches!(agent.runtime_kind, RuntimeKind::Rig | RuntimeKind::Pi)
+    }
+
     fn set_run_id(&mut self, run_id: &str) -> Result<(), String> {
         if run_id.is_empty()
             || !run_id
@@ -250,6 +260,12 @@ mod tests {
             format!(
                 r#"#!/bin/sh
 printf '%s\n' "$@" > '{}'
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
+  if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
+  shift
+done
+printf '{{"type":"session","id":"%s","cwd":"%s"}}\n{{"type":"message","message":{{"role":"user"}}}}\n{{"type":"message","message":{{"role":"assistant"}}}}\n' "$id" "$PWD" > "$session/test_$id.jsonl"
 cat > '{}'
 printf 'done'
 "#,
@@ -293,19 +309,157 @@ printf 'done'
         let decision = runtime.take_decision().unwrap();
         assert_eq!(decision.outcome, Outcome::Completed);
         assert_eq!(decision.summary, "handoff");
-        std::fs::write(&pi, "#!/bin/sh\ncat > /dev/null\nprintf 'no tool call'\n").unwrap();
-        let error = runtime
+        let calls = root.path().join("followup-calls");
+        std::fs::write(
+            &pi,
+            format!(
+                "#!/bin/sh\ncat > /dev/null\nprintf x >> '{}'\nprintf 'no tool call'\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime
+                .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
+                .unwrap(),
+            "no tool call"
+        );
+        assert!(runtime.take_decision().is_none());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xxx");
+        std::fs::write(&pi, format!("#!/bin/sh\ncat > /dev/null\nprintf x >> '{}'\nprintf '{{\"outcome\":\"approved\",\"summary\":\"wrong\"}}' > \"$BATON_PI_OUTCOME_FILE\"\n", calls.display())).unwrap();
+        runtime
             .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
-            .unwrap_err();
-        assert!(error.contains("did not call report_outcome"));
-        std::fs::write(&pi, "#!/bin/sh\ncat > /dev/null\nprintf '{\"outcome\":\"approved\",\"summary\":\"wrong\"}' > \"$BATON_PI_OUTCOME_FILE\"\n").unwrap();
-        let error = runtime
-            .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
-            .unwrap_err();
-        assert!(error.contains("not allowed"));
+            .unwrap();
+        assert!(runtime.take_decision().is_none());
+        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xxxxxx");
         std::fs::write(&pi, "#!/bin/sh\necho secret-token >&2\nexit 7\n").unwrap();
         let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
         assert!(error.contains("pi auth") && !error.contains("secret-token"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_resumes_per_agent_and_run_and_retries_missing_outcomes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, r##"#!/bin/sh
+args="$*"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
+  if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
+  if [ "$1" = '--session' ]; then shift; file="$1"; fi
+  shift
+done
+prompt=$(cat)
+printf '%s\n' "$args" >> "$session/args"
+if [ -z "$file" ]; then file="$session/test_$id.jsonl"; fi
+if [ -f "$file" ]; then
+  grep -q 'prior-conversation' "$file" || exit 9
+else
+  printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"prior-conversation"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" > "$file"
+fi
+case "$prompt" in
+  *'You did not call report_outcome'*)
+    printf '{"outcome":"completed","summary":"handoff"}' > "$BATON_PI_OUTCOME_FILE" ;;
+esac
+printf '%s\n' "$prompt" >> "$session/prompts"
+printf 'handoff'
+"##).unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let vault = root.path().join("vault");
+        let make_runtime = || {
+            let repository = Arc::new(FilesystemCredentialRepository::new(vault.clone()));
+            let mut runtime = ConfiguredRuntime::new(repository, vault.clone(), vec![]);
+            runtime.pi_command = pi.clone().into();
+            runtime
+        };
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"first", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":["report_outcome"]})).unwrap();
+        let mut runtime = make_runtime();
+        runtime.set_run_id("run-one").unwrap();
+        assert_eq!(
+            runtime
+                .execute_pipeline_step(
+                    root.path(),
+                    &agent,
+                    "original task",
+                    &[Outcome::Completed],
+                    &|| false
+                )
+                .unwrap(),
+            "handoff"
+        );
+        assert_eq!(runtime.take_decision().unwrap().outcome, Outcome::Completed);
+        let first = vault.join("runtime-sessions/run-one/agent-first/pi");
+        let prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
+        assert!(prompts.contains("original task"));
+        assert!(prompts.contains("You did not call report_outcome"));
+        let session_path = std::fs::read_dir(&first)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+            .unwrap();
+        let args = std::fs::read_to_string(first.join("args")).unwrap();
+        assert!(args.contains("--session-id "));
+        assert!(args.contains(&format!("--session {}", session_path.display())));
+        let mut restarted = make_runtime();
+        restarted.set_run_id("run-one").unwrap();
+        restarted.set_history_required(true);
+        restarted
+            .execute(root.path(), &agent, "new handoff")
+            .unwrap();
+        assert!(
+            std::fs::read_to_string(first.join("prompts"))
+                .unwrap()
+                .contains("new handoff")
+        );
+        let mut other = agent.clone();
+        other.id = "second".into();
+        restarted.set_history_required(false);
+        restarted
+            .execute(root.path(), &other, "other agent")
+            .unwrap();
+        let second_dir = vault.join("runtime-sessions/run-one/agent-second/pi");
+        let second_path = std::fs::read_dir(second_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+            .unwrap();
+        assert_ne!(session_path.file_name(), second_path.file_name());
+        restarted.set_run_id("run-two").unwrap();
+        restarted.execute(root.path(), &agent, "other run").unwrap();
+        let other_run_dir = vault.join("runtime-sessions/run-two/agent-first/pi");
+        let other_run_path = std::fs::read_dir(other_run_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+            .unwrap();
+        assert_ne!(session_path.file_name(), other_run_path.file_name());
+        restarted.set_run_id("run-one").unwrap();
+        restarted.set_history_required(true);
+        let saved_session = std::fs::read(&session_path).unwrap();
+        std::fs::remove_file(&session_path).unwrap();
+        assert!(
+            restarted
+                .execute(root.path(), &agent, "resume")
+                .unwrap_err()
+                .contains("session is missing")
+        );
+        std::fs::write(&session_path, "corrupt\n").unwrap();
+        assert!(
+            restarted
+                .execute(root.path(), &agent, "resume")
+                .unwrap_err()
+                .contains("session is invalid")
+        );
+        std::fs::write(&session_path, saved_session).unwrap();
+        std::fs::write(first.join("baton-inflight"), "interrupted").unwrap();
+        assert!(
+            restarted
+                .execute(root.path(), &agent, "resume")
+                .unwrap_err()
+                .contains("reconcile side effects")
+        );
     }
 
     #[cfg(unix)]
@@ -425,9 +579,10 @@ exit 0
             format!(
                 r#"#!/bin/sh
 BATON_PI_DESCENDANT_FILE='{}' '{}' --exact runtime::configured::tests::pi_detached_pipe_holder --nocapture &
+while [ ! -f '{}' ]; do sleep 0.01; done
 exit 0
 "#,
-                pid_file.display(), std::env::current_exe().unwrap().display()
+                pid_file.display(), std::env::current_exe().unwrap().display(), pid_file.display()
             ),
         )
         .unwrap();
