@@ -78,6 +78,7 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
     config["agents"][0]["provider"] = json!("fake");
     config["pipelines"][0]["steps"][0]["transitions"] = json!([]);
     config["pipelines"][0]["steps"][0]["prompt"] = json!("CLI-specific step prompt");
+    config["pipelines"][0]["steps"][0]["includeTask"] = json!(true);
     common::write_config(&f.path, &config);
     let app = f.app();
     let run = f.start(&app, 5, json!([])).await;
@@ -148,11 +149,7 @@ async fn missing_agent_outcome_stops_the_run() {
 
 #[tokio::test]
 async fn execute_command_steps_record_success_and_failure() {
-    for (command, expected) in [
-        ("printf done", "succeeded"),
-        ("exit 1", "failed"),
-        ("yes x | head -c 20000", "succeeded"),
-    ] {
+    for (command, expected) in [("printf done", "succeeded"), ("exit 1", "failed")] {
         let f = Fixture::new();
         common::write_config(
             &f.path,

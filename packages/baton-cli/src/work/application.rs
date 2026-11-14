@@ -161,6 +161,7 @@ impl WorkApplication {
                     .iter()
                     .find(|p| p.id == run.pipeline_id)
                     .ok_or("Missing pipeline")?;
+                baton_core::features::pipeline_engine::validate_handoff(&run)?;
                 let input = baton_core::features::pipeline_engine::with_step_prompt(
                     baton_core::features::pipeline_engine::step_input(&run, pipeline),
                     &step,
@@ -216,20 +217,18 @@ impl WorkApplication {
                         } else {
                             baton_core::domain::project::Outcome::Failed
                         };
-                        let mut summary = format!(
+                        let summary = format!(
                             "Exit status: {}\n{}",
                             result
                                 .exit_code
                                 .map_or_else(|| "none".into(), |code| code.to_string()),
                             result.output
                         );
-                        let mut end = summary
-                            .len()
-                            .min(baton_core::ports::runtime::MAX_HANDOFF_BYTES);
-                        while !summary.is_char_boundary(end) {
-                            end -= 1;
+                        if summary.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES {
+                            return Err(StepFailure::Runtime(
+                                "Shell handoff exceeds 16384 bytes".into(),
+                            ));
                         }
-                        summary.truncate(end);
                         return Ok((outcome, summary, vec![]));
                     }
                     let agent = agent.ok_or("Current step has no configured agent")?;
@@ -275,6 +274,14 @@ impl WorkApplication {
                         &mut observer,
                     )?;
                     let trace = runtime.take_trace();
+                    if output.trim().is_empty()
+                        || output.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES
+                    {
+                        return Err(StepFailure::InvalidOutcome {
+                            message: "Agent handoff is empty or exceeds 16384 bytes",
+                            trace,
+                        });
+                    }
                     if allowed.is_empty() {
                         Ok((
                             baton_core::domain::project::Outcome::Completed,
@@ -294,7 +301,7 @@ impl WorkApplication {
                                 trace,
                             });
                         }
-                        Ok((decision.outcome, decision.summary, trace))
+                        Ok((decision.outcome, output, trace))
                     }
                 })
                 .await

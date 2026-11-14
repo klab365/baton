@@ -67,8 +67,103 @@ fn config() -> baton_core::domain::project::ProjectConfig {
         .retain(|step| step.id == "write" || step.id == "review");
     for step in &mut pipeline.steps {
         step.transitions.clear();
+        if let baton_core::domain::project::PipelineStepKind::Agent { include_task, .. } =
+            &mut step.kind
+        {
+            *include_task = Some(true);
+        }
     }
     config
+}
+
+#[test]
+fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
+    use baton_core::{
+        domain::project::{Outcome, Transition},
+        ports::runtime::AgentDecision,
+    };
+    struct Runtime {
+        calls: usize,
+    }
+    impl AgentRuntime for Runtime {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            _: &baton_core::domain::project::Agent,
+            input: &str,
+        ) -> Result<String, String> {
+            self.calls += 1;
+            if self.calls == 2 {
+                assert!(input.contains("complete detailed result"));
+                assert!(!input.contains("short summary"));
+            }
+            Ok("complete detailed result".into())
+        }
+        fn take_decision(&mut self) -> Option<AgentDecision> {
+            Some(AgentDecision {
+                outcome: Outcome::Completed,
+                summary: "short summary".into(),
+            })
+        }
+    }
+    let fixture = Fixture::new();
+    let mut config = config();
+    config.pipelines[0].steps[0].transitions = vec![Transition {
+        outcome: Outcome::Completed,
+        to: Some("review".into()),
+    }];
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "detailed",
+        &mut Runtime { calls: 0 },
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(
+        run.steps[0].output.as_deref(),
+        Some("complete detailed result")
+    );
+    assert_eq!(
+        fixture.repo().load("detailed").unwrap().steps[0].output,
+        run.steps[0].output
+    );
+}
+
+#[test]
+fn empty_and_oversized_agent_handoffs_fail_without_routing() {
+    struct Runtime(String);
+    impl AgentRuntime for Runtime {
+        fn execute(
+            &mut self,
+            _: &std::path::Path,
+            _: &baton_core::domain::project::Agent,
+            _: &str,
+        ) -> Result<String, String> {
+            Ok(self.0.clone())
+        }
+    }
+    for (id, output) in [
+        ("empty", String::new()),
+        ("oversized", "x".repeat(MAX_HANDOFF_BYTES + 1)),
+    ] {
+        let fixture = Fixture::new();
+        let run = start_pipeline(
+            &config(),
+            "draft",
+            "task",
+            id,
+            &mut Runtime(output),
+            &fixture.repo(),
+        )
+        .unwrap();
+        assert_eq!(run.status, Status::Failed);
+        assert_eq!(run.steps[0].status, Status::Failed);
+        assert!(run.steps[0].error.is_some());
+        assert!(run.steps[0].output.is_none());
+    }
 }
 
 #[test]
@@ -118,10 +213,12 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
     pipeline.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
         agent_id: "writer".into(),
         prompt: "Draft the change".into(),
+        include_task: None,
     };
     pipeline.steps[1].kind = baton_core::domain::project::PipelineStepKind::Agent {
         agent_id: "writer".into(),
         prompt: "Review the change".into(),
+        include_task: None,
     };
     #[derive(Default)]
     struct RecordingRuntime {
@@ -188,7 +285,7 @@ fn ordered_handoff_and_restart_safe_records() {
             ("writer".into(), "task".into()),
             (
                 "reviewer".into(),
-                "Original task:\ntask\n\nRun history (chronological):\n\n1. write · writer · Completed\nwriter: task".into()
+                "Original task:\ntask\n\nPrevious handoff:\nwriter: task".into()
             )
         ]
     );
@@ -241,6 +338,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
     pipeline.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
         agent_id: "writer".into(),
         prompt: "Resume with the saved writer prompt".into(),
+        include_task: None,
     };
     pipeline.steps[0].transitions = vec![
         Transition {
@@ -295,7 +393,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
                     }
                     3 => {
                         assert!(input.contains("Plan ready"));
-                        assert!(input.contains("Tokio, WASM and Embassy"));
+                        assert!(!input.contains("Tokio, WASM and Embassy"));
                         (Outcome::Completed, "Built")
                     }
                     _ => panic!("unexpected call"),

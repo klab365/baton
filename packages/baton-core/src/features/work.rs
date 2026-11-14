@@ -460,6 +460,7 @@ fn complete(
         .and_then(|started| elapsed_ms(started, &ended_at));
     run.steps[index].ended_at = Some(ended_at);
     run.steps[index].output = Some(summary.clone());
+    run.handoff = Some(summary);
     run.steps[index].outcome = Some(outcome.clone());
     run.status = Status::Running;
     run.pending_actions.clear();

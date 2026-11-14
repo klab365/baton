@@ -131,7 +131,7 @@ fn append_outcome_instruction(preamble: &mut String, allowed_outcomes: &[Outcome
         .collect::<Vec<_>>()
         .join(", ");
     preamble.push_str(&format!(
-        "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. Then answer naturally. Do not encode the decision as JSON in your final answer."
+        "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. Then provide your complete handoff in your final answer. Do not encode the decision as JSON in your final answer."
     ));
 }
 

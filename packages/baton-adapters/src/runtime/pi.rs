@@ -129,7 +129,7 @@ pub(super) fn execute(
             "BATON_PI_ALLOWED_OUTCOMES",
             serde_json::to_string(allowed_outcomes).map_err(|error| error.to_string())?,
         );
-        system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and handoff summary. Then answer naturally.");
+        system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and a concise summary. Then provide your complete handoff in your final answer.");
         Some(dir)
     };
     command.current_dir(directory).args([
@@ -257,8 +257,6 @@ pub(super) fn execute(
             outcome,
             summary: summary.to_owned(),
         });
-        Ok(summary.to_owned())
-    } else {
-        Ok(output)
     }
+    Ok(output)
 }

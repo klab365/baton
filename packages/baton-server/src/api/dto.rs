@@ -70,6 +70,9 @@ pub enum PipelineStepKind {
         agent_id: String,
         #[serde(default)]
         prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        include_task: Option<bool>,
     },
     Human,
     Shell {
@@ -231,9 +234,15 @@ impl From<domain::PipelineStep> for PipelineStep {
             id: value.id,
             name: value.name,
             kind: match value.kind {
-                domain::PipelineStepKind::Agent { agent_id, prompt } => {
-                    PipelineStepKind::Agent { agent_id, prompt }
-                }
+                domain::PipelineStepKind::Agent {
+                    agent_id,
+                    prompt,
+                    include_task,
+                } => PipelineStepKind::Agent {
+                    agent_id,
+                    prompt,
+                    include_task,
+                },
                 domain::PipelineStepKind::Human => PipelineStepKind::Human,
                 domain::PipelineStepKind::Shell {
                     command,
@@ -254,9 +263,15 @@ impl From<PipelineStep> for domain::PipelineStep {
             id: value.id,
             name: value.name,
             kind: match value.kind {
-                PipelineStepKind::Agent { agent_id, prompt } => {
-                    domain::PipelineStepKind::Agent { agent_id, prompt }
-                }
+                PipelineStepKind::Agent {
+                    agent_id,
+                    prompt,
+                    include_task,
+                } => domain::PipelineStepKind::Agent {
+                    agent_id,
+                    prompt,
+                    include_task,
+                },
                 PipelineStepKind::Human => domain::PipelineStepKind::Human,
                 PipelineStepKind::Shell {
                     command,

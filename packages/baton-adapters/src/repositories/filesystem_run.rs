@@ -140,7 +140,6 @@ impl FilesystemRunRepository {
                         "Interrupted by server restart; reconcile side effects before resuming"
                             .into(),
                     );
-                    step.output = Some("Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile potentially completed external actions before continuing; do not repeat side effects blindly.".into());
                     step.ended_at = Some(ended_at.clone());
                     step.duration_ms = step
                         .started_at

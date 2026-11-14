@@ -430,7 +430,7 @@ pub fn start_pipeline_for_task_with_worktree(
         trace: Vec::new(),
         config_snapshot: Some(config.clone()),
         current_step: Some(pipeline.steps[0].id.clone()),
-        handoff: Some(task.into()),
+        handoff: None,
         pending_actions: Vec::new(),
         status: Status::Running,
         steps: pipeline
@@ -511,77 +511,79 @@ fn pending(step: &PipelineStep) -> StepRun {
 pub fn with_step_prompt(input: String, step: &PipelineStep) -> String {
     match &step.kind {
         crate::domain::project::PipelineStepKind::Agent { prompt, .. } if !prompt.is_empty() => {
-            format!("Step instructions:\n{prompt}\n\nTask and prior handoff:\n{input}")
+            format!("Step instructions:\n{prompt}\n\nStep context:\n{input}")
         }
         _ => input,
     }
 }
 
+pub fn validate_handoff(run: &PipelineRun) -> Result<(), String> {
+    let previous = run
+        .steps
+        .iter()
+        .filter(|attempt| attempt.status == Status::Succeeded)
+        .max_by_key(|attempt| attempt.attempt);
+    if run.handoff.is_none() && previous.is_some_and(|attempt| attempt.output.is_none()) {
+        return Err("Previous step has no persisted handoff".into());
+    }
+    Ok(())
+}
+
 pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
-    let previous_output = run.handoff.as_deref().unwrap_or(&run.task);
-    if run.steps.iter().all(|step| step.attempt == 0) && previous_output == run.task {
+    let include_task = pipeline
+        .steps
+        .iter()
+        .find(|step| Some(&step.id) == run.current_step.as_ref())
+        .map(|step| match &step.kind {
+            crate::domain::project::PipelineStepKind::Agent { include_task, .. } => {
+                include_task.unwrap_or(false)
+            }
+            _ => true,
+        })
+        .unwrap_or(true);
+    let first_step = run.steps.iter().all(|attempt| attempt.attempt == 0);
+    if first_step
+        && include_task
+        && run
+            .handoff
+            .as_ref()
+            .is_none_or(|handoff| handoff == &run.task)
+    {
         return run.task.clone();
     }
-    let mut input = format!("Original task:\n{}", run.task);
-    let mut attempts: Vec<_> = run.steps.iter().filter(|step| step.attempt > 0).collect();
-    attempts.sort_by_key(|attempt| attempt.attempt);
-    // Human decisions remain complete; recent agent results have a separate budget.
-    const HISTORY_BYTES: usize = 100 * 1024;
-    let mut remaining = HISTORY_BYTES;
-    let mut history = Vec::new();
-    for attempt in attempts.iter().rev() {
-        let human = pipeline
-            .steps
+    let mut parts = Vec::new();
+    if include_task {
+        parts.push(format!("Original task:\n{}", run.task));
+    }
+    let handoff = run.handoff.as_ref().or_else(|| {
+        run.steps
             .iter()
-            .any(|step| step.is_human() && step.id == attempt.step_id);
-        if human && attempt.outcome.is_none() {
-            continue;
-        }
-        let Some(output) = attempt.output.as_deref().or(human.then_some("")) else {
-            continue;
-        };
-        let actor = if human { "Human" } else { &attempt.agent_id };
-        let outcome = attempt
-            .outcome
-            .as_ref()
-            .map(|outcome| format!("{outcome:?}"))
-            .unwrap_or_else(|| "Result".into());
-        let transition = attempt
-            .selected_transition
-            .as_ref()
-            .map(|transition| format!(" → {}", transition.to.as_deref().unwrap_or("end")))
-            .unwrap_or_default();
-        let text = if human && output.trim().is_empty() {
-            "No comment provided."
-        } else {
-            output
-        };
-        let entry = format!(
-            "\n\n{}. {} · {} · {}{}\n{}",
-            attempt.attempt, attempt.step_id, actor, outcome, transition, text
-        );
-        if !human {
-            if entry.len() > remaining {
-                continue;
-            }
-            remaining -= entry.len();
-        }
-        history.push(entry);
-    }
-    if attempts
-        .last()
-        .and_then(|attempt| attempt.output.as_deref())
-        != Some(previous_output)
+            .filter(|attempt| attempt.status == Status::Succeeded)
+            .max_by_key(|attempt| attempt.attempt)
+            .and_then(|attempt| attempt.output.as_ref())
+    });
+    if let Some(handoff) = handoff
+        && !(first_step && handoff == &run.task)
     {
-        input.push_str(&format!("\n\nLatest handoff:\n{previous_output}"));
+        parts.push(format!("Previous handoff:\n{handoff}"));
     }
-    if !history.is_empty() {
-        input.push_str("\n\nRun history (chronological):");
-        for entry in history.iter().rev() {
-            input.push_str(entry);
-        }
+    if run
+        .steps
+        .iter()
+        .filter(|attempt| Some(&attempt.step_id) == run.current_step.as_ref())
+        .max_by_key(|attempt| attempt.attempt)
+        .is_some_and(|attempt| {
+            attempt.error.as_deref()
+                == Some("Interrupted by server restart; outcome and side effects are unknown")
+        })
+    {
+        parts.push("Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile any potentially completed external actions (including commits, pushes and pull requests) before continuing; do not repeat side effects blindly.".into());
     }
-    input
+    if parts.is_empty() {
+        "No task or preceding handoff was supplied for this step.".into()
+    } else {
+        parts.join("\n\n")
+    }
 }
 
 fn repeated_blocker(
@@ -653,6 +655,12 @@ pub fn execute_graph(
             .iter()
             .find(|s| Some(&s.id) == run.current_step.as_ref())
             .ok_or("Unknown current step")?;
+        if let Err(error) = validate_handoff(&run) {
+            run.status = Status::Failed;
+            finish_run(&mut run, clock);
+            publish(repository, &mut run, Some(error))?;
+            return Ok(run);
+        }
         let input = with_step_prompt(step_input(&run, pipeline), step);
         let index = if let Some(i) = run
             .steps
@@ -744,11 +752,17 @@ pub fn execute_graph(
                             .map_or_else(|| "none".into(), |code| code.to_string()),
                         result.output
                     );
-                    run.handoff = Some(output.clone());
-                    run.steps[index].output = Some(output);
-                    run.steps[index].outcome = Some(outcome.clone());
-                    run.steps[index].status = Status::Succeeded;
-                    route(&mut run, pipeline, index, outcome)?;
+                    if output.len() > MAX_HANDOFF_BYTES {
+                        run.steps[index].status = Status::Failed;
+                        run.steps[index].error = Some("Shell handoff exceeds 16384 bytes".into());
+                        run.status = Status::Failed;
+                    } else {
+                        run.handoff = Some(output.clone());
+                        run.steps[index].output = Some(output);
+                        run.steps[index].outcome = Some(outcome.clone());
+                        run.steps[index].status = Status::Succeeded;
+                        route(&mut run, pipeline, index, outcome)?;
+                    }
                 }
                 Err(error) => {
                     run.steps[index].status = Status::Failed;
@@ -810,6 +824,9 @@ pub fn execute_graph(
                 &mut observer,
             )
             .and_then(|output| {
+                if output.trim().is_empty() {
+                    return Err("Agent returned an empty handoff".into());
+                }
                 if output.len() > MAX_HANDOFF_BYTES {
                     return Err("Agent output exceeds 16384 bytes".into());
                 }
@@ -827,7 +844,7 @@ pub fn execute_graph(
                     if decision.summary.len() > MAX_HANDOFF_BYTES {
                         return Err("Pipeline outcome summary exceeds 16384 bytes".into());
                     }
-                    Ok((decision.outcome, decision.summary))
+                    Ok((decision.outcome, output))
                 }
             });
         let mut trace = runtime.take_trace();
@@ -1021,119 +1038,70 @@ mod tests {
     }
 
     #[test]
-    fn run_history_preserves_blocker_and_response_after_reload_and_intermediate_step() {
-        let config: ProjectConfig =
+    fn only_latest_handoff_is_forwarded_after_reload_and_in_loops() {
+        let mut config: ProjectConfig =
             serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
-        let mut pipeline = config.pipelines[0].clone();
-        let mut human = pipeline.steps[0].clone();
-        human.id = "help".into();
-        human.kind = crate::domain::project::PipelineStepKind::Human;
-        pipeline.steps.push(human.clone());
+        let pipeline = &mut config.pipelines[0];
+        if let crate::domain::project::PipelineStepKind::Agent { include_task, .. } =
+            &mut pipeline.steps[0].kind
+        {
+            *include_task = Some(true);
+        }
+        let mut build = pipeline.steps[0].clone();
+        build.id = "build".into();
+        if let crate::domain::project::PipelineStepKind::Agent { include_task, .. } =
+            &mut build.kind
+        {
+            *include_task = None;
+        }
+        pipeline.steps.push(build);
         let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
-            "id": "run", "pipelineId": pipeline.id, "task": "implement timers",
-            "startedAt": "now", "endedAt": null, "durationMs": null,
-            "status": "running", "steps": [], "handoff": "use embassy-time"
+            "id":"r", "pipelineId":pipeline.id, "task":"original", "startedAt":"now",
+            "status":"running", "steps":[], "currentStep":"build", "handoff":"plan"
         }))
         .unwrap();
-        let mut blocked = pending(&pipeline.steps[0]);
-        blocked.attempt = 1;
-        blocked.outcome = Some(Outcome::Blocked);
-        blocked.output = Some("Which Embassy timer driver?".into());
-        let mut response = pending(&human);
-        response.attempt = 2;
-        response.outcome = Some(Outcome::Responded);
-        response.output = Some("use embassy-time".into());
-        run.steps = vec![response, blocked];
+        assert_eq!(step_input(&run, pipeline), "Previous handoff:\nplan");
+        run.handoff = None;
+        let legacy: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        assert_eq!(
+            step_input(&legacy, pipeline),
+            "No task or preceding handoff was supplied for this step."
+        );
+        run.current_step = Some(pipeline.steps[0].id.clone());
+        run.handoff = Some("build result".into());
         let reloaded: PipelineRun =
             serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
-        let planner_input = step_input(&reloaded, &pipeline);
-        assert!(planner_input.contains("Which Embassy timer driver?"));
-        assert!(planner_input.contains("use embassy-time"));
+        let input = step_input(&reloaded, pipeline);
         assert!(
-            planner_input.find("Which Embassy timer driver?").unwrap()
-                < planner_input.find("use embassy-time").unwrap()
+            input.contains("original") && input.contains("build result") && !input.contains("plan")
         );
+        run.current_step = Some("build".into());
+        run.handoff = Some("review findings".into());
         assert_eq!(
-            planner_input.matches("Which Embassy timer driver?").count(),
-            1
+            step_input(&run, pipeline),
+            "Previous handoff:\nreview findings"
         );
-        assert!(!planner_input.contains("Some("));
-        let mut resumed = reloaded;
-        let mut planner = pending(&pipeline.steps[0]);
-        planner.attempt = 3;
-        planner.outcome = Some(Outcome::Completed);
-        planner.output = Some("Implement the plan".into());
-        resumed.steps.push(planner);
-        resumed.handoff = Some("Implement the plan".into());
-        let builder_input = step_input(&resumed, &pipeline);
-        assert!(builder_input.contains("Which Embassy timer driver?"));
-        assert!(builder_input.contains("use embassy-time"));
-        assert!(builder_input.contains("Implement the plan"));
-    }
-
-    #[test]
-    fn agent_history_is_bounded_and_prefers_recent_attempts() {
-        let config: ProjectConfig =
-            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
-        let pipeline = &config.pipelines[0];
-        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
-            "id": "run", "pipelineId": pipeline.id, "task": "task",
-            "startedAt": "now", "endedAt": null, "durationMs": null,
-            "status": "running", "steps": [], "handoff": "latest"
-        }))
-        .unwrap();
-        for attempt in 1..=15 {
-            let mut step = pending(&pipeline.steps[0]);
-            step.attempt = attempt;
-            step.output = Some(format!("attempt-{attempt} {}", "x".repeat(10_000)));
-            run.steps.push(step);
-        }
+        let mut legacy = pending(&pipeline.steps[0]);
+        legacy.attempt = 1;
+        legacy.status = Status::Succeeded;
+        legacy.output = Some("legacy result".into());
+        run.steps.push(legacy);
+        run.handoff = None;
+        assert_eq!(
+            step_input(&run, pipeline),
+            "Previous handoff:\nlegacy result"
+        );
+        run.steps.last_mut().unwrap().output = None;
+        assert!(validate_handoff(&run).is_err());
+        run.handoff = Some("review findings".into());
+        let mut interrupted = pending(pipeline.steps.last().unwrap());
+        interrupted.error =
+            Some("Interrupted by server restart; outcome and side effects are unknown".into());
+        run.steps.push(interrupted);
         let input = step_input(&run, pipeline);
-        assert!(input.contains("attempt-15"));
-        assert!(!input.contains("attempt-1 "));
-        assert!(input.len() < 101 * 1024);
-    }
-
-    #[test]
-    fn human_decisions_survive_intermediate_agent_handoffs_without_truncation() {
-        let config: ProjectConfig =
-            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
-        let mut pipeline = config.pipelines[0].clone();
-        let mut human = pipeline.steps[0].clone();
-        human.id = "help".into();
-        human.kind = crate::domain::project::PipelineStepKind::Human;
-        pipeline.steps.push(human.clone());
-        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
-            "id": "run", "pipelineId": pipeline.id, "task": "implement timers",
-            "startedAt": "now", "endedAt": null, "durationMs": null,
-            "status": "running", "steps": [], "handoff": "planner output"
-        }))
-        .unwrap();
-        let mut response = pending(&human);
-        response.status = Status::Succeeded;
-        response.attempt = 1;
-        response.output = Some("support Tokio, WASM and Embassy".into());
-        response.outcome = Some(Outcome::Responded);
-        run.steps.push(response.clone());
-        let input = step_input(&run, &pipeline);
-        assert!(input.contains("planner output"));
-        assert!(input.contains("support Tokio, WASM and Embassy"));
-        assert!(input.contains("Responded"));
-
-        response.attempt = 2;
-        response.output = Some("x".repeat(MAX_HANDOFF_BYTES));
-        run.steps.insert(0, response);
-        let input = step_input(&run, &pipeline);
-        assert!(input.len() > MAX_HANDOFF_BYTES);
-        assert!(input.contains("support Tokio, WASM and Embassy"));
-        assert!(input.contains(&"x".repeat(MAX_HANDOFF_BYTES)));
-        assert!(input.find("support Tokio").unwrap() < input.find(&"x".repeat(100)).unwrap());
-
-        let mut approval = pending(&human);
-        approval.attempt = 3;
-        approval.outcome = Some(Outcome::Approved);
-        approval.output = Some(String::new());
-        run.steps.push(approval);
-        assert!(step_input(&run, &pipeline).contains("Approved\nNo comment provided."));
+        assert!(
+            input.contains("review findings") && input.contains("interrupted by server restart")
+        );
     }
 }

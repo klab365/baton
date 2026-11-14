@@ -4,9 +4,10 @@ steps:
 - id: plan
   name: Analyze and plan
   agentId: factory-planner
+  includeTask: true
   prompt: |
     Analyze the task and produce an actionable implementation plan. Include the
-    plan and relevant evidence in your handoff for the builder. Report blocked
+    plan, task requirements, and relevant evidence in your handoff for the builder. Report blocked
     if critical information is missing. Do not modify files or commit.
   transitions:
   - outcome: completed
@@ -35,9 +36,11 @@ steps:
   - outcome: blocked
     to: debug
   type: agent
+
 - id: debug
   name: Diagnose builder blocker
   agentId: factory-debugger
+  includeTask: true
   prompt: |
     Independently investigate the blocker in the handoff and inspect the
     repository. Return evidence and actionable next steps for implementation or
@@ -56,16 +59,14 @@ steps:
 - id: review
   name: Independent review
   agentId: factory-reviewer
+  includeTask: true
   prompt: |
     Independently review the changes against the task and prior handoff. Approve
     only when appropriate; otherwise provide actionable findings for the builder
     or planner, or explain the blocker. Inspect the actual diff and tests, run a
     relevant regression test and verify the target branch is an ancestor of HEAD.
-    Check the builder's TDD evidence in the handoff and available session history:
-    distinguish an observed test failure before implementation from a passing test
-    added afterward. Report missing evidence or exceptions; do not claim TDD was
-    followed based on a passing test alone. Request clarification or additional
-    verification when needed; do not ask the builder to fabricate a past red run.
+    Return findings in the handoff; do not write project files. Do not attempt to
+    verify TDD chronology.
     Use approved only when checks pass; otherwise use revise_build, revise_plan or
     blocked. Do not modify files or commit.
   transitions:
@@ -82,6 +83,7 @@ steps:
 - id: commit
   name: Commit and publish pull request
   agentId: factory-committer
+  includeTask: true
   prompt: |
     Commit the reviewed changes and publish or update the pull request. Report
     the commit and pull request, or explain the blocker and any side effects.
@@ -100,6 +102,7 @@ steps:
 - id: ci
   name: Verify pull request CI
   agentId: factory-ci
+  includeTask: true
   prompt: |
     Verify the pull request's CI results. Report successful checks, actionable
     failures for the builder, or external blockers requiring human assistance.

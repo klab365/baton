@@ -166,9 +166,9 @@ fn config() -> ProjectConfig {
     let mut json: serde_json::Value =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     json["pipelines"][0]["steps"] = serde_json::json!([
-        {"id":"plan", "name":"Plan", "type":"agent", "agentId":"writer"},
-        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
-        {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer", "transitions":[
+        {"id":"plan", "name":"Plan", "type":"agent", "agentId":"writer", "includeTask":true},
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "includeTask":true},
+        {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer", "includeTask":true, "transitions":[
             {"outcome":"approved", "to":"human", "maxTraversals":1},
             {"outcome":"revise_build", "to":"build", "maxTraversals":1},
             {"outcome":"revise_plan", "to":"plan", "maxTraversals":1}
@@ -178,7 +178,7 @@ fn config() -> ProjectConfig {
             {"outcome":"rejected", "to":null, "maxTraversals":1},
             {"outcome":"responded", "to":"build", "maxTraversals":1}
         ]},
-        {"id":"finish", "name":"Finish", "type":"agent", "agentId":"writer"}
+        {"id":"finish", "name":"Finish", "type":"agent", "agentId":"writer", "includeTask":true}
     ]);
     parse_config(&json.to_string()).unwrap()
 }
@@ -218,6 +218,7 @@ fn interrupted_agent_resumes_in_same_worktree_with_reconciliation_warning() {
     run.steps[0].output = None;
     run.steps[0].outcome = None;
     run.steps[0].selected_transition = None;
+    run.handoff = Some("previous step handoff".into());
     repo.save(&run).unwrap();
     repo.recover_interrupted().unwrap();
     let tasks = FilesystemTaskRepository(fixture.0.clone());
@@ -232,6 +233,13 @@ fn interrupted_agent_resumes_in_same_worktree_with_reconciliation_warning() {
     assert_eq!(resumed.worktree, worktree);
     assert_eq!(resumed.steps[0].status, Status::Failed);
     assert_eq!(resumed.steps[1].attempt, 2);
+    assert!(
+        resumed.steps[1]
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("previous step handoff")
+    );
     assert!(resumed.trace.iter().any(|entry| entry.attempt == Some(2)));
     assert!(
         resumed.steps[1]
@@ -772,6 +780,53 @@ fn shell_failure_routes_with_output_to_next_step() {
     assert!(run.steps[1].input.as_ref().unwrap().contains("diagnostic"));
 }
 
+#[test]
+fn debugger_receives_blocker_and_returns_diagnosis_to_builder() {
+    let fixture = Fixture::new();
+    let mut json: serde_json::Value =
+        serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
+    json["pipelines"][0]["steps"] = serde_json::json!([
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "includeTask":false, "transitions":[
+            {"outcome":"blocked", "to":"debug"}, {"outcome":"completed", "to":null}
+        ]},
+        {"id":"debug", "name":"Debug", "type":"agent", "agentId":"reviewer", "transitions":[
+            {"outcome":"revise_build", "to":"build"}
+        ]}
+    ]);
+    let config = parse_config(&json.to_string()).unwrap();
+    let mut runtime = Script::new(&[
+        r#"{"outcome":"blocked","output":"specific blocker"}"#,
+        r#"{"outcome":"revise_build","output":"specific diagnosis"}"#,
+        r#"{"outcome":"completed","output":"fixed"}"#,
+    ]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "original task",
+        "debugger",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    let debug = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "debug")
+        .unwrap();
+    assert!(debug.input.as_deref().unwrap().contains("specific blocker"));
+    let build = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "build" && step.attempt == 3)
+        .unwrap();
+    let input = build.input.as_deref().unwrap();
+    assert!(input.contains("specific diagnosis"));
+    assert!(!input.contains("specific blocker"));
+    assert!(!input.contains("original task"));
+    assert_eq!(fixture.repo().load("debugger").unwrap(), run);
+}
+
 const APPROVED: &str = r#"{"outcome":"approved","output":"Ready for a human"}"#;
 const REWORK: &str = r#"{"outcome":"revise_build","output":"Fix the build"}"#;
 
@@ -779,8 +834,14 @@ const REWORK: &str = r#"{"outcome":"revise_build","output":"Fix the build"}"#;
 fn review_rework_handoffs_and_explicit_approval_survive_restart() {
     let fixture = Fixture::new();
     let mut runtime = Script::new(&["plan", "build", REWORK, "fixed", APPROVED]);
+    let mut graph = config();
+    if let baton_core::domain::project::PipelineStepKind::Agent { include_task, .. } =
+        &mut graph.pipelines[0].steps[1].kind
+    {
+        *include_task = Some(false);
+    }
     let waiting = start_pipeline(
-        &config(),
+        &graph,
         "draft",
         "task",
         "review",
@@ -820,12 +881,33 @@ fn review_rework_handoffs_and_explicit_approval_survive_restart() {
             .contains("Fix the build")
     );
     assert!(
-        second_build
+        !second_build
             .input
             .as_deref()
             .unwrap()
             .contains("Original task:")
     );
+    let first_build = waiting
+        .steps
+        .iter()
+        .find(|s| s.step_id == "build" && s.attempt == 2)
+        .unwrap();
+    assert!(first_build.input.as_deref().unwrap().contains("plan"));
+    assert!(
+        !first_build
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Original task:")
+    );
+    let review = waiting
+        .steps
+        .iter()
+        .find(|s| s.step_id == "review" && s.attempt == 3)
+        .unwrap();
+    assert!(review.input.as_deref().unwrap().contains("build"));
+    assert!(review.input.as_deref().unwrap().contains("Original task:"));
+    assert!(!review.input.as_deref().unwrap().contains("plan"));
     assert_eq!(
         runtime.directories,
         vec![waiting.worktree.as_ref().unwrap().path.clone(); 5]

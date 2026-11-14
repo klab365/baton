@@ -61,6 +61,7 @@ async fn pipeline_crud_validates_and_preserves_project_configuration() {
     invalid.steps[0].kind = baton_core::domain::project::PipelineStepKind::Agent {
         agent_id: "missing".into(),
         prompt: String::new(),
+        include_task: None,
     };
     assert!(matches!(
         pipelines::mutate(&repository, &snapshot.revision, Mutation::Create(invalid)).await,

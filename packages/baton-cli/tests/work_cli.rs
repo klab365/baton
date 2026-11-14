@@ -142,7 +142,7 @@ fn cli_execute_runs_runtime_and_saves_result_across_processes() {
         &json!({
             "schemaVersion": 7,
             "agents": [{"id":"worker", "systemPrompt":"Implement", "provider":"fake", "skillIds":[]}],
-            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}]}]
+            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "includeTask":true}]}]
         }),
     );
     let start = f.value(&["start", "--issue", "Implement feature"]);
@@ -262,8 +262,8 @@ async fn cli_executes_rig_against_local_ollama_provider() {
                 {"id":"missing", "systemPrompt":"Work", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
             ],
             "pipelines": [
-                {"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker"}, {"id":"human", "name":"Feedback", "type":"human"}, {"id":"continue", "name":"Continue", "type":"agent", "agentId":"worker"}, {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer"}]},
-                {"id":"missing", "steps":[{"id":"work", "name":"Work", "type":"agent", "agentId":"missing", "transitions":[{"outcome":"completed", "to":null}]}]}
+                {"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "includeTask":true}, {"id":"human", "name":"Feedback", "type":"human"}, {"id":"continue", "name":"Continue", "type":"agent", "agentId":"worker"}, {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer"}]},
+                {"id":"missing", "steps":[{"id":"work", "name":"Work", "type":"agent", "agentId":"missing", "includeTask":true, "transitions":[{"outcome":"completed", "to":null}]}]}
             ]
         }),
     );
