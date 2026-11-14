@@ -235,7 +235,7 @@ pub(super) fn execute(
             .collect::<Vec<_>>()
             .join(", ");
         prompt = format!(
-            "You did not call report_outcome with an allowed outcome. Call report_outcome now with one of: {allowed}, then provide your complete handoff. Do not repeat the task."
+            "You did not call report_outcome with an allowed outcome. Call report_outcome now with one of: {allowed}, and include the complete authoritative handoff in its summary. Do not repeat the task."
         );
     }
     unreachable!()
@@ -308,7 +308,7 @@ fn execute_once(
             "BATON_PI_ALLOWED_OUTCOMES",
             serde_json::to_string(allowed_outcomes).map_err(|error| error.to_string())?,
         );
-        system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and a concise summary. Then provide your complete handoff in your final answer.");
+        system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and the complete authoritative handoff for downstream steps. The final answer may be brief.");
         Some(dir)
     };
     command.current_dir(directory).args([

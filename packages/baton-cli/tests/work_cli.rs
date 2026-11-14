@@ -70,6 +70,64 @@ impl Drop for Server {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_persists_reported_handoff_instead_of_pi_final_response() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bin = f.path.join("fake-bin");
+    fs::create_dir(&bin).unwrap();
+    let pi = bin.join("pi");
+    fs::write(&pi, r##"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
+  if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
+  shift
+done
+mkdir -p "$session"
+prompt=$(cat)
+printf '%s\\n' "$prompt" >> "$session/inputs"
+printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"prior-conversation"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" > "$session/test_$id.jsonl"
+printf '{"outcome":"completed","summary":"TOOL HANDOFF"}' > "$BATON_PI_OUTCOME_FILE"
+printf 'FINAL ANSWER'
+"##).unwrap();
+    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7,
+            "agents": [{"id":"worker", "systemPrompt":"Implement", "provider":"pi", "skillIds":[], "allowedTools":["report_outcome"]}],
+            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "transitions":[{"outcome":"completed", "to":"review"}]}, {"id":"review", "name":"Review", "type":"agent", "agentId":"worker", "transitions":[{"outcome":"completed", "to":null}]}]}]
+        }),
+    );
+    let start = f.value(&["start", "--issue", "Implement feature"]);
+    let output = f
+        .command()
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .args(["work", "execute", "--run", start["id"].as_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status = f.value(&["status", "--run", start["id"].as_str().unwrap()]);
+    assert_eq!(status["steps"][0]["output"], "TOOL HANDOFF");
+    assert_eq!(status["currentStep"], "review");
+    let next = f.value(&["next", "--run", start["id"].as_str().unwrap()]);
+    assert!(next.to_string().contains("TOOL HANDOFF"), "{next}");
+    assert!(
+        !status["steps"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("FINAL ANSWER")
+    );
+}
+
 #[test]
 fn pipelines_lists_configured_ids_and_reports_invalid_configuration() {
     let f = Fixture::new();

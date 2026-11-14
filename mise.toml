@@ -67,7 +67,7 @@ run = "cargo test --workspace"
 
 [tasks.test-extensions]
 description = "Run extension tests"
-run = "bun test extensions/"
+run = ["bun test extensions/", "node --test packages/baton-adapters/tests/pi_report_outcome.test.mjs"]
 
 [tasks.test-browser]
 description = "Run Chromium browser tests"

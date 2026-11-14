@@ -142,13 +142,20 @@ impl AgentRuntime for Script {
         struct FixtureDecision {
             outcome: Outcome,
             output: String,
+            #[serde(default)]
+            final_output: Option<String>,
+            #[serde(default)]
+            final_output_bytes: Option<usize>,
         }
         if let Ok(decision) = serde_json::from_str::<FixtureDecision>(&output) {
             self.decision = Some(AgentDecision {
                 outcome: decision.outcome,
                 summary: decision.output.clone(),
             });
-            Ok(decision.output)
+            Ok(decision.final_output_bytes.map_or_else(
+                || decision.final_output.unwrap_or(decision.output),
+                |size| "x".repeat(size),
+            ))
         } else {
             Ok(output)
         }
@@ -679,6 +686,59 @@ fn cancellation_wins_over_a_non_observer_terminal_write() {
 }
 
 #[test]
+fn linear_steps_reject_oversized_final_handoffs() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    config.pipelines[0].steps = vec![config.pipelines[0].steps[2].clone()];
+    config.pipelines[0].steps[0].transitions.clear();
+    let mut runtime = Script::new(&[&"x".repeat(16 * 1024 + 1)]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "linear-handoff-test",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Failed);
+    assert!(
+        run.steps[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("16384 bytes")
+    );
+}
+
+#[test]
+fn branching_steps_reject_empty_and_oversized_reported_handoffs() {
+    for reported_handoff in [String::new(), "x".repeat(16 * 1024 + 1)] {
+        let fixture = Fixture::new();
+        let mut config = config();
+        let mut step = config.pipelines[0].steps[2].clone();
+        step.transitions = vec![baton_core::domain::project::Transition {
+            outcome: Outcome::Approved,
+            to: None,
+        }];
+        config.pipelines[0].steps = vec![step];
+        let decision = serde_json::json!({"outcome":"approved", "output":reported_handoff});
+        let mut runtime = Script::new(&[&decision.to_string()]);
+        let run = start_pipeline(
+            &config,
+            "draft",
+            "task",
+            "invalid-handoff-test",
+            &mut runtime,
+            &fixture.repo(),
+        )
+        .unwrap();
+        assert_eq!(run.status, Status::Failed);
+        assert!(run.steps[0].error.as_deref().unwrap().contains("summary"));
+    }
+}
+
+#[test]
 fn routed_agent_rework_continues_with_handoff_before_completion() {
     let fixture = Fixture::new();
     let mut config = config();
@@ -695,8 +755,8 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
     ];
     config.pipelines[0].steps = vec![step];
     let mut runtime = Script::new(&[
-        r#"{"outcome":"revise_build","output":"Implemented part; next verify"}"#,
-        r#"{"outcome":"revise_build","output":"Second"}"#,
+        r#"{"outcome":"revise_build","output":"Tool handoff","final_output_bytes":16385}"#,
+        r#"{"outcome":"revise_build","output":"Second","final_output":""}"#,
         r#"{"outcome":"revise_build","output":"Third"}"#,
         r#"{"outcome":"revise_build","output":"Fourth"}"#,
         r#"{"outcome":"approved","output":"Verified"}"#,
@@ -713,6 +773,8 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.steps.len(), 5);
+    assert_eq!(run.steps[0].output.as_deref(), Some("Tool handoff"));
+    assert_eq!(run.handoff.as_deref(), Some("Verified"));
     assert_eq!(run.trace.len(), 5);
     assert!(
         run.trace
@@ -746,7 +808,7 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
             .input
             .as_ref()
             .unwrap()
-            .contains("Implemented part; next verify")
+            .contains("Tool handoff")
     );
     assert_eq!(runtime.directories[0], runtime.directories[1]);
     assert_eq!(runtime.run_ids, ["progress-test"]);
