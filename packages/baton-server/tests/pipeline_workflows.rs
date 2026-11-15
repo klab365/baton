@@ -231,6 +231,33 @@ fn config() -> ProjectConfig {
     ]);
     parse_config(&json.to_string()).unwrap()
 }
+
+fn software_factory_config() -> ProjectConfig {
+    let mut value: serde_json::Value =
+        serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
+    let factory: serde_json::Value = serde_yaml_ng::from_str(include_str!(
+        "../../../.baton/pipelines/software-factory.yml"
+    ))
+    .unwrap();
+    let steps = factory["steps"].as_array().unwrap().clone();
+    let template = value["agents"][0].clone();
+    let mut agents = Vec::new();
+    for step in &steps {
+        if let Some(id) = step["agentId"].as_str()
+            && !agents
+                .iter()
+                .any(|agent: &serde_json::Value| agent["id"] == id)
+        {
+            let mut agent = template.clone();
+            agent["id"] = id.into();
+            agents.push(agent);
+        }
+    }
+    value["agents"] = serde_json::Value::Array(agents);
+    value["pipelines"][0]["steps"] = serde_json::Value::Array(steps);
+    parse_config(&value.to_string()).unwrap()
+}
+
 #[test]
 fn repeated_review_findings_pause_and_resume_after_repository_reload() {
     let fixture = Fixture::new();
@@ -1363,6 +1390,539 @@ fn shell_failure_routes_with_output_to_next_step() {
             .contains("Exit status: 7")
     );
     assert!(run.steps[1].input.as_ref().unwrap().contains("diagnostic"));
+}
+
+#[test]
+fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
+    let fixture = Fixture::new();
+    let config = software_factory_config();
+    let task_id = "existing-task";
+    let repository = fixture.repo();
+    let worktree = repository
+        .worktree_manager()
+        .unwrap()
+        .allocate(task_id)
+        .unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&worktree.path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let head = git(&["rev-parse", "HEAD"]);
+    let branch = git(&["branch", "--show-current"]);
+    let initial_outputs = [
+        r#"{"outcome":"completed","output":"Inspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD"}"#,
+        r#"{"outcome":"completed","output":"No new implementation changes; retain branch and PR identity"}"#,
+        r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
+        r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
+        r#"{"outcome":"completed","output":"PENDING: required checks queued for HEAD"}"#,
+    ];
+    let initial_outputs: Vec<String> = initial_outputs
+        .iter()
+        .map(|s| s.replace("BRANCH", &branch).replace("HEAD", &head))
+        .collect();
+    let initial_refs: Vec<&str> = initial_outputs.iter().map(String::as_str).collect();
+    let mut first_runtime = Script::new(&initial_refs);
+    let first = start_pipeline_for_task_with_worktree(
+        &config,
+        "draft",
+        "Reinspect existing PR https://github.com/example/repo/pull/42",
+        "factory-original",
+        TaskRunContext {
+            task_id: Some(task_id.into()),
+            worktree: Some(worktree.clone()),
+        },
+        &mut first_runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(first.status, Status::Succeeded);
+    assert_eq!(
+        first
+            .steps
+            .iter()
+            .filter(|s| s.attempt > 0)
+            .map(|s| s.step_id.as_str())
+            .collect::<Vec<_>>(),
+        ["plan", "build", "review", "commit", "ci"]
+    );
+    let first_commit = first.steps.iter().find(|s| s.step_id == "commit").unwrap();
+    let first_ci = first.steps.iter().find(|s| s.step_id == "ci").unwrap();
+    assert!(
+        first_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("no commit or push")
+    );
+    assert!(first_ci.output.as_deref().unwrap().contains("PENDING"));
+    assert!(first_ci.input.as_deref().unwrap().contains(&head));
+    let head_before = head.clone();
+
+    let rerun_task = format!(
+        "Reinspect existing PR https://github.com/example/repo/pull/42\n\nHandoffs from previous successful run {} (chronological):\n\n5. ci:\nPENDING: required checks queued for {head}",
+        first.id
+    );
+    let reinspection_outputs = [
+        r#"{"outcome":"completed","output":"Reinspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD"}"#,
+        r#"{"outcome":"completed","output":"No new implementation changes"}"#,
+        r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
+        r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
+        r#"{"outcome":"completed","output":"PASSED: required checks for HEAD"}"#,
+    ];
+    let reinspection_outputs: Vec<String> = reinspection_outputs
+        .iter()
+        .map(|s| s.replace("BRANCH", &branch).replace("HEAD", &head))
+        .collect();
+    let reinspection_refs: Vec<&str> = reinspection_outputs.iter().map(String::as_str).collect();
+    let mut rerun_runtime = Script::new(&reinspection_refs);
+    let rerun = start_pipeline_for_task_with_worktree(
+        &config,
+        "draft",
+        &rerun_task,
+        "factory-reinspection",
+        TaskRunContext {
+            task_id: Some(task_id.into()),
+            worktree: Some(worktree.clone()),
+        },
+        &mut rerun_runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(rerun.status, Status::Succeeded);
+    assert_eq!(rerun.worktree.as_ref().unwrap().path, worktree.path);
+    assert!(rerun.steps[0].input.as_deref().unwrap().contains("PENDING"));
+    let rerun_commit = rerun.steps.iter().find(|s| s.step_id == "commit").unwrap();
+    let rerun_ci = rerun.steps.iter().find(|s| s.step_id == "ci").unwrap();
+    assert!(rerun_commit.input.as_deref().unwrap().contains(&head));
+    assert!(
+        rerun_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("no commit or push")
+    );
+    assert!(rerun_ci.output.as_deref().unwrap().contains("PASSED"));
+    assert!(rerun_ci.input.as_deref().unwrap().contains(&head));
+    let head_after = Command::new("git")
+        .arg("-C")
+        .arg(&worktree.path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert!(head_after.status.success());
+    assert_eq!(
+        String::from_utf8(head_after.stdout).unwrap().trim(),
+        head_before
+    );
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&worktree.path)
+        .args(["status", "--porcelain"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(status.stdout.is_empty());
+}
+
+fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
+    let fixture = Fixture::new();
+    let config = software_factory_config();
+    let repository = fixture.repo();
+    let task_id = "partial-publication-task";
+    let manager = repository.worktree_manager().unwrap();
+    let worktree = manager.allocate(task_id).unwrap();
+    let bare_remote = fixture.0.join("origin.git");
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare"])
+            .arg(&bare_remote)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&worktree.path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    let target_base = git(&["rev-parse", "HEAD"]);
+    for n in 1..=2 {
+        let path = format!("prior-{n}.txt");
+        fs::write(worktree.path.join(&path), format!("prior {n}\n")).unwrap();
+        git(&["add", &path]);
+        let prior = Command::new("git")
+            .arg("-C")
+            .arg(&worktree.path)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                &format!("feat: prior task change {n}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            prior.status.success(),
+            "{}",
+            String::from_utf8_lossy(&prior.stderr)
+        );
+    }
+    let precommit_head = git(&["rev-parse", "HEAD"]);
+    assert_ne!(target_base, precommit_head);
+    git(&["remote", "add", "origin", bare_remote.to_str().unwrap()]);
+    if remote_branch_exists {
+        git(&["push", "origin", "HEAD:refs/heads/task-reinspect"]);
+    }
+    fs::write(worktree.path.join("reviewed.txt"), "reviewed change\n").unwrap();
+    git(&["add", "reviewed.txt"]);
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(&worktree.path)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fix: add reviewed change",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let commit_sha = git(&["rev-parse", "HEAD"]);
+    assert_eq!(git(&["rev-parse", "HEAD^"]), precommit_head);
+    let patch = Command::new("git")
+        .arg("-C")
+        .arg(&worktree.path)
+        .args(["diff", "--binary", &precommit_head, &commit_sha])
+        .output()
+        .unwrap();
+    assert!(patch.status.success());
+    let patch_file = fixture.0.join("reviewed.patch");
+    fs::write(&patch_file, patch.stdout).unwrap();
+    let patch_fingerprint = git(&["hash-object", patch_file.to_str().unwrap()]);
+    fs::remove_file(patch_file).unwrap();
+    let remote_expected = if remote_branch_exists {
+        precommit_head.as_str()
+    } else {
+        "ABSENT"
+    };
+    let pr_url = if remote_branch_exists {
+        "https://github.com/example/repo/pull/42"
+    } else {
+        "ABSENT"
+    };
+    let review_facts = format!(
+        "repository example/repo; branch task-reinspect; PR URL {pr_url}; target branch base SHA {target_base}; pre-commit task HEAD SHA {precommit_head}; reviewed paths prior-1.txt, prior-2.txt, reviewed.txt; incremental reviewed patch fingerprint {patch_fingerprint}; expected remote task-branch SHA {remote_expected}"
+    );
+    let first_outputs = [
+        r#"{"outcome":"completed","output":"Reinspect repository example/repo branch task-reinspect"}"#.to_owned(),
+        r#"{"outcome":"completed","output":"No new changes; existing reviewed commit present"}"#.to_owned(),
+        serde_json::json!({"outcome":"approved","output":review_facts}).to_string(),
+        serde_json::json!({
+            "outcome":"blocked",
+            "output":format!("Publication failed after local commit {commit_sha} with parent {precommit_head}; remote remains {remote_expected}; push failed; {review_facts}"),
+            "blocker_reason":"Retry publishing the exact reviewed commit"
+        }).to_string(),
+    ];
+    let first_refs: Vec<&str> = first_outputs.iter().map(String::as_str).collect();
+    let mut first_runtime = Script::new(&first_refs);
+    let waiting = start_pipeline_for_task_with_worktree(
+        &config,
+        "draft",
+        if remote_branch_exists {
+            "Reinspect existing PR https://github.com/example/repo/pull/42"
+        } else {
+            "Publish reviewed task branch task-reinspect; no PR exists yet"
+        },
+        "partial-publication",
+        TaskRunContext {
+            task_id: Some(task_id.into()),
+            worktree: Some(worktree.clone()),
+        },
+        &mut first_runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    assert_eq!(waiting.current_step.as_deref(), Some("commit-help"));
+    let blocked_commit = waiting
+        .steps
+        .iter()
+        .find(|s| s.step_id == "commit" && s.outcome == Some(Outcome::Blocked))
+        .unwrap();
+    assert!(
+        blocked_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(&commit_sha)
+    );
+    assert!(
+        blocked_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(&target_base)
+    );
+    assert!(
+        blocked_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(&precommit_head)
+    );
+    assert!(
+        blocked_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(&patch_fingerprint)
+    );
+    assert!(
+        blocked_commit
+            .output
+            .as_deref()
+            .unwrap()
+            .contains(remote_expected)
+    );
+    let remote_before = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare_remote)
+        .args(["rev-parse", "refs/heads/task-reinspect"])
+        .output()
+        .unwrap();
+    if remote_branch_exists {
+        assert!(remote_before.status.success());
+        assert_eq!(
+            String::from_utf8(remote_before.stdout).unwrap().trim(),
+            precommit_head
+        );
+    } else {
+        assert!(!remote_before.status.success());
+    }
+
+    // Simulate the missing publication operation; the existing local commit is the
+    // reviewed change and must not be recreated during the committer retry.
+    git(&["push", "origin", "HEAD:refs/heads/task-reinspect"]);
+    let retry_outputs = [
+        r#"{"outcome":"completed","output":"Verified existing commit; no new commit; repository example/repo branch task-reinspect PR https://github.com/example/repo/pull/42 head COMMIT_SHA"}"#
+            .replace("COMMIT_SHA", &commit_sha),
+        r#"{"outcome":"completed","output":"PENDING: required check queued for reviewed commit"}"#.to_owned(),
+    ];
+    let retry_refs: Vec<&str> = retry_outputs.iter().map(String::as_str).collect();
+    let mut retry_runtime = Script::new(&retry_refs);
+    let completed = resume_human(
+        &waiting.id,
+        Outcome::Responded,
+        "Retry non-force publication of the existing reviewed commit",
+        &mut retry_runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(completed.status, Status::Succeeded);
+    let commit_attempts: Vec<_> = completed
+        .steps
+        .iter()
+        .filter(|s| s.step_id == "commit")
+        .collect();
+    assert_eq!(commit_attempts.len(), 2);
+    let retry_input = commit_attempts[1].input.as_deref().unwrap();
+    for fact in [
+        &target_base,
+        &precommit_head,
+        &patch_fingerprint,
+        remote_expected,
+        &commit_sha,
+        "reviewed paths prior-1.txt, prior-2.txt, reviewed.txt",
+    ] {
+        assert!(
+            retry_input.contains(fact),
+            "missing commit-help context: {fact}"
+        );
+    }
+    assert!(
+        commit_attempts[1]
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Retry non-force publication")
+    );
+    assert!(
+        commit_attempts[1]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("no new commit")
+    );
+    let ci_input = completed
+        .steps
+        .iter()
+        .find(|s| s.step_id == "ci")
+        .unwrap()
+        .input
+        .as_deref()
+        .unwrap();
+    assert!(ci_input.contains(&commit_sha));
+    assert!(ci_input.contains("https://github.com/example/repo/pull/42"));
+    assert_eq!(git(&["rev-parse", "HEAD"]), commit_sha);
+    assert_eq!(git(&["rev-parse", "HEAD^"]), precommit_head);
+    assert_eq!(
+        git(&["rev-list", "--count", &format!("{target_base}..HEAD")]),
+        "3"
+    );
+    let remote_sha = Command::new("git")
+        .arg("--git-dir")
+        .arg(&bare_remote)
+        .args(["rev-parse", "refs/heads/task-reinspect"])
+        .output()
+        .unwrap();
+    assert!(remote_sha.status.success());
+    assert_eq!(
+        String::from_utf8(remote_sha.stdout).unwrap().trim(),
+        commit_sha
+    );
+}
+
+#[test]
+fn configured_factory_recovers_partial_publish_for_existing_and_absent_remote_branches() {
+    run_configured_factory_partial_publication(true);
+    run_configured_factory_partial_publication(false);
+}
+
+#[test]
+fn configured_factory_ci_outcome_scenarios_route_through_real_graph() {
+    // Scripted outcomes verify configured transitions, not GitHub classification.
+    for (name, ci_outcome, ci_detail) in [
+        ("pending", "completed", "PENDING: check queued; head abc123"),
+        (
+            "failure",
+            "revise_build",
+            "required check failed; head abc123",
+        ),
+        (
+            "passed",
+            "completed",
+            "PASSED: all required checks; head abc123",
+        ),
+        (
+            "api",
+            "blocked",
+            "GitHub API unauthorized; head/details unavailable",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let config = software_factory_config();
+        let mut outputs = vec![
+            r#"{"outcome":"completed","output":"plan existing PR repo/branch head abc123"}"#.to_owned(),
+            r#"{"outcome":"completed","output":"No unnecessary edits"}"#.to_owned(),
+            r#"{"outcome":"approved","output":"Reviewed existing diff against base for head abc123"}"#.to_owned(),
+            r#"{"outcome":"completed","output":"Existing PR https://github.com/example/repo/pull/42; no commit or push; head abc123"}"#.to_owned(),
+            serde_json::json!({"outcome":ci_outcome,"output":ci_detail,"blocker_reason":"API inspection unavailable"}).to_string(),
+        ];
+        if name == "failure" {
+            outputs.extend([
+                r#"{"outcome":"completed","output":"Fixed actionable failure"}"#.into(),
+                r#"{"outcome":"approved","output":"Reviewed fix against base; head abc123"}"#
+                    .into(),
+                r#"{"outcome":"completed","output":"Updated existing PR; head def456"}"#.into(),
+                r#"{"outcome":"completed","output":"PENDING: other check queued for head def456"}"#
+                    .into(),
+            ]);
+        }
+        let output_refs: Vec<&str> = outputs.iter().map(String::as_str).collect();
+        let mut runtime = Script::new(&output_refs);
+        let run = start_pipeline(
+            &config,
+            "draft",
+            "Reinspect existing PR https://github.com/example/repo/pull/42",
+            name,
+            &mut runtime,
+            &fixture.repo(),
+        )
+        .unwrap();
+        assert_eq!(
+            run.status,
+            if name == "api" {
+                Status::WaitingHuman
+            } else {
+                Status::Succeeded
+            },
+            "{name}"
+        );
+        assert!(runtime.outputs.is_empty(), "{name}");
+        let ci_attempts: Vec<_> = run
+            .steps
+            .iter()
+            .filter(|s| s.step_id == "ci" && s.attempt > 0)
+            .collect();
+        assert!(
+            ci_attempts[0]
+                .output
+                .as_deref()
+                .unwrap()
+                .contains(ci_detail),
+            "{name}"
+        );
+        assert!(ci_attempts[0].input.as_deref().unwrap().contains("abc123"));
+        if name == "failure" {
+            assert_eq!(ci_attempts.len(), 2);
+            assert_eq!(
+                ci_attempts[0]
+                    .selected_transition
+                    .as_ref()
+                    .unwrap()
+                    .to
+                    .as_deref(),
+                Some("build")
+            );
+            assert_eq!(ci_attempts[1].outcome, Some(Outcome::Completed));
+            assert!(
+                run.steps
+                    .iter()
+                    .any(|s| s.step_id == "build" && s.attempt == 2)
+            );
+        } else if name == "api" {
+            assert_eq!(run.current_step.as_deref(), Some("ci-help"));
+            assert!(
+                ci_attempts[0]
+                    .output
+                    .as_deref()
+                    .unwrap()
+                    .contains("details unavailable")
+            );
+        } else {
+            assert_eq!(ci_attempts.len(), 1);
+            assert_eq!(
+                ci_attempts[0].selected_transition.as_ref().unwrap().to,
+                None
+            );
+        }
+    }
 }
 
 #[test]
