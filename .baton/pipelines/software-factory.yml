@@ -20,16 +20,16 @@ steps:
   name: Implement and verify
   agentId: factory-builder
   prompt: |
-    Implement and verify the task using the plan and any review feedback or
-    debugger diagnosis in the handoff. Report the changes and verification, or
-    describe the blocker and what has been tried. Run applicable checks and verify
-    the target branch is an ancestor of HEAD. Do not commit, push or create a PR.
-    For each behavior change, add or update a focused test before changing the
-    implementation. Run it and confirm it fails for the expected reason, then
-    implement the smallest change and rerun it until it passes. In the handoff,
-    report the test commands, red and green results, and any exceptions. If
-    test-first is impractical, explain why and report the alternative verification;
-    never claim a red result that was not observed.
+    Execute the incoming plan, not as completed work but by inspecting and
+    modifying the repository and verifying the changes. On re-entry, act on
+    review or debugging feedback and continue the work. A missing implementation
+    or clean repository alone is not a blocker.
+
+    Use test-first for behavior changes. Report test commands and observed red and
+    green results; explain exceptions and alternative verification without claiming
+    an unobserved red result. Run applicable checks and verify the target branch
+    is an ancestor of HEAD. Report changes and verification, or the blocker and
+    attempts made. Do not commit, push or create a PR.
   transitions:
   - outcome: completed
     to: review
