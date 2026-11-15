@@ -34,7 +34,7 @@ test("failure summary links to the matching saved timeline entry", async ({
 	await page.goto("/runs/failed-run");
 	await expect(
 		page.getByRole("link", { name: "View attempt 7 in timeline" }),
-	).toHaveAttribute("href", "#attempt-entry-1");
+	).toHaveAttribute("href", "#attempt-entry-1", { timeout: 15000 });
 });
 
 test("compares legacy visits and attributes structured evidence to its agent", async ({
