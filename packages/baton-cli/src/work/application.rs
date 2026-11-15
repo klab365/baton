@@ -176,6 +176,7 @@ impl WorkApplication {
                     project_dir: self.workspace.clone(),
                     credentials: Arc::new(store),
                     auth_root,
+                    pi_command: baton_adapters::runtime::PI_EXECUTABLE.into(),
                 };
                 let mut runtime = factory.create(config, &run.pipeline_id)?;
                 runtime.set_run_id(&run.id)?;
