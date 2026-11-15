@@ -707,6 +707,62 @@ pub(crate) fn repeated_blocker_message(step_id: &str) -> String {
     format!("Step {step_id} repeated an identical blocker after a human response")
 }
 
+const LOOP_THRESHOLD: usize = 3;
+
+fn repeated_unresolved_count(
+    run: &PipelineRun,
+    pipeline: &crate::domain::project::Pipeline,
+    index: usize,
+) -> usize {
+    let current = &run.steps[index];
+    if !matches!(
+        current.outcome,
+        Some(Outcome::Blocked | Outcome::Rejected | Outcome::ReviseBuild | Outcome::RevisePlan)
+    ) {
+        return 0;
+    }
+    let normalize = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let Some(output) = current
+        .output
+        .as_deref()
+        .map(normalize)
+        .filter(|text| !text.is_empty())
+    else {
+        return 0;
+    };
+    let mut count = 0;
+    let mut attempts: Vec<_> = run
+        .steps
+        .iter()
+        .filter(|attempt| attempt.attempt > 0 && attempt.attempt <= current.attempt)
+        .collect();
+    attempts.sort_by_key(|attempt| std::cmp::Reverse(attempt.attempt));
+    for attempt in attempts {
+        if pipeline
+            .steps
+            .iter()
+            .any(|step| step.id == attempt.step_id && step.is_human())
+            && attempt.outcome == Some(Outcome::Responded)
+        {
+            break;
+        }
+        if attempt.step_id == current.step_id {
+            if attempt.outcome != current.outcome
+                || attempt.output.as_deref().map(normalize).as_deref() != Some(output.as_str())
+            {
+                break;
+            }
+            count += 1;
+        }
+    }
+    count
+}
+
 fn step_attempt_count(run: &PipelineRun, step_id: &str) -> usize {
     run.steps
         .iter()
@@ -997,6 +1053,7 @@ pub fn execute_graph(
                 return Err(error);
             }
         };
+        let mut loop_message = None;
         match result {
             Ok((outcome, output)) => {
                 let repeated =
@@ -1005,8 +1062,20 @@ pub fn execute_graph(
                 run.steps[index].output = Some(output);
                 run.steps[index].outcome = Some(outcome.clone());
                 run.steps[index].status = Status::Succeeded;
+                let unresolved_count = repeated_unresolved_count(&run, pipeline, index);
                 route(&mut run, pipeline, index, outcome)?;
-                if repeated {
+                if run.status == Status::Running
+                    && unresolved_count >= LOOP_THRESHOLD
+                    && unresolved_count.is_multiple_of(LOOP_THRESHOLD)
+                {
+                    run.status = Status::WaitingHuman;
+                    run.pending_actions = vec![Outcome::Responded];
+                    loop_message = Some(format!(
+                        "Possible unproductive loop: step {} reported the same unresolved outcome and summary {unresolved_count} times (threshold {LOOP_THRESHOLD}). Review the attempts and worktree, then respond to continue or cancel.",
+                        step.id
+                    ));
+                }
+                if repeated && loop_message.is_none() {
                     publish(
                         repository,
                         &mut run,
@@ -1024,8 +1093,11 @@ pub fn execute_graph(
         publish(
             repository,
             &mut run,
-            Some(format!("Step {} completed", step.id)),
+            Some(loop_message.unwrap_or_else(|| format!("Step {} completed", step.id))),
         )?;
+        if run.status == Status::WaitingHuman {
+            return Ok(run);
+        }
     }
     finish_run(&mut run, clock);
     publish(repository, &mut run, Some("Run stopped".into()))?;
@@ -1176,6 +1248,32 @@ mod tests {
             elapsed_ms("2026-02-31T00:00:00.000Z", "2026-03-01T00:00:00.000Z"),
             None
         );
+    }
+
+    #[test]
+    fn detects_identical_unresolved_findings_across_visits_and_reload() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"t", "startedAt":"now", "status":"running", "steps":[]
+        })).unwrap();
+        let mut review = pending(&pipeline.steps[0]);
+        review.status = Status::Succeeded;
+        review.outcome = Some(Outcome::ReviseBuild);
+        review.output = Some("Fix the missing test".into());
+        for attempt in 1..=3 {
+            review.attempt = attempt;
+            run.steps.push(review.clone());
+        }
+        run.steps.reverse();
+        let recovered: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        assert_eq!(repeated_unresolved_count(&recovered, pipeline, 0), 3);
+        run.steps[1].output = Some("Fix a different test".into());
+        assert_eq!(repeated_unresolved_count(&run, pipeline, 0), 1);
+        run.steps[0].outcome = Some(Outcome::Completed);
+        assert_eq!(repeated_unresolved_count(&run, pipeline, 0), 0);
     }
 
     #[test]

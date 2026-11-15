@@ -89,6 +89,32 @@ const legacyTraceMayContainSensitiveContent = $derived(
 	),
 );
 const previousAttempt = $derived(attempts.at(-2));
+const currentAttempt = $derived(
+	[...attempts]
+		.reverse()
+		.find(
+			(step) =>
+				step.stepId === data.run.currentStep && step.status !== "pending",
+		),
+);
+const currentVisits = $derived(
+	attempts.filter(
+		(step) => step.stepId === data.run.currentStep && step.status !== "pending",
+	).length,
+);
+const loopWarning = $derived(
+	data.run.status === "waitingHuman" &&
+		!attempts.some((step) => step.status === "waitingHuman")
+		? [...data.run.events]
+				.reverse()
+				.find((event) =>
+					event.message?.startsWith("Possible unproductive loop:"),
+				)?.message
+		: undefined,
+);
+const latestHandoff = $derived(
+	[...attempts].reverse().find((step) => step.output?.trim() || step.error),
+);
 const failure = $derived(runFailure(data.run));
 function isHuman(stepId: string) {
 	return (
@@ -161,15 +187,17 @@ async function cancel() {
 {#if error}<StatusMessage tone="error">{error}</StatusMessage>{/if}
 
 <section class="run-overview" aria-label="Run overview">
-	<div><span class="overview-label">RUN STATUS</span><StatusBadge status={data.run.status} /><strong>{nextAction}</strong>{#if data.task}<span>Task: <a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a></span>{:else if data.run.taskId}<span>Task: {data.run.taskId} (unavailable)</span>{/if}<span>{data.run.currentStep ? `Current step: ${data.run.currentStep} · ` : ""}Started {new Date(data.run.startedAt).toLocaleString()}</span></div>
+	<div><span class="overview-label">RUN STATUS</span><StatusBadge status={data.run.status} /><strong>{nextAction}</strong>{#if data.task}<span>Task: <a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a></span>{:else if data.run.taskId}<span>Task: {data.run.taskId} (unavailable)</span>{/if}<span>{data.run.currentStep ? `Current step: ${data.run.currentStep} · ` : ""}Started {new Date(data.run.startedAt).toLocaleString()}</span>{#if data.run.currentStep}<span>Step visits: {currentVisits} · {["running", "waitingHuman"].includes(currentAttempt?.status) && currentAttempt?.startedAt ? `elapsed ${Math.floor(Math.max(0, clock - Date.parse(currentAttempt.startedAt)) / 1000)}s` : "no active step timer"}</span>{/if}{#if latestHandoff}{@const summary = latestHandoff.error ?? latestHandoff.output}<span>Latest progress or blocker ({latestHandoff.stepId}): {summary.length > 300 ? `${summary.slice(0, 300)}…` : summary}</span>{/if}</div>
 	<div class="run-overview-links"><span role="status">{refreshError ? "Refresh failed · retrying" : connection === "live" ? "Live updates" : connection === "reconnecting" ? "Reconnecting · checking periodically" : "Connecting…"}</span><a href="#steps">View timeline ↓</a><a href="#diagnostics">Diagnostics ↓</a></div>
 </section>
+
+{#if loopWarning}<div class="failure-summary"><StatusMessage tone="warning" title="Possible unproductive loop">{loopWarning}</StatusMessage></div>{/if}
 
 {#if failure}<div class="failure-summary"><StatusMessage tone="error" title={failure.title}><p>{failure.detail}</p>{#if failure.attempt}<a href={`#attempt-${failure.attempt}`}>View attempt {failure.attempt} in timeline</a>{:else}<a href="#diagnostics">View run diagnostics</a>{/if}</StatusMessage></div>{/if}
 
 {#if data.run.status === "waitingHuman"}
 <div class="action-panel"><DetailPanel title="Your input is needed">
-	<p class="action-intro">The run is paused at <strong>{data.run.currentStep}</strong>. Choose an outcome to continue. Depending on the transition, an agent or command may run again and repeat side effects; inspect the worktree and previous attempts before continuing.</p>
+	<p class="action-intro">The run is paused at <strong>{data.run.currentStep}</strong>. {loopWarning ? "Add guidance if needed, then send your response to continue with the next step." : "Choose an outcome to continue."} Depending on the transition, an agent or command may run again and repeat side effects; inspect the worktree and previous attempts before continuing.</p>
 	{#if previousAttempt?.output}<div class="action-context"><span>FROM {previousAttempt.stepId}{previousAttempt.outcome ? ` · ${previousAttempt.outcome}` : ""}</span><Markdown value={previousAttempt.output} /></div>{/if}
 	<label for="human-response">Your response <span class="muted">(optional)</span></label>
 	<MultilineInput id="human-response" name="human-response" bind:value={responseText} disabled={actionLoading || cancelling} rows={4} placeholder="Add context for the next step" />

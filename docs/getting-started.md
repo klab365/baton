@@ -55,7 +55,7 @@ In **Pipelines → Create pipeline**, add the steps in this order, then configur
 
 Compare your configuration with the `software-factory` pipeline in the [example](../examples/demo/.baton/pipelines/software-factory.yml). Agent steps with transitions must call `report_outcome`; the example prompts instruct them to do so. A blocked planner reports its uncertainty in its handoff and routes to human help.
 
-**Review loops have no automatic retry or cost limit.** Monitor the run and cancel it if agents repeat without progress. Human approval does not merge or push the branch. A rejected final human transition ends the run as failed. See [workflow transitions](workflow-transitions.md).
+**Review loops have no automatic cost limit.** The global attempt limit bounds visits, and repeated identical unresolved findings can pause the run for human input; neither mechanism detects every unproductive loop. Monitor the run and cancel it if needed. Human approval does not merge or push the branch. A rejected final human transition ends the run as failed. See [workflow transitions](workflow-transitions.md) and the [user guide](user-guide.md).
 
 ## 5. Run a task
 
