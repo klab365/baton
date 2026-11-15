@@ -7,8 +7,9 @@ steps:
   includeTask: true
   prompt: |
     Analyze the task and produce an actionable implementation plan. Include the
-    plan, task requirements, and relevant evidence in your handoff for the builder. Report blocked
-    if critical information is missing. Do not modify files or commit.
+    plan, task requirements, issue reference when available, and relevant evidence
+    in your handoff for the builder. Report blocked if critical information is
+    missing. Do not modify files or commit.
   transitions:
   - outcome: completed
     to: build
@@ -24,6 +25,12 @@ steps:
     modifying the repository and verifying the changes. On re-entry, act on
     review or debugging feedback and continue the work. A missing implementation
     or clean repository alone is not a blocker.
+
+    If the plan is broad, choose a concrete first implementation slice and
+    continue iteratively toward the task's acceptance criteria. Use the issue
+    reference in the handoff when clarification is needed. Report blocked only
+    for a specific obstacle you cannot resolve through available information or
+    reasonable investigation, not merely because work spans multiple layers.
 
     Use test-first for behavior changes. Report test commands and observed red and
     green results; explain exceptions and alternative verification without claiming
