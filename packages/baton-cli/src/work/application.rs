@@ -178,7 +178,7 @@ impl WorkApplication {
                     return Err(WorkFailure::InvalidHandoff.message().into());
                 }
                 let input = baton_core::features::pipeline_engine::with_step_prompt(
-                    baton_core::features::pipeline_engine::step_input(&run, pipeline),
+                    baton_core::features::pipeline_engine::step_input(&run, pipeline)?,
                     &step,
                 );
                 let recorded_input = input.clone();

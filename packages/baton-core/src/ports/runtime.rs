@@ -12,6 +12,7 @@ pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 pub struct AgentDecision {
     pub outcome: Outcome,
     pub summary: String,
+    pub structured_handoff: Option<crate::domain::pipeline::StructuredHandoff>,
 }
 
 /// Executes one pipeline agent step. Implementations may expose the optional
@@ -27,6 +28,13 @@ pub trait AgentRuntime: Send {
 
     /// Whether this agent previously completed an attempt in this run.
     fn set_history_required(&mut self, required: bool);
+
+    /// Supplies persisted handoff reports for bounded, on-demand retrieval by managed tools.
+    fn set_structured_handoff_history(
+        &mut self,
+        _history: Vec<crate::domain::pipeline::StructuredHandoffAttempt>,
+    ) {
+    }
 
     fn execute_shell(
         &mut self,

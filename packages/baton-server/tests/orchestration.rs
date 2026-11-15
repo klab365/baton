@@ -169,6 +169,7 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
             Some(AgentDecision {
                 outcome: Outcome::Completed,
                 summary: "short summary".into(),
+                structured_handoff: None,
             })
         }
     }
@@ -708,6 +709,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
             self.decision = Some(AgentDecision {
                 outcome,
                 summary: summary.into(),
+                structured_handoff: None,
             });
             Ok(summary.into())
         }

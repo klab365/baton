@@ -14,6 +14,7 @@ pub struct ConfiguredRuntime {
     skills: Vec<baton_core::domain::project::Skill>,
     pub(super) run_id: String,
     pub(super) history_required: bool,
+    pub(super) structured_history: Vec<baton_core::domain::pipeline::StructuredHandoffAttempt>,
     fake: super::FakeRuntime,
     pub(super) decision: Option<AgentDecision>,
     pub(super) trace: Vec<RunTraceEntry>,
@@ -32,6 +33,7 @@ impl ConfiguredRuntime {
             skills,
             run_id: uuid::Uuid::now_v7().to_string(),
             history_required: false,
+            structured_history: Vec::new(),
             fake: super::FakeRuntime::default(),
             decision: None,
             trace: Vec::new(),
@@ -113,6 +115,12 @@ impl AgentRuntime for ConfiguredRuntime {
     fn set_history_required(&mut self, required: bool) {
         self.history_required = required;
     }
+    fn set_structured_handoff_history(
+        &mut self,
+        history: Vec<baton_core::domain::pipeline::StructuredHandoffAttempt>,
+    ) {
+        self.structured_history = history;
+    }
 
     fn execute_shell(
         &mut self,
@@ -191,6 +199,7 @@ impl AgentRuntime for ConfiguredRuntime {
                             .credential_id
                             .as_ref()
                             .map(|id| self.auth_root.join("auth").join(id)),
+                        structured_history: &self.structured_history,
                         observer,
                     },
                     allowed_outcomes,
@@ -560,6 +569,99 @@ printf 'done'
         assert_eq!(reopened.steps[0].error, run.steps[0].error);
         assert_eq!(reopened.steps[0].agent_id, "writer");
         assert_eq!(reopened.steps[0].attempt, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pi_sequential_structured_report_is_optional_and_preserves_final_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let pi = root.path().join("pi");
+        std::fs::write(&pi, r##"#!/bin/sh
+args="$*"
+session=""
+id=""
+file=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
+  if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
+  if [ "$1" = '--session' ]; then shift; file="$1"; fi
+  shift
+done
+prompt=$(cat)
+mkdir -p "$session"
+printf '%s\\n' "$args" > "$session/args"
+cp "$BATON_PI_HANDOFF_HISTORY_PATH" "$session/history-capture.json"
+if [ -z "$file" ]; then file="$session/test_$id.jsonl"; fi
+if [ -f "$file" ]; then
+  printf '{"type":"message","message":{"role":"user","content":"%s"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$prompt" >> "$file"
+else
+  printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"%s"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" "$prompt" > "$file"
+fi
+case "$prompt" in
+  *structured-request*) printf '{"outcome":"completed","summary":"report summary","structured_handoff":{"version":1,"summary":"Structured","findings":[]}}' > "$BATON_PI_OUTCOME_FILE" ;;
+esac
+printf 'legacy final answer'
+"##).unwrap();
+        std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let vault = root.path().join("vault");
+        let repository = Arc::new(FilesystemCredentialRepository::new(vault.clone()));
+        let mut runtime = ConfiguredRuntime::new(repository, vault, vec![]);
+        runtime.pi_command = pi.into();
+        runtime.set_run_id("sequential-test").unwrap();
+        runtime.structured_history = vec![baton_core::domain::pipeline::StructuredHandoffAttempt {
+            attempt: 7,
+            step_id: "prior".into(),
+            report: baton_core::domain::pipeline::StructuredHandoff {
+                version: 1,
+                summary: "Prior".into(),
+                findings: vec![],
+                verification: vec![],
+                next_action: None,
+            },
+        }];
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"role", "provider":"pi", "model":"openai/test", "skillIds":[], "allowedTools":["report_outcome"]
+        })).unwrap();
+        let output = runtime
+            .execute_pipeline_step(root.path(), &agent, "structured-request", &[], &|| false)
+            .unwrap();
+        assert_eq!(output, "legacy final answer");
+        let captured =
+            std::fs::read_to_string(root.path().join(
+                "vault/runtime-sessions/sequential-test/agent-writer/pi/history-capture.json",
+            ))
+            .unwrap();
+        assert!(captured.contains("Prior"));
+        assert_eq!(
+            runtime
+                .take_decision()
+                .unwrap()
+                .structured_handoff
+                .unwrap()
+                .summary,
+            "Structured"
+        );
+        let output = runtime
+            .execute_pipeline_step(root.path(), &agent, "ordinary", &[], &|| false)
+            .unwrap();
+        assert_eq!(output, "legacy final answer");
+        assert!(runtime.take_decision().is_none());
+
+        runtime.set_run_id("history-only").unwrap();
+        let restricted_agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"role", "provider":"pi", "model":"openai/test", "skillIds":[], "allowedTools":["read"]
+        })).unwrap();
+        runtime
+            .execute_pipeline_step(root.path(), &restricted_agent, "ordinary", &[], &|| false)
+            .unwrap();
+        let args = std::fs::read_to_string(
+            root.path()
+                .join("vault/runtime-sessions/history-only/agent-writer/pi/args"),
+        )
+        .unwrap();
+        assert!(args.contains("get_structured_handoff"));
+        assert!(!args.contains("report_outcome"));
     }
 
     #[cfg(unix)]

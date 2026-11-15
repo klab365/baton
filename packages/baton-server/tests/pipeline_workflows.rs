@@ -72,6 +72,9 @@ struct Script {
     allowed: Vec<Vec<Outcome>>,
     run_ids: Vec<String>,
     history_required: Vec<bool>,
+    inputs: Vec<String>,
+    structured_history: Vec<StructuredHandoffAttempt>,
+    retrieved_attempts: Vec<u32>,
     decision: Option<AgentDecision>,
     emit_observed_activity: bool,
     no_session: bool,
@@ -116,6 +119,9 @@ impl AgentRuntime for Script {
     fn set_history_required(&mut self, required: bool) {
         self.history_required.push(required);
     }
+    fn set_structured_handoff_history(&mut self, history: Vec<StructuredHandoffAttempt>) {
+        self.structured_history = history;
+    }
     fn execute_shell(
         &mut self,
         directory: &Path,
@@ -125,13 +131,9 @@ impl AgentRuntime for Script {
     ) -> Result<baton_core::domain::work::CheckResult, String> {
         baton_adapters::work::run_shell(directory, command, timeout_seconds, cancelled)
     }
-    fn execute(
-        &mut self,
-        directory: &Path,
-        _agent: &Agent,
-        _input: &str,
-    ) -> Result<String, String> {
+    fn execute(&mut self, directory: &Path, _agent: &Agent, input: &str) -> Result<String, String> {
         assert!(directory.join(".git").exists());
+        self.inputs.push(input.to_owned());
         self.directories.push(directory.into());
         let output = self
             .outputs
@@ -150,6 +152,8 @@ impl AgentRuntime for Script {
             blocker_reason: Option<String>,
             #[serde(default)]
             human_action: Option<String>,
+            #[serde(default)]
+            structured_handoff: Option<StructuredHandoff>,
         }
         if let Ok(decision) = serde_json::from_str::<FixtureDecision>(&output) {
             let mut summary = decision.output.clone();
@@ -168,6 +172,7 @@ impl AgentRuntime for Script {
             self.decision = Some(AgentDecision {
                 outcome: decision.outcome,
                 summary,
+                structured_handoff: decision.structured_handoff,
             });
             Ok(decision.final_output_bytes.map_or_else(
                 || decision.final_output.unwrap_or(decision.output),
@@ -197,6 +202,17 @@ impl AgentRuntime for Script {
         cancelled: &dyn Fn() -> bool,
         observer: &mut dyn FnMut(baton_core::domain::pipeline::RunTraceEntry) -> Result<(), String>,
     ) -> Result<String, String> {
+        if input.contains("Structured context limit:")
+            && let Some(source) = self.structured_history.iter().find(|entry| {
+                entry
+                    .report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.id == "F-1")
+            })
+        {
+            self.retrieved_attempts.push(source.attempt);
+        }
         if self.emit_observed_activity {
             observer(baton_core::domain::pipeline::RunTraceEntry {
                 attempt: None,
@@ -256,6 +272,141 @@ fn software_factory_config() -> ProjectConfig {
     value["agents"] = serde_json::Value::Array(agents);
     value["pipelines"][0]["steps"] = serde_json::Value::Array(steps);
     parse_config(&value.to_string()).unwrap()
+}
+
+#[test]
+fn sequential_agent_can_opt_into_structured_handoff_without_changing_text_flow() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
+        {"id":"build","name":"Build","type":"agent","agentId":"writer"},
+        {"id":"finish","name":"Finish","type":"agent","agentId":"writer"}
+    ]))
+    .unwrap();
+    let report = serde_json::json!({"version":1,"summary":"Keep tracking","findings":[{"id":"F-SEQ","status":"open","description":"Check generated output"}]});
+    let output = serde_json::json!({"outcome":"completed","output":"legacy free text remains authoritative","structured_handoff":report}).to_string();
+    let mut runtime = Script::new(&[&output, "finished"]);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "sequential-structured",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(
+        run.steps[0].output.as_deref(),
+        Some("legacy free text remains authoritative")
+    );
+    assert_eq!(
+        run.steps[0].structured_handoff.as_ref().unwrap().findings[0].id,
+        "F-SEQ"
+    );
+    assert!(runtime.inputs[1].contains("F-SEQ"));
+}
+
+#[test]
+fn later_agent_can_retrieve_and_resolve_a_finding_omitted_from_bounded_context() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
+        {"id":"one","name":"One","type":"agent","agentId":"writer"},
+        {"id":"two","name":"Two","type":"agent","agentId":"writer"},
+        {"id":"three","name":"Three","type":"agent","agentId":"writer"},
+        {"id":"four","name":"Four","type":"agent","agentId":"writer"}
+    ]))
+    .unwrap();
+    let report = |start: u32, count: u32| {
+        serde_json::json!({
+            "version":1,"summary":"Progress","findings":(start..start+count).map(|n| serde_json::json!({"id":format!("F-{n}"),"status":"open","description":"Investigate the identified behavior"})).collect::<Vec<_>>()
+        })
+    };
+    let outputs = [
+        serde_json::json!({"outcome":"completed","output":"First","structured_handoff":report(1,128)}).to_string(),
+        serde_json::json!({"outcome":"completed","output":"Second","structured_handoff":report(129,60)}).to_string(),
+        serde_json::json!({"outcome":"completed","output":"Resolved F-1","structured_handoff":{"version":1,"summary":"Resolved","findings":[{"id":"F-1","status":"resolved","description":"Investigate the identified behavior"}]}}).to_string(),
+        "final consumer".into(),
+    ];
+    let output_refs = outputs.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut runtime = Script::new(&output_refs);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "history-retrieval",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert!(runtime.inputs[2].contains("Structured context limit:"));
+    assert!(runtime.retrieved_attempts.contains(&1));
+    let forwarded = runtime.inputs[3]
+        .lines()
+        .find(|line| line.starts_with("{\"version\":1"))
+        .map(|line| serde_json::from_str::<StructuredHandoff>(line).unwrap())
+        .unwrap();
+    let finding = forwarded
+        .findings
+        .iter()
+        .find(|finding| finding.id == "F-1")
+        .unwrap();
+    assert_eq!(
+        finding.status,
+        baton_core::domain::pipeline::FindingStatus::Resolved
+    );
+}
+
+#[test]
+fn structured_handoff_survives_wait_reload_and_reaches_next_agent() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "transitions":[{"outcome":"completed", "to":"human"}]},
+        {"id":"human", "name":"Human", "type":"human", "transitions":[{"outcome":"responded", "to":"finish"}]},
+        {"id":"finish", "name":"Finish", "type":"agent", "agentId":"writer"}
+    ])).unwrap();
+    let report = serde_json::json!({"version":1,"summary":"Build ready","findings":[{"id":"F-1","status":"open","description":"Check lockfile"}]});
+    let mut runtime = Script::new(&[&serde_json::json!({"outcome":"completed","output":"Build ready","structured_handoff":report}).to_string()]);
+    let waiting = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "structured-resume",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    assert_eq!(
+        waiting.steps[0]
+            .structured_handoff
+            .as_ref()
+            .unwrap()
+            .findings[0]
+            .id,
+        "F-1"
+    );
+    fixture.repo().recover_interrupted().unwrap();
+    let recovered = fixture.repo().load("structured-resume").unwrap();
+    let mut continuation = Script::new(&["finished"]);
+    let completed = resume_human(
+        "structured-resume",
+        Outcome::Responded,
+        "Continue",
+        &mut continuation,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(completed.status, Status::Succeeded);
+    assert!(continuation.inputs[0].contains("F-1"));
+    assert!(continuation.inputs[0].contains("Continue"));
+    assert_eq!(
+        recovered.steps[0].structured_handoff,
+        waiting.steps[0].structured_handoff
+    );
 }
 
 #[test]
@@ -2310,6 +2461,7 @@ fn legacy_managed_snapshot_without_global_limit_remains_unlimited_after_resume()
             output: None,
             error: Some("interrupted".into()),
             outcome: None,
+            structured_handoff: None,
             selected_transition: None,
             attempt,
             started_at: None,

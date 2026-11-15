@@ -482,6 +482,7 @@ pub fn start_pipeline_for_task_with_worktree(
                 output: None,
                 error: None,
                 outcome: None,
+                structured_handoff: None,
                 selected_transition: None,
                 attempt: 0,
                 started_at: None,
@@ -536,6 +537,7 @@ fn pending(step: &PipelineStep) -> StepRun {
         output: None,
         error: None,
         outcome: None,
+        structured_handoff: None,
         selected_transition: None,
         attempt: 0,
         started_at: None,
@@ -594,7 +596,105 @@ pub fn human_decisions(
         .collect()
 }
 
-pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
+struct CarriedStructuredHandoff {
+    report: crate::domain::pipeline::StructuredHandoff,
+    verification_attempts: Vec<u32>,
+    source_attempts: Vec<u32>,
+    omitted_findings: usize,
+    omitted_verification: usize,
+}
+
+fn carried_structured_handoff(
+    run: &PipelineRun,
+) -> Result<Option<CarriedStructuredHandoff>, String> {
+    use crate::domain::pipeline::{Finding, StructuredHandoff, VerificationEvidence};
+    let mut reports: Vec<_> = run
+        .steps
+        .iter()
+        .filter(|attempt| attempt.status == Status::Succeeded)
+        .filter_map(|attempt| {
+            attempt
+                .structured_handoff
+                .as_ref()
+                .map(|report| (attempt.attempt, report))
+        })
+        .collect();
+    reports.sort_by_key(|(attempt, _)| *attempt);
+    let Some((_, latest)) = reports.last().copied() else {
+        return Ok(None);
+    };
+
+    let mut findings: Vec<(Finding, u32)> = Vec::new();
+    let mut finding_indexes = std::collections::HashMap::new();
+    let mut verification: Vec<(VerificationEvidence, u32)> = Vec::new();
+    let mut source_attempts = Vec::new();
+    for (attempt, report) in reports {
+        source_attempts.push(attempt);
+        for finding in &report.findings {
+            if let Some(index) = finding_indexes.get(&finding.id).copied() {
+                findings[index] = (finding.clone(), attempt);
+            } else {
+                finding_indexes.insert(finding.id.clone(), findings.len());
+                findings.push((finding.clone(), attempt));
+            }
+        }
+        verification.extend(
+            report
+                .verification
+                .iter()
+                .cloned()
+                .map(|item| (item, attempt)),
+        );
+    }
+
+    let mut carried = StructuredHandoff {
+        version: latest.version,
+        summary: latest.summary.clone(),
+        findings: Vec::new(),
+        verification: Vec::new(),
+        next_action: latest.next_action.clone(),
+    };
+    let fits = |candidate: &StructuredHandoff| {
+        serde_json::to_vec(candidate)
+            .is_ok_and(|bytes| bytes.len() <= crate::domain::pipeline::MAX_STRUCTURED_HANDOFF_BYTES)
+    };
+    let mut selected_findings = Vec::new();
+    let mut ordered_findings: Vec<_> = findings.iter().collect();
+    ordered_findings.sort_by_key(|(_, attempt)| std::cmp::Reverse(*attempt));
+    for (finding, _) in ordered_findings {
+        if carried.findings.len() == crate::domain::pipeline::MAX_FINDINGS {
+            break;
+        }
+        carried.findings.push(finding.clone());
+        if fits(&carried) {
+            selected_findings.push(finding.id.clone());
+        } else {
+            carried.findings.pop();
+        }
+    }
+    let mut selected_verification = Vec::new();
+    for (item, attempt) in verification.iter().rev() {
+        carried.verification.push(item.clone());
+        if fits(&carried) {
+            selected_verification.push(*attempt);
+        } else {
+            carried.verification.pop();
+        }
+    }
+    carried.validate()?;
+    Ok(Some(CarriedStructuredHandoff {
+        omitted_findings: findings.len() - selected_findings.len(),
+        omitted_verification: verification.len() - selected_verification.len(),
+        verification_attempts: selected_verification,
+        source_attempts,
+        report: carried,
+    }))
+}
+
+pub fn step_input(
+    run: &PipelineRun,
+    pipeline: &crate::domain::project::Pipeline,
+) -> Result<String, String> {
     let include_task = pipeline
         .steps
         .iter()
@@ -616,7 +716,7 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
             .as_ref()
             .is_none_or(|handoff| handoff == &run.task)
     {
-        return run.task.clone();
+        return Ok(run.task.clone());
     }
     let mut parts = Vec::new();
     if include_task || !decisions.is_empty() {
@@ -637,6 +737,29 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
     {
         parts.push(format!("Previous handoff:\n{handoff}"));
     }
+    if let Some(structured) = carried_structured_handoff(run)? {
+        let evidence =
+            serde_json::to_string(&structured.report).map_err(|error| error.to_string())?;
+        parts.push(format!("Agent-reported structured handoff (claims and verification evidence are unverified unless independently checked):\n{evidence}"));
+        let verification_provenance = structured
+            .verification_attempts
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !verification_provenance.is_empty() {
+            parts.push(format!("Verification evidence above was reported in attempt(s) {verification_provenance}; it remains unverified until independently checked."));
+        }
+        if structured.omitted_findings > 0 || structured.omitted_verification > 0 {
+            let attempts = structured
+                .source_attempts
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("Structured context limit: {} finding(s) and {} verification item(s) are not included here; their complete reports remain stored on the listed producing attempts [{attempts}]. Inspect run history; omission here does not mean resolved or verified.", structured.omitted_findings, structured.omitted_verification));
+        }
+    }
     if run
         .steps
         .iter()
@@ -650,9 +773,9 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
         parts.push("Previous attempt was interrupted by server restart. Inspect the existing worktree and reconcile any potentially completed external actions (including commits, pushes and pull requests) before continuing; do not repeat side effects blindly.".into());
     }
     if parts.is_empty() {
-        "No task or preceding handoff was supplied for this step.".into()
+        Ok("No task or preceding handoff was supplied for this step.".into())
     } else {
-        parts.join("\n\n")
+        Ok(parts.join("\n\n"))
     }
 }
 
@@ -798,7 +921,15 @@ pub fn execute_graph(
             publish(repository, &mut run, Some(error))?;
             return Ok(run);
         }
-        let input = with_step_prompt(step_input(&run, pipeline), step);
+        let input = match step_input(&run, pipeline) {
+            Ok(input) => with_step_prompt(input, step),
+            Err(error) => {
+                run.status = Status::Failed;
+                finish_run(&mut run, clock);
+                publish(repository, &mut run, Some(error))?;
+                return Ok(run);
+            }
+        };
         let index = if let Some(i) = run
             .steps
             .iter()
@@ -968,6 +1099,21 @@ pub fn execute_graph(
         });
         let history_unavailable = history_required && !runtime.supports_session_resumption(agent);
         runtime.set_history_required(history_required);
+        runtime.set_structured_handoff_history(
+            run.steps
+                .iter()
+                .filter(|attempt| attempt.status == Status::Succeeded)
+                .filter_map(|attempt| {
+                    attempt.structured_handoff.clone().map(|report| {
+                        crate::domain::pipeline::StructuredHandoffAttempt {
+                            attempt: attempt.attempt,
+                            step_id: attempt.step_id.clone(),
+                            report,
+                        }
+                    })
+                })
+                .collect(),
+        );
         let worktree_path = run
             .worktree
             .as_ref()
@@ -1009,7 +1155,13 @@ pub fn execute_graph(
                 if output.len() > MAX_HANDOFF_BYTES {
                     return Err("Agent output exceeds 16384 bytes".into());
                 }
-                Ok((Outcome::Completed, output))
+                let structured_handoff = guarded
+                    .take_decision()
+                    .and_then(|decision| decision.structured_handoff);
+                if let Some(handoff) = &structured_handoff {
+                    handoff.validate()?;
+                }
+                Ok((Outcome::Completed, output, structured_handoff))
             } else {
                 let decision = guarded.take_decision().ok_or_else(|| {
                     "Agent completed without reporting a pipeline outcome".to_owned()
@@ -1025,7 +1177,14 @@ pub fn execute_graph(
                 if decision.summary.len() > MAX_HANDOFF_BYTES {
                     return Err("Pipeline outcome summary exceeds 16384 bytes".into());
                 }
-                Ok((decision.outcome, decision.summary))
+                if let Some(handoff) = &decision.structured_handoff {
+                    handoff.validate()?;
+                }
+                Ok((
+                    decision.outcome,
+                    decision.summary,
+                    decision.structured_handoff,
+                ))
             }
         });
         let mut trace = runtime.take_trace();
@@ -1055,12 +1214,13 @@ pub fn execute_graph(
         };
         let mut loop_message = None;
         match result {
-            Ok((outcome, output)) => {
+            Ok((outcome, output, structured_handoff)) => {
                 let repeated =
                     outcome == Outcome::Blocked && repeated_blocker(&run, pipeline, index, &output);
                 run.handoff = Some(output.clone());
                 run.steps[index].output = Some(output);
                 run.steps[index].outcome = Some(outcome.clone());
+                run.steps[index].structured_handoff = structured_handoff;
                 run.steps[index].status = Status::Succeeded;
                 let unresolved_count = repeated_unresolved_count(&run, pipeline, index);
                 route(&mut run, pipeline, index, outcome)?;
@@ -1347,7 +1507,7 @@ mod tests {
         run.steps.insert(1, agent);
         let recovered: PipelineRun =
             serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
-        let input = step_input(&recovered, pipeline);
+        let input = step_input(&recovered, pipeline).unwrap();
         assert!(input.contains("Original task:\noriginal"));
         assert!(input.contains("builder handoff"));
         assert!(input.contains("Human step help (attempt 1"));
@@ -1359,6 +1519,106 @@ mod tests {
         );
         assert!(!input.contains("unverified agent summary"));
         assert_eq!(human_decisions(&recovered, pipeline).len(), 2);
+    }
+
+    #[test]
+    fn verification_evidence_survives_later_omission_with_provenance_after_reload() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"task", "startedAt":"now",
+            "status":"running", "currentStep":pipeline.steps[0].id, "handoff":"prose",
+            "steps":[
+                {"stepId":"build","agentId":"a","status":"succeeded","attempt":1,"structuredHandoff":{"version":1,"summary":"A","verification":[{"description":"cargo test","result":"passed"}]}},
+                {"stepId":"review","agentId":"b","status":"succeeded","attempt":2,"structuredHandoff":{"version":1,"summary":"B"}}
+            ]
+        })).unwrap();
+        run = serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        let input = step_input(&run, pipeline).unwrap();
+        assert!(input.contains("cargo test") && input.contains("passed"));
+        assert!(input.contains("attempt(s) 1"));
+    }
+
+    #[test]
+    fn oversized_aggregate_is_bounded_with_persisted_attempt_notice_not_run_failure() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let steps: Vec<_> = (1..=150).map(|attempt| serde_json::json!({
+            "stepId":"build","agentId":"a","status":"succeeded","attempt":attempt,
+            "structuredHandoff":{"version":1,"summary":"Latest","findings":[{"id":format!("F-{attempt}"),"status":"open","description":"A distinct unresolved finding with enough detail to consume the bounded prompt budget."}]}
+        })).collect();
+        let run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"task", "startedAt":"now",
+            "status":"running", "currentStep":pipeline.steps[0].id, "handoff":"prose", "steps":steps
+        }))
+        .unwrap();
+        let input = step_input(&run, pipeline).unwrap();
+        assert!(input.contains("Structured context limit:"));
+        assert!(input.contains("complete reports remain stored"));
+        let structured_json = input
+            .lines()
+            .find(|line| line.starts_with("{\"version\":1"))
+            .unwrap();
+        assert!(structured_json.len() <= crate::domain::pipeline::MAX_STRUCTURED_HANDOFF_BYTES);
+    }
+
+    #[test]
+    fn carried_findings_survive_omission_and_apply_later_status_updates_after_reload() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let make_run = |reports: serde_json::Value| -> PipelineRun {
+            serde_json::from_value(serde_json::json!({
+                "id":"r", "pipelineId":pipeline.id, "task":"task", "startedAt":"now",
+                "status":"running", "currentStep":pipeline.steps[0].id, "handoff":"latest prose",
+                "steps": reports
+            }))
+            .unwrap()
+        };
+        let a = make_run(serde_json::json!([
+            {"stepId":"build","agentId":"a","status":"succeeded","attempt":1,"structuredHandoff":{"version":1,"summary":"A","findings":[{"id":"F-1","status":"open","description":"Investigate"}]}},
+            {"stepId":"human","agentId":"","status":"succeeded","attempt":2,"output":"human response"},
+            {"stepId":"review","agentId":"b","status":"succeeded","attempt":3,"output":"legacy prose", "structuredHandoff":{"version":1,"summary":"B","findings":[{"id":"F-2","status":"open","description":"Add tests"}]}}
+        ]));
+        let recovered: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        let input = step_input(&recovered, pipeline).unwrap();
+        assert!(input.contains("F-1") && input.contains("F-2"));
+        let updated = make_run(serde_json::json!([
+            {"stepId":"build","agentId":"a","status":"succeeded","attempt":1,"structuredHandoff":{"version":1,"summary":"A","findings":[{"id":"F-1","status":"open","description":"Investigate"}]}},
+            {"stepId":"human","agentId":"","status":"succeeded","attempt":2,"output":"human response"},
+            {"stepId":"review","agentId":"b","status":"succeeded","attempt":3,"output":"legacy prose", "structuredHandoff":{"version":1,"summary":"B","findings":[{"id":"F-2","status":"open","description":"Add tests"}]}},
+            {"stepId":"build","agentId":"a","status":"succeeded","attempt":4,"structuredHandoff":{"version":1,"summary":"C","findings":[{"id":"F-1","status":"resolved","description":"Investigate"}]}}
+        ]));
+        let input = step_input(&updated, pipeline).unwrap();
+        assert!(input.contains("F-2") && input.contains("resolved"));
+    }
+
+    #[test]
+    fn structured_handoff_is_persisted_and_forwarded_as_unverified_evidence() {
+        let config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &config.pipelines[0];
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"original", "startedAt":"now",
+            "status":"running", "currentStep":pipeline.steps[0].id, "handoff":"legacy text",
+            "steps":[{"stepId":"plan", "agentId":"writer", "status":"succeeded", "attempt":1,
+                "structuredHandoff":{"version":1,"summary":"Plan", "findings":[{"id":"F-1","status":"open","description":"Check lockfile"}]}}]
+        })).unwrap();
+        let persisted: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        let input = step_input(&persisted, pipeline).unwrap();
+        assert!(input.contains("legacy text"));
+        assert!(input.contains("F-1"));
+        assert!(input.contains("unverified"));
+        run.steps[0].structured_handoff.as_mut().unwrap().findings[0].status =
+            crate::domain::pipeline::FindingStatus::Resolved;
+        assert_eq!(
+            run.steps[0].structured_handoff.as_ref().unwrap().findings[0].status,
+            crate::domain::pipeline::FindingStatus::Resolved
+        );
     }
 
     #[test]
@@ -1384,26 +1644,29 @@ mod tests {
             "status":"running", "steps":[], "currentStep":"build", "handoff":"plan"
         }))
         .unwrap();
-        assert_eq!(step_input(&run, pipeline), "Previous handoff:\nplan");
+        assert_eq!(
+            step_input(&run, pipeline).unwrap(),
+            "Previous handoff:\nplan"
+        );
         run.handoff = None;
         let legacy: PipelineRun =
             serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
         assert_eq!(
-            step_input(&legacy, pipeline),
+            step_input(&legacy, pipeline).unwrap(),
             "No task or preceding handoff was supplied for this step."
         );
         run.current_step = Some(pipeline.steps[0].id.clone());
         run.handoff = Some("build result".into());
         let reloaded: PipelineRun =
             serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
-        let input = step_input(&reloaded, pipeline);
+        let input = step_input(&reloaded, pipeline).unwrap();
         assert!(
             input.contains("original") && input.contains("build result") && !input.contains("plan")
         );
         run.current_step = Some("build".into());
         run.handoff = Some("review findings".into());
         assert_eq!(
-            step_input(&run, pipeline),
+            step_input(&run, pipeline).unwrap(),
             "Previous handoff:\nreview findings"
         );
         let mut legacy = pending(&pipeline.steps[0]);
@@ -1413,7 +1676,7 @@ mod tests {
         run.steps.push(legacy);
         run.handoff = None;
         assert_eq!(
-            step_input(&run, pipeline),
+            step_input(&run, pipeline).unwrap(),
             "Previous handoff:\nlegacy result"
         );
         run.steps.last_mut().unwrap().output = None;
@@ -1423,7 +1686,7 @@ mod tests {
         interrupted.error =
             Some("Interrupted by server restart; outcome and side effects are unknown".into());
         run.steps.push(interrupted);
-        let input = step_input(&run, pipeline);
+        let input = step_input(&run, pipeline).unwrap();
         assert!(
             input.contains("review findings") && input.contains("interrupted by server restart")
         );

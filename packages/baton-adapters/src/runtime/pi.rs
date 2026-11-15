@@ -52,6 +52,19 @@ mod retry_tests {
     use std::io::{Error, ErrorKind};
 
     #[test]
+    fn pi_null_or_missing_structured_handoff_is_legacy_absence() {
+        use super::parse_structured_handoff;
+        assert_eq!(
+            parse_structured_handoff(&serde_json::json!({})).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_structured_handoff(&serde_json::json!({"structured_handoff":null})).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn retries_only_transient_spawn_failures() {
         let mut attempts = 0;
         let mut retries = vec![];
@@ -491,6 +504,21 @@ pub(super) fn execute(
     unreachable!()
 }
 
+fn parse_structured_handoff(
+    result: &serde_json::Value,
+) -> Result<Option<baton_core::domain::pipeline::StructuredHandoff>, String> {
+    result
+        .get("structured_handoff")
+        .or_else(|| result.get("structuredHandoff"))
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            baton_core::domain::pipeline::StructuredHandoff::parse(
+                &serde_json::to_vec(value).map_err(|error| error.to_string())?,
+            )
+        })
+        .transpose()
+}
+
 struct PiExecution<'a> {
     cancelled: &'a dyn Fn() -> bool,
     observer: &'a mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
@@ -512,7 +540,8 @@ fn execute_once(
         session,
         existing,
     } = context;
-    if !allowed_outcomes.is_empty() && !agent.allows_tool("report_outcome") {
+    let report_outcome_enabled = agent.allows_tool("report_outcome");
+    if !allowed_outcomes.is_empty() && !report_outcome_enabled {
         return Err("Pi branching steps require the report_outcome tool".into());
     }
     let supported = [
@@ -523,6 +552,7 @@ fn execute_once(
         "write",
         "edit",
         "report_outcome",
+        "get_structured_handoff",
     ];
     if let Some(tool) = agent.allowed_tools.as_ref().and_then(|tools| {
         tools
@@ -544,7 +574,7 @@ fn execute_once(
         command.process_group(0);
     }
     let mut system_prompt = agent.instructions.clone();
-    let extension_dir = if allowed_outcomes.is_empty() {
+    let extension_dir = if !report_outcome_enabled && runtime.structured_history.is_empty() {
         None
     } else {
         let dir = tempfile::tempdir()
@@ -554,11 +584,34 @@ fn execute_once(
             .map_err(|error| format!("Could not prepare Pi extension: {error}"))?;
         command.arg("--extension").arg(extension);
         command.env("BATON_PI_OUTCOME_FILE", dir.path().join("outcome.json"));
+        let history_path = dir.path().join("structured-handoff-history.json");
+        std::fs::write(
+            &history_path,
+            serde_json::to_vec(&runtime.structured_history).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("Write structured handoff history: {error}"))?;
+        command.env("BATON_PI_HANDOFF_HISTORY_PATH", history_path);
+        command.env(
+            "BATON_PI_REPORT_OUTCOME_ENABLED",
+            report_outcome_enabled.to_string(),
+        );
+        let tool_outcomes = if allowed_outcomes.is_empty() && report_outcome_enabled {
+            vec![Outcome::Completed]
+        } else {
+            allowed_outcomes.to_vec()
+        };
         command.env(
             "BATON_PI_ALLOWED_OUTCOMES",
-            serde_json::to_string(allowed_outcomes).map_err(|error| error.to_string())?,
+            serde_json::to_string(&tool_outcomes).map_err(|error| error.to_string())?,
         );
-        system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and the complete authoritative handoff for downstream steps. The final answer may be brief.");
+        if !runtime.structured_history.is_empty() {
+            system_prompt.push_str("\n\nUse get_structured_handoff(attempt) to retrieve the complete persisted report when a bounded-context notice says details were omitted.");
+        }
+        if allowed_outcomes.is_empty() && report_outcome_enabled {
+            system_prompt.push_str("\n\nOptional: call report_outcome with outcome `completed` and a version-1 structured_handoff if you have structured findings or verification to pass on. This does not replace your final text response.");
+        } else if !allowed_outcomes.is_empty() {
+            system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and the complete authoritative handoff for downstream steps. The final answer may be brief.");
+        }
         Some(dir)
     };
     command.current_dir(directory).args([
@@ -580,21 +633,24 @@ fn execute_once(
     }
     let default_tools = ["read", "list", "search", "shell", "write", "edit"].map(str::to_owned);
     let tools = agent.allowed_tools.as_deref().unwrap_or(&default_tools);
-    if tools.is_empty() {
+    if tools.is_empty() && runtime.structured_history.is_empty() {
         command.arg("--no-tools");
     } else {
         let mut mapped = tools
             .iter()
             .flat_map(|tool| match tool.as_str() {
-                "report_outcome" if allowed_outcomes.is_empty() => vec![],
+                "report_outcome" if !report_outcome_enabled => vec![],
                 "shell" => vec!["bash"],
                 "list" => vec!["ls"],
                 "search" => vec!["grep", "find"],
                 name => vec![name],
             })
             .collect::<Vec<_>>();
-        if !allowed_outcomes.is_empty() && !mapped.contains(&"report_outcome") {
+        if report_outcome_enabled && !mapped.contains(&"report_outcome") {
             mapped.push("report_outcome");
+        }
+        if !runtime.structured_history.is_empty() && !mapped.contains(&"get_structured_handoff") {
+            mapped.push("get_structured_handoff");
         }
         command.args(["--tools", &mapped.join(",")]);
     }
@@ -692,7 +748,7 @@ fn execute_once(
     }
     let output = String::from_utf8(collected.stdout)
         .map_err(|_| "Pi returned non-UTF-8 output".to_owned())?;
-    if !allowed_outcomes.is_empty() {
+    if extension_dir.is_some() {
         let path = extension_dir
             .as_ref()
             .ok_or("Pi outcome extension was not prepared")?
@@ -712,11 +768,14 @@ fn execute_once(
                             .and_then(|value| serde_json::from_value::<Outcome>(value).ok()),
                         result.get("summary").and_then(serde_json::Value::as_str),
                     )
-                    && allowed_outcomes.contains(&outcome)
+                    && (allowed_outcomes.contains(&outcome)
+                        || (allowed_outcomes.is_empty() && outcome == Outcome::Completed))
                 {
+                    let structured_handoff = parse_structured_handoff(&result)?;
                     runtime.decision = Some(AgentDecision {
                         outcome,
                         summary: summary.to_owned(),
+                        structured_handoff,
                     });
                 }
             }
