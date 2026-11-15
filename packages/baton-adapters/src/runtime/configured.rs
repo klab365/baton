@@ -9,6 +9,15 @@ use baton_core::{
 };
 use std::{path::Path, sync::Arc};
 
+fn supports_thinking_level(agent: &Agent) -> bool {
+    agent.runtime_kind == RuntimeKind::Rig
+        && agent.thinking_level == Some(baton_core::domain::project::ThinkingLevel::High)
+        && agent.model.as_ref().is_some_and(|model| {
+            matches!(model.provider.as_str(), "copilot" | "github-copilot")
+                && model.model == "gpt-5.3-codex"
+        })
+}
+
 /// Dispatch strictly by the agent's configured runtime. Never fall back.
 pub struct ConfiguredRuntime {
     skills: Vec<baton_core::domain::project::Skill>,
@@ -173,6 +182,9 @@ impl AgentRuntime for ConfiguredRuntime {
         self.trace.clear();
         let resolved = baton_core::features::skills::resolve(agent, &self.skills)?;
         let agent = &resolved;
+        if agent.thinking_level.is_some() && !supports_thinking_level(agent) {
+            return Err("Agent thinkingLevel is not supported for this runtime/model/level combination; remove it to run this agent".into());
+        }
         match agent.runtime_kind {
             RuntimeKind::Rig => {
                 let runtime_credential = if let Some(id) = agent.credential_id.as_deref() {
@@ -201,6 +213,7 @@ impl AgentRuntime for ConfiguredRuntime {
                             .map(|id| self.auth_root.join("auth").join(id)),
                         structured_history: &self.structured_history,
                         observer,
+                        handler_override: None,
                     },
                     allowed_outcomes,
                     cancelled,
@@ -241,6 +254,60 @@ mod tests {
         ports::{credentials::CredentialRepository, runs::RunRepository},
     };
     use std::time::Duration;
+
+    #[test]
+    fn only_the_verified_copilot_codex_high_combination_is_allowed() {
+        for provider in ["copilot", "github-copilot"] {
+            let agent: Agent = serde_json::from_value(serde_json::json!({
+                "id":"agent", "instructions":"role", "provider":"rig",
+                "model":format!("{provider}/gpt-5.3-codex"), "skillIds":[], "thinkingLevel":"high"
+            }))
+            .unwrap();
+            assert!(super::supports_thinking_level(&agent));
+        }
+        for (provider, model, level) in [
+            ("copilot", "gpt-5.3-codex", "low"),
+            ("openai", "gpt-5.3-codex", "high"),
+            ("copilot", "other", "high"),
+        ] {
+            let agent: Agent = serde_json::from_value(serde_json::json!({
+                "id":"agent", "instructions":"role", "provider":"rig",
+                "model":format!("{provider}/{model}"), "skillIds":[], "thinkingLevel":level
+            }))
+            .unwrap();
+            assert!(!super::supports_thinking_level(&agent));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_thinking_level_is_rejected_before_runtime_dispatch() {
+        use std::os::unix::fs::PermissionsExt;
+        for runtime_kind in [RuntimeKind::Rig, RuntimeKind::Fake, RuntimeKind::Pi] {
+            let root = tempfile::tempdir().unwrap();
+            let repository = Arc::new(FilesystemCredentialRepository::new(root.path().into()));
+            let mut runtime = ConfiguredRuntime::new(repository, root.path().into(), vec![]);
+            let marker = root.path().join("was-run");
+            let pi_command = root.path().join("must-not-run");
+            std::fs::write(
+                &pi_command,
+                format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&pi_command, std::fs::Permissions::from_mode(0o755)).unwrap();
+            runtime.pi_command = pi_command.clone().into();
+            let agent: Agent = serde_json::from_value(serde_json::json!({
+                "id":"agent", "instructions":"role", "provider": runtime_kind,
+                "skillIds":[], "thinkingLevel":"high"
+            }))
+            .unwrap();
+            let error = runtime
+                .execute_pipeline_step(root.path(), &agent, "prompt", &[], &|| false)
+                .unwrap_err();
+            assert!(error.contains("thinkingLevel is not supported"), "{error}");
+            assert!(!marker.exists());
+        }
+    }
 
     #[cfg(unix)]
     #[test]

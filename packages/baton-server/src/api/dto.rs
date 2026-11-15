@@ -33,6 +33,12 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub allowed_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(
+        optional,
+        type = "\"off\" | \"minimal\" | \"low\" | \"medium\" | \"high\" | \"xhigh\" | \"max\""
+    )]
+    pub thinking_level: Option<domain::ThinkingLevel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
@@ -186,6 +192,7 @@ impl From<domain::Agent> for Agent {
     fn from(value: domain::Agent) -> Self {
         Self {
             allowed_tools: value.allowed_tools,
+            thinking_level: value.thinking_level,
             id: value.id,
             instructions: value.instructions,
             runtime_kind: value.runtime_kind.into(),
@@ -200,6 +207,7 @@ impl From<Agent> for domain::Agent {
     fn from(value: Agent) -> Self {
         Self {
             allowed_tools: value.allowed_tools,
+            thinking_level: value.thinking_level,
             id: value.id,
             instructions: value.instructions,
             runtime_kind: value.runtime_kind.into(),

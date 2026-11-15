@@ -31,6 +31,7 @@ use rig_harness::{
     rig_ecs::{
         agent::{Conversation, SpawnedBy},
         effects::Handler,
+        model::ReasoningSetting,
         session_log::{SessionLog, SessionRestored},
     },
     rig_tools::{
@@ -203,11 +204,154 @@ fn is_copilot_provider(provider: &str) -> bool {
     matches!(provider, "github-copilot" | "copilot")
 }
 
+fn apply_configured_reasoning(
+    world: &mut bevy_ecs::world::World,
+    entity: Entity,
+    reasoning: Option<rig::completion::Reasoning>,
+) {
+    if let Some(reasoning) = reasoning {
+        world
+            .entity_mut(entity)
+            .insert(ReasoningSetting(Some(reasoning)));
+    }
+}
+
 fn copilot_uses_responses(spec: &ModelSpec) -> bool {
     spec.details.provider.as_ref().is_some_and(|provider| {
         provider.shape.as_deref() == Some("responses")
             || (provider.shape.is_none() && provider.npm.as_deref() == Some("@ai-sdk/openai"))
     })
+}
+
+#[cfg(test)]
+mod thinking_tests {
+    use super::apply_configured_reasoning;
+    use rig::completion::{Effort, Reasoning};
+    use rig_harness::rig_ecs::model::ReasoningSetting;
+
+    #[test]
+    fn absent_configuration_preserves_a_session_saved_setting() {
+        let mut world = bevy_ecs::world::World::new();
+        let entity = world.spawn(ReasoningSetting(Some(Reasoning::Off))).id();
+        apply_configured_reasoning(&mut world, entity, None);
+        assert_eq!(
+            world.get::<ReasoningSetting>(entity).unwrap().0,
+            Some(Reasoning::Off)
+        );
+        apply_configured_reasoning(&mut world, entity, Some(Effort::High.into()));
+        assert_eq!(
+            world.get::<ReasoningSetting>(entity).unwrap().0,
+            Some(Effort::High.into())
+        );
+    }
+}
+
+#[cfg(test)]
+mod injected_execution_tests {
+    use super::{RigAgentContext, RigRuntime};
+    use baton_core::domain::{
+        pipeline::RunTraceEntry,
+        project::{Agent, Outcome},
+    };
+    use rig::{
+        completion::{Effort, Reasoning},
+        serve::{ErasedHandler, adapters::ModelAdapter},
+        test_utils::{MockCompletionModel, MockStreamEvent},
+    };
+
+    #[test]
+    fn unsupported_level_fails_before_mock_provider_call() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+        let mock = MockCompletionModel::text("must not run");
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"Write clearly", "provider":"rig",
+            "model":"copilot/gpt-5.3-codex", "skillIds":[], "allowedTools":[],
+            "thinkingLevel":"low"
+        }))
+        .unwrap();
+        let mut observer = |_entry: RunTraceEntry| Ok(());
+        let error = RigRuntime::execute(
+            root.path(),
+            &agent,
+            &[],
+            "input",
+            RigAgentContext {
+                agent: &agent,
+                run_id: "test-run",
+                session_root: sessions.path(),
+                history_required: false,
+                credential: None,
+                auth_store_dir: None,
+                observer: &mut observer,
+                handler_override: Some(ErasedHandler::new(ModelAdapter::new("mock", mock.clone()))),
+            },
+            &[],
+            &|| false,
+        )
+        .unwrap_err();
+        assert!(error.contains("Unsupported Rig thinkingLevel combination"));
+        assert!(mock.requests().is_empty());
+    }
+
+    #[test]
+    fn configured_high_reaches_requests_after_fresh_and_resumed_runtime_setup() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+        let mock = MockCompletionModel::from_stream_turns((1..=9).map(|turn| {
+            vec![
+                MockStreamEvent::text(format!("response {turn}")),
+                MockStreamEvent::final_response_with_default_usage(),
+            ]
+        }));
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"Write clearly", "provider":"rig",
+            "model":"copilot/gpt-5.3-codex", "skillIds":[], "allowedTools":[],
+            "thinkingLevel":"high"
+        }))
+        .unwrap();
+        let legacy_agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"Write clearly", "provider":"rig",
+            "model":"copilot/gpt-5.3-codex", "skillIds":[], "allowedTools":[]
+        }))
+        .unwrap();
+        let outcomes = [Outcome::Completed];
+        for (history_required, input, current_agent, expected_output, request_floor) in [
+            (false, "first", &agent, "response 3", 3),
+            (true, "second", &agent, "response 6", 6),
+            (true, "legacy", &legacy_agent, "response 9", 9),
+        ] {
+            let mut observer = |_entry: RunTraceEntry| Ok(());
+            let result = RigRuntime::execute(
+                root.path(),
+                current_agent,
+                &[],
+                input,
+                RigAgentContext {
+                    agent: current_agent,
+                    run_id: "test-run",
+                    session_root: sessions.path(),
+                    history_required,
+                    credential: None,
+                    auth_store_dir: None,
+                    observer: &mut observer,
+                    handler_override: Some(ErasedHandler::new(ModelAdapter::new(
+                        "mock",
+                        mock.clone(),
+                    ))),
+                },
+                &outcomes,
+                &|| false,
+            )
+            .unwrap();
+            assert!(result.0.contains(expected_output));
+            let requests = mock.requests();
+            assert!(requests.len() >= request_floor);
+            assert!(requests.iter().all(|request| {
+                request.options.reasoning == Some(Reasoning::Effort(Effort::High))
+            }));
+        }
+    }
 }
 
 pub struct RigRuntime;
@@ -221,6 +365,7 @@ pub struct RigAgentContext<'a> {
     pub credential: Option<(baton_core::domain::credentials::Credential, Option<String>)>,
     pub auth_store_dir: Option<std::path::PathBuf>,
     pub observer: &'a mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
+    pub handler_override: Option<ErasedHandler>,
 }
 impl RigRuntime {
     pub fn execute(
@@ -256,44 +401,76 @@ impl RigRuntime {
                 model_config.provider
             )
         })?;
-        let model_reference = format!("{}/{}", model_config.provider, model_config.model);
+        let model_reference = format!("{}/{}", provider_name, model_config.model);
         let spec = Catalog::builtin()
             .resolve(&model_reference)
             .map(|resolved| resolved.spec.clone())
             .unwrap_or_else(|_| ModelSpec::new(provider, &model_config.model).with_tools(true));
+        let reasoning = match baton_agent.thinking_level {
+            Some(baton_core::domain::project::ThinkingLevel::High)
+                if is_copilot_provider(&model_config.provider)
+                    && model_config.model == "gpt-5.3-codex" =>
+            {
+                if !copilot_uses_responses(&spec) {
+                    return Err(
+                        "Rig catalog does not select the Copilot Responses route for this model"
+                            .into(),
+                    );
+                }
+                let supported = matches!(
+                    &spec.reasoning,
+                    rig::catalog::ReasoningSupport::Listed { levels, .. }
+                        if levels.contains(&rig::completion::Effort::High)
+                );
+                if !supported {
+                    return Err("Rig catalog does not verify high thinkingLevel support for this Copilot model".into());
+                }
+                Some(rig::completion::Effort::High.into())
+            }
+            Some(_) => return Err("Unsupported Rig thinkingLevel combination".into()),
+            None => None,
+        };
+        if let Some(reasoning) = reasoning {
+            spec.validate(&spec.default_options(Some(reasoning)))
+                .map_err(|error| {
+                    format!("Copilot model does not support the requested thinkingLevel: {error}")
+                })?;
+        }
         let wire_traces = Arc::new(Mutex::new(Vec::new()));
         // Ollama's direct Rig client reads its distinct OLLAMA_API_BASE_URL setting;
         // the generic registry dialect otherwise falls back to localhost.
-        let handler = if is_copilot_provider(&model_config.provider) {
-            use rig::providers::copilot::auth::{
-                AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
-            };
-            let directory = copilot_session_directory(
-                runtime_credential.as_ref(),
-                agent_context.auth_store_dir.as_deref(),
-            )?;
-            let spec = Catalog::builtin()
-                .resolve(&format!("copilot/{}", model_config.model))
-                .map_err(|_| "GitHub Copilot model is not available")?
-                .spec
-                .clone();
-            let authenticator = Authenticator::new(
-                AuthSource::OAuth,
-                FileTokenStore::new(directory),
-                DeviceCodeHandler::default(),
-                false,
-            );
-            let responses = copilot_uses_responses(&spec);
-            if model_config.model.starts_with("claude-") || responses {
-                ErasedHandler::new(copilot_anthropic::CopilotAnthropic::new(
-                    model_config.model.clone(),
-                    responses,
-                    authenticator,
-                    wire_traces.clone(),
-                )?)
-            } else {
-                let signed_in =
-                    rig::client::signed_in::SignedInModel::new(
+        let handler = if let Some(handler) = agent_context.handler_override {
+            handler
+        } else {
+            let handler = if is_copilot_provider(&model_config.provider) {
+                use rig::providers::copilot::auth::{
+                    AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
+                };
+                let directory = copilot_session_directory(
+                    runtime_credential.as_ref(),
+                    agent_context.auth_store_dir.as_deref(),
+                )?;
+                let spec = Catalog::builtin()
+                    .resolve(&format!("copilot/{}", model_config.model))
+                    .map_err(|_| "GitHub Copilot model is not available")?
+                    .spec
+                    .clone();
+                let authenticator = Authenticator::new(
+                    AuthSource::OAuth,
+                    FileTokenStore::new(directory),
+                    DeviceCodeHandler::default(),
+                    false,
+                );
+                let responses = copilot_uses_responses(&spec);
+                if model_config.model.starts_with("claude-") || responses {
+                    ErasedHandler::new(copilot_anthropic::CopilotAnthropic::new(
+                        model_config.model.clone(),
+                        responses,
+                        authenticator,
+                        wire_traces.clone(),
+                    )?)
+                } else {
+                    let signed_in = rig::client::signed_in::SignedInModel::new(
                         spec,
                         authenticator,
                         rig::http_client::DynHttpClient::new(
@@ -303,87 +480,92 @@ impl RigRuntime {
                         .with_middleware(wire_trace::WireTrace(wire_traces.clone())),
                     )
                     .map_err(|_| "GitHub Copilot model configuration is invalid")?;
-                ErasedHandler::new(signed_in)
-            }
-        } else if model_config.provider == "chatgpt" {
-            use rig::providers::chatgpt::auth::{
-                AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
-            };
-            let (metadata, _) = runtime_credential
-                .as_ref()
-                .ok_or("ChatGPT runtime requires a configured session credential")?;
-            if metadata.credential_type.0 != "chatgpt_session" {
-                return Err("ChatGPT runtime requires a chatgpt_session credential".into());
-            }
-            let directory = agent_context
-                .auth_store_dir
-                .ok_or("ChatGPT runtime requires a credential reference")?;
-            let spec = Catalog::builtin()
-                .resolve(&format!("chatgpt/{}", model_config.model))
-                .map_err(|error| format!("ChatGPT model is not available: {error}"))?
-                .spec
-                .clone();
-            let authenticator = Authenticator::new(
-                AuthSource::OAuth,
-                FileTokenStore::new(directory),
-                DeviceCodeHandler::default(),
-                false,
-            );
-            let signed_in = rig::client::signed_in::SignedInModel::new(
-                spec,
-                authenticator,
-                rig::http_client::DynHttpClient::new(rig::http_client::ReqwestClient::default()),
-            )
-            .map_err(|error| format!("ChatGPT model configuration: {error}"))?;
-            ErasedHandler::new(signed_in)
-        } else if model_config.provider == "ollama" {
-            let mut config = rig::providers::ollama::OllamaConfig::new();
-            if let Some((credential, secret)) = runtime_credential {
-                if credential.credential_type.0 != "ollama_api_key" {
-                    return Err("Ollama runtime requires an ollama_api_key credential".into());
+                    ErasedHandler::new(signed_in)
                 }
-                if let Some(base_url) = credential.configuration.get("baseUrl") {
-                    config = config.with_base_url(base_url);
-                }
-                if let Some(secret) = secret {
-                    config = config.with_api_key(secret);
-                }
-            }
-            let client = config.client();
-            ErasedHandler::new(ModelAdapter::new(
-                baton_agent.id.clone(),
-                client.completion(model_config.model.clone()),
-            ))
-        } else {
-            let model_reference = format!("{}/{}", model_config.provider, model_config.model);
-            let catalog = Catalog::builtin();
-            let model = if model_config.provider == "openai" {
-                let (metadata, secret) = runtime_credential
+            } else if model_config.provider == "chatgpt" {
+                use rig::providers::chatgpt::auth::{
+                    AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
+                };
+                let (metadata, _) = runtime_credential
                     .as_ref()
-                    .ok_or("OpenAI runtime requires an API-key credential")?;
-                if metadata.credential_type.0 != "openai_api_key" {
-                    return Err("OpenAI runtime requires an openai_api_key credential".into());
+                    .ok_or("ChatGPT runtime requires a configured session credential")?;
+                if metadata.credential_type.0 != "chatgpt_session" {
+                    return Err("ChatGPT runtime requires a chatgpt_session credential".into());
                 }
-                let secret = secret
-                    .as_deref()
-                    .ok_or("OpenAI credential has no stored secret")?;
-                let model_spec = catalog
-                    .resolve(&model_reference)
-                    .map_err(|error| format!("OpenAI model is not available: {error}"))?
+                let directory = agent_context
+                    .auth_store_dir
+                    .ok_or("ChatGPT runtime requires a credential reference")?;
+                let spec = Catalog::builtin()
+                    .resolve(&format!("chatgpt/{}", model_config.model))
+                    .map_err(|error| format!("ChatGPT model is not available: {error}"))?
                     .spec
                     .clone();
-                catalog
-                    .connect_with(
-                        &model_spec,
-                        rig::providers::registry::ConnectOptions::new().api_key(secret),
+                let authenticator = Authenticator::new(
+                    AuthSource::OAuth,
+                    FileTokenStore::new(directory),
+                    DeviceCodeHandler::default(),
+                    false,
+                );
+                let signed_in =
+                    rig::client::signed_in::SignedInModel::new(
+                        spec,
+                        authenticator,
+                        rig::http_client::DynHttpClient::new(
+                            rig::http_client::ReqwestClient::default(),
+                        ),
                     )
-                    .map_err(|error| format!("Rig provider configuration: {error}"))?
+                    .map_err(|error| format!("ChatGPT model configuration: {error}"))?;
+                ErasedHandler::new(signed_in)
+            } else if model_config.provider == "ollama" {
+                let mut config = rig::providers::ollama::OllamaConfig::new();
+                if let Some((credential, secret)) = runtime_credential {
+                    if credential.credential_type.0 != "ollama_api_key" {
+                        return Err("Ollama runtime requires an ollama_api_key credential".into());
+                    }
+                    if let Some(base_url) = credential.configuration.get("baseUrl") {
+                        config = config.with_base_url(base_url);
+                    }
+                    if let Some(secret) = secret {
+                        config = config.with_api_key(secret);
+                    }
+                }
+                let client = config.client();
+                ErasedHandler::new(ModelAdapter::new(
+                    baton_agent.id.clone(),
+                    client.completion(model_config.model.clone()),
+                ))
             } else {
-                catalog
-                    .connect(model_reference.as_str())
-                    .map_err(|error| format!("Rig provider configuration: {error}"))?
+                let model_reference = format!("{}/{}", model_config.provider, model_config.model);
+                let catalog = Catalog::builtin();
+                let model = if model_config.provider == "openai" {
+                    let (metadata, secret) = runtime_credential
+                        .as_ref()
+                        .ok_or("OpenAI runtime requires an API-key credential")?;
+                    if metadata.credential_type.0 != "openai_api_key" {
+                        return Err("OpenAI runtime requires an openai_api_key credential".into());
+                    }
+                    let secret = secret
+                        .as_deref()
+                        .ok_or("OpenAI credential has no stored secret")?;
+                    let model_spec = catalog
+                        .resolve(&model_reference)
+                        .map_err(|error| format!("OpenAI model is not available: {error}"))?
+                        .spec
+                        .clone();
+                    catalog
+                        .connect_with(
+                            &model_spec,
+                            rig::providers::registry::ConnectOptions::new().api_key(secret),
+                        )
+                        .map_err(|error| format!("Rig provider configuration: {error}"))?
+                } else {
+                    catalog
+                        .connect(model_reference.as_str())
+                        .map_err(|error| format!("Rig provider configuration: {error}"))?
+                };
+                ErasedHandler::new(ModelAdapter::new(baton_agent.id.clone(), model))
             };
-            ErasedHandler::new(ModelAdapter::new(baton_agent.id.clone(), model))
+            handler
         };
         let request_traces = Arc::new(Mutex::new(Vec::new()));
         let connection = Connection {
@@ -611,6 +793,7 @@ impl RigRuntime {
             WorkDir(root),
             ToolAccess::All,
         ));
+        apply_configured_reasoning(world, entity, reasoning);
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
