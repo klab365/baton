@@ -228,6 +228,7 @@ fn interrupted_agent_resumes_in_same_worktree_with_reconciliation_warning() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[2].clone();
+    step.max_attempts = Some(2);
     step.transitions = vec![baton_core::domain::project::Transition {
         outcome: Outcome::Approved,
         to: None,
@@ -1223,6 +1224,132 @@ fn review_can_repeat_rework_without_a_traversal_limit() {
     assert!(attempt.error.is_none());
     fixture.repo().recover_interrupted().unwrap();
     assert_eq!(fixture.repo().load("limit").unwrap(), run);
+}
+
+#[test]
+fn per_step_attempt_limit_stops_before_the_next_runtime_call_and_persists_reason() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.id = "review".into();
+    step.max_attempts = Some(2);
+    step.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::ReviseBuild,
+        to: Some("review".into()),
+    }];
+    config.pipelines[0].steps = vec![step];
+    let mut runtime = Script::new(&[
+        r#"{"outcome":"revise_build","output":"again"}"#,
+        r#"{"outcome":"revise_build","output":"again"}"#,
+        r#"{"outcome":"revise_build","output":"unexpected third call"}"#,
+    ]);
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "per-step-limit",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(runtime.directories.len(), 2);
+    assert_eq!(run.status, Status::LimitExhausted);
+    assert!(run.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("review") && message.contains("2"))
+    }));
+    assert_eq!(fixture.repo().load("per-step-limit").unwrap(), run);
+}
+
+#[test]
+fn per_step_limits_are_independent_and_reset_for_each_run() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut first = config.pipelines[0].steps[2].clone();
+    first.id = "first".into();
+    first.max_attempts = Some(1);
+    first.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Approved,
+        to: Some("second".into()),
+    }];
+    let mut second = first.clone();
+    second.id = "second".into();
+    second.transitions.clear();
+    config.pipelines[0].steps = vec![first, second];
+    for id in ["independent-steps-one", "independent-steps-two"] {
+        let mut runtime = Script::new(&[
+            r#"{"outcome":"approved","output":"first complete"}"#,
+            "second complete",
+        ]);
+        let run =
+            start_pipeline(&config, "draft", "task", id, &mut runtime, &fixture.repo()).unwrap();
+        assert_eq!(run.status, Status::Succeeded);
+        assert_eq!(runtime.directories.len(), 2);
+        assert_eq!(
+            run.steps
+                .iter()
+                .filter(|step| step.step_id == "first")
+                .count(),
+            1
+        );
+        assert_eq!(
+            run.steps
+                .iter()
+                .filter(|step| step.step_id == "second")
+                .count(),
+            1
+        );
+        assert_eq!(fixture.repo().load(id).unwrap(), run);
+    }
+}
+
+#[test]
+fn human_pause_and_resume_retain_the_step_attempt_count() {
+    let fixture = Fixture::new();
+    let mut cfg = config();
+    let mut human = cfg.pipelines[0].steps[3].clone();
+    human.max_attempts = Some(1);
+    human.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Responded,
+        to: Some("human".into()),
+    }];
+    cfg.pipelines[0].steps = vec![human];
+    let mut runtime = Script::new(&[]);
+    let waiting = start_pipeline(
+        &cfg,
+        "draft",
+        "task",
+        "human-limit",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    let resumed = resume_human(
+        "human-limit",
+        Outcome::Responded,
+        "continue",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::LimitExhausted);
+    assert_eq!(
+        resumed
+            .steps
+            .iter()
+            .filter(|step| step.step_id == "human" && step.status != Status::Pending)
+            .count(),
+        1
+    );
+    assert!(resumed.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("human") && message.contains("1"))
+    }));
 }
 
 #[test]

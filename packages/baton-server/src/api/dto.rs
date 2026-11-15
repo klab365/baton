@@ -47,6 +47,9 @@ pub struct Pipeline {
 pub struct PipelineStep {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_attempts: Option<u32>,
     #[serde(flatten)]
     pub kind: PipelineStepKind,
     #[serde(default)]
@@ -233,6 +236,7 @@ impl From<domain::PipelineStep> for PipelineStep {
         Self {
             id: value.id,
             name: value.name,
+            max_attempts: value.max_attempts,
             kind: match value.kind {
                 domain::PipelineStepKind::Agent {
                     agent_id,
@@ -262,6 +266,7 @@ impl From<PipelineStep> for domain::PipelineStep {
         Self {
             id: value.id,
             name: value.name,
+            max_attempts: value.max_attempts,
             kind: match value.kind {
                 PipelineStepKind::Agent {
                     agent_id,

@@ -666,6 +666,13 @@ fn repeated_blocker(
     false
 }
 
+fn step_attempt_count(run: &PipelineRun, step_id: &str) -> usize {
+    run.steps
+        .iter()
+        .filter(|step| step.step_id == step_id && step.status != Status::Pending)
+        .count()
+}
+
 pub fn execute_graph(
     config: &ProjectConfig,
     mut run: PipelineRun,
@@ -721,6 +728,23 @@ pub fn execute_graph(
                 return Err(error);
             }
         };
+        if let Some(limit) = step.max_attempts
+            && step_attempt_count(&run, &step.id) >= limit as usize
+        {
+            run.status = Status::LimitExhausted;
+            let ended_at = utc_now();
+            run.ended_at = Some(ended_at.clone());
+            run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+            publish(
+                repository,
+                &mut run,
+                Some(format!(
+                    "Step {} exhausted maxAttempts limit of {}",
+                    step.id, limit
+                )),
+            )?;
+            return Ok(run);
+        }
         run.steps[index].attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
         run.steps[index].input = Some(input.clone());
         if step.is_human() {
@@ -954,6 +978,25 @@ pub fn execute_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn step_attempt_count_ignores_pending_placeholders_but_counts_started_legacy_records() {
+        let mut pending = pending(&PipelineStep {
+            id: "step".into(),
+            name: "Step".into(),
+            max_attempts: None,
+            kind: crate::domain::project::PipelineStepKind::Human,
+            transitions: vec![],
+        });
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":"p", "task":"t", "startedAt":"now", "status":"running", "steps":[]
+        })).unwrap();
+        run.steps.push(pending.clone());
+        assert_eq!(step_attempt_count(&run, "step"), 0);
+        pending.status = Status::Failed;
+        run.steps[0] = pending;
+        assert_eq!(step_attempt_count(&run, "step"), 1);
+    }
 
     #[test]
     fn trace_storage_is_bounded_by_bytes_entries_and_per_entry_size() {

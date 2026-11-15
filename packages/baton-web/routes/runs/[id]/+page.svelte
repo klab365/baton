@@ -106,7 +106,9 @@ const nextAction = $derived(
 				: data.run.status === "cancelled"
 					? "This run was cancelled."
 					: data.run.status === "limitExhausted"
-						? "The run reached its limit. Review the timeline."
+						? (data.run.events.findLast((event: { message?: string }) =>
+								event.message?.includes("exhausted maxAttempts limit"),
+							)?.message ?? "The run reached its limit. Review the timeline.")
 						: data.run.status === "succeeded"
 							? "Run complete."
 							: `Run status: ${data.run.status}`,

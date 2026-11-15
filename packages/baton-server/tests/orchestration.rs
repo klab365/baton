@@ -603,6 +603,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
     pipeline.steps.push(PipelineStep {
         id: "help".into(),
         name: "Help".into(),
+        max_attempts: None,
         kind: baton_core::domain::project::PipelineStepKind::Human,
         transitions: vec![Transition {
             outcome: Outcome::Responded,
