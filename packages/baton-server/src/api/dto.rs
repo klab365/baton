@@ -39,6 +39,9 @@ pub struct Agent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Pipeline {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_attempts: Option<u32>,
     pub steps: Vec<PipelineStep>,
 }
 
@@ -211,6 +214,7 @@ impl From<domain::Pipeline> for Pipeline {
     fn from(value: domain::Pipeline) -> Self {
         Self {
             id: value.id,
+            max_attempts: value.max_attempts,
             steps: value.steps.into_iter().map(Into::into).collect(),
         }
     }
@@ -220,6 +224,7 @@ impl From<Pipeline> for domain::Pipeline {
     fn from(value: Pipeline) -> Self {
         Self {
             id: value.id,
+            max_attempts: value.max_attempts,
             steps: value.steps.into_iter().map(Into::into).collect(),
         }
     }

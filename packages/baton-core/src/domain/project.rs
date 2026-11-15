@@ -16,6 +16,8 @@ pub struct ProjectConfig {
 #[serde(rename_all = "camelCase")]
 pub struct Pipeline {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
     pub steps: Vec<PipelineStep>,
 }
 
@@ -26,12 +28,15 @@ impl<'de> Deserialize<'de> for Pipeline {
         struct CompatiblePipeline {
             id: String,
             steps: Vec<PipelineStep>,
+            #[serde(default)]
+            max_attempts: Option<u32>,
             #[serde(default, rename = "name")]
             _legacy_name: Option<serde::de::IgnoredAny>,
         }
         let value = CompatiblePipeline::deserialize(deserializer)?;
         Ok(Self {
             id: value.id,
+            max_attempts: value.max_attempts,
             steps: value.steps,
         })
     }
@@ -328,6 +333,12 @@ impl ProjectConfig {
                 &format!("{path}.steps"),
                 pipeline.steps.iter().map(|x| x.id.as_str()),
             )?;
+            if pipeline
+                .max_attempts
+                .is_some_and(|limit| !(1..=1000).contains(&limit))
+            {
+                return Err(format!("{path}: maxAttempts must be between 1 and 1000"));
+            }
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
                 if step.max_attempts == Some(0) {
@@ -681,6 +692,24 @@ mod project_identity_tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn pipeline_global_max_attempts_is_optional_and_validated() {
+        let mut config: super::ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        assert_eq!(config.pipelines[0].max_attempts, None);
+        config.pipelines[0].max_attempts = Some(2);
+        assert!(config.validate().is_ok());
+        let wire = serde_json::to_value(&config.pipelines[0]).unwrap();
+        assert_eq!(wire["maxAttempts"], 2);
+        config.pipelines[0].max_attempts = Some(0);
+        assert!(config.validate().unwrap_err().contains("maxAttempts"));
+        config.pipelines[0].max_attempts = Some(1001);
+        assert!(config.validate().unwrap_err().contains("maxAttempts"));
+        let absent: super::Pipeline =
+            serde_json::from_value(serde_json::json!({"id":"x", "steps":[]})).unwrap();
+        assert_eq!(absent.max_attempts, None);
     }
 
     #[test]

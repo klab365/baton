@@ -12,7 +12,7 @@ use std::{
 const HELP: &str =
     "Usage: baton work <start|next|execute|submit|status|respond|cancel|pipelines> [options]
   start --issue <task text> [--pipeline ID]
-        [--max-attempts 50] [--check STEP=COMMAND ...]
+        [--check STEP=COMMAND ...]
   next --run ID
   execute --run ID
   submit --run ID --result FILE
@@ -41,7 +41,6 @@ impl Options {
                 common(Command::new("start"))
                     .arg(option("issue"))
                     .arg(option("pipeline"))
-                    .arg(option("max-attempts"))
                     .arg(option("check").action(ArgAction::Append)),
             )
             .subcommand(common(Command::new("pipelines")))
@@ -62,14 +61,7 @@ impl Options {
             .try_get_matches_from(std::iter::once("work".to_string()).chain(args))?;
         let (action, matches) = matches.subcommand().context(HELP)?;
         let mut values = HashMap::new();
-        for name in [
-            "workspace",
-            "run",
-            "issue",
-            "pipeline",
-            "max-attempts",
-            "result",
-        ] {
+        for name in ["workspace", "run", "issue", "pipeline", "result"] {
             if let Ok(Some(value)) = matches.try_get_one::<String>(name) {
                 values.insert(format!("--{name}"), value.clone());
             }
@@ -171,12 +163,6 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
                 task: options.required("--issue")?,
                 source: None,
                 pipeline: options.values.get("--pipeline").cloned(),
-                max_attempts: options
-                    .values
-                    .get("--max-attempts")
-                    .map(|s| s.parse())
-                    .transpose()?
-                    .unwrap_or(50),
                 checks,
             }
         }

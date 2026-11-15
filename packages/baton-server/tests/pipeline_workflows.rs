@@ -1307,6 +1307,138 @@ fn review_can_repeat_rework_without_a_traversal_limit() {
 }
 
 #[test]
+fn global_attempt_limit_counts_human_visits_across_resume_and_freezes_snapshot() {
+    let fixture = Fixture::new();
+    let mut cfg = config();
+    let mut human = cfg.pipelines[0].steps[3].clone();
+    human.transitions = vec![baton_core::domain::project::Transition {
+        outcome: Outcome::Responded,
+        to: Some("human".into()),
+    }];
+    cfg.pipelines[0].steps = vec![human];
+    cfg.pipelines[0].max_attempts = Some(1);
+    let mut runtime = Script::new(&[]);
+    let waiting = start_pipeline(
+        &cfg,
+        "draft",
+        "task",
+        "global-human",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    assert_eq!(
+        waiting.config_snapshot.as_ref().unwrap().pipelines[0].max_attempts,
+        Some(1)
+    );
+    let resumed = resume_human(
+        "global-human",
+        Outcome::Responded,
+        "again",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::LimitExhausted);
+    assert!(resumed.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|m| m == "Pipeline exhausted maxAttempts limit of 1")
+    }));
+    assert_eq!(
+        resumed
+            .steps
+            .iter()
+            .filter(|step| step.status != Status::Pending)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn legacy_managed_snapshot_without_global_limit_remains_unlimited_after_resume() {
+    let fixture = Fixture::new();
+    let mut config = config();
+    let mut step = config.pipelines[0].steps[2].clone();
+    step.transitions = vec![];
+    config.pipelines[0].steps = vec![step];
+    let mut snapshot = serde_json::to_value(&config).unwrap();
+    snapshot["pipelines"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxAttempts");
+    let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+        "id":"legacy-unlimited", "pipelineId":"draft", "task":"task", "startedAt":"2026-01-01T00:00:00Z",
+        "status":"failed", "currentStep":"review", "steps":[], "configSnapshot":snapshot,
+        "worktree":{"owner":"legacy-unlimited","path":"/tmp/legacy","branch":"task/legacy","baseRevision":"abc","lifecycle":"active","cleanupOutcome":"retained"},
+        "events":[{"runId":"legacy-unlimited","status":"failed","occurredAt":"2026-01-01T00:00:00Z","message":"Run interrupted by server restart"}]
+    })).unwrap();
+    run.steps = (1..=50)
+        .map(|attempt| StepRun {
+            step_id: "plan".into(),
+            agent_id: "writer".into(),
+            status: Status::Failed,
+            input: None,
+            output: None,
+            error: Some("interrupted".into()),
+            outcome: None,
+            selected_transition: None,
+            attempt,
+            started_at: None,
+            ended_at: None,
+            duration_ms: None,
+            model: None,
+            usage: None,
+        })
+        .collect();
+    let repo = fixture.repo();
+    let worktree = repo
+        .worktree_manager()
+        .unwrap()
+        .allocate("legacy-unlimited")
+        .unwrap();
+    run.worktree = Some(worktree);
+    run.status = Status::Running;
+    run.current_step = Some("review".into());
+    run.steps.last_mut().unwrap().status = Status::Running;
+    repo.create(&run).unwrap();
+    repo.recover_interrupted().unwrap();
+    let tasks = FilesystemTaskRepository(fixture.0.clone());
+    let resumed = baton_core::features::runs::resume_interrupted_run(
+        "legacy-unlimited",
+        &repo,
+        &tasks,
+        &ResumeFactory,
+    )
+    .unwrap();
+    assert_ne!(
+        resumed.status,
+        Status::LimitExhausted,
+        "{}",
+        resumed
+            .events
+            .last()
+            .and_then(|e| e.message.as_deref())
+            .unwrap_or("no event")
+    );
+    assert_eq!(resumed.steps.len(), 51);
+    assert_eq!(resumed.steps.last().unwrap().status, Status::Succeeded);
+    assert_eq!(
+        resumed.steps.last().unwrap().output.as_deref(),
+        Some("Verified")
+    );
+    let persisted = repo.load("legacy-unlimited").unwrap();
+    assert_eq!(persisted.steps.len(), 51);
+    assert_eq!(persisted.steps.last().unwrap().status, Status::Succeeded);
+    assert_eq!(
+        persisted.config_snapshot.as_ref().unwrap().pipelines[0].max_attempts,
+        None
+    );
+}
+
+#[test]
 fn per_step_attempt_limit_stops_before_the_next_runtime_call_and_persists_reason() {
     let fixture = Fixture::new();
     let mut config = config();

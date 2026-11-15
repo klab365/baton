@@ -24,8 +24,6 @@ pub enum WorkCommand {
         task: String,
         source: Option<String>,
         pipeline: Option<String>,
-        #[serde(rename = "maxAttempts")]
-        max_attempts: u32,
         checks: Vec<WorkCheck>,
     },
     Next {
@@ -126,7 +124,6 @@ impl WorkApplication {
                 task,
                 source,
                 pipeline,
-                max_attempts,
                 checks,
             } => serde_json::to_value(WorkProgress::from(
                 self.mediator
@@ -135,7 +132,6 @@ impl WorkApplication {
                         task,
                         source,
                         pipeline_id: pipeline,
-                        max_attempts,
                         checks,
                     })
                     .await?,

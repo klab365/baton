@@ -31,7 +31,6 @@ pub struct StartWork {
     pub pipeline_id: Option<String>,
     pub task: String,
     pub source: Option<String>,
-    pub max_attempts: u32,
     pub checks: Vec<WorkCheck>,
 }
 #[derive(MediCommand)]
@@ -205,6 +204,36 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
     {
         return Ok(());
     }
+    let global_limit = run
+        .session
+        .as_ref()
+        .map(|session| session.max_attempts)
+        .or_else(|| {
+            run.config_snapshot
+                .as_ref()
+                .and_then(|config| config.pipelines.iter().find(|p| p.id == run.pipeline_id))
+                .and_then(|pipeline| pipeline.max_attempts)
+        });
+    if let Some(limit) = global_limit
+        && run
+            .steps
+            .iter()
+            .filter(|s| s.status != Status::Pending)
+            .count()
+            >= limit as usize
+    {
+        run.status = Status::LimitExhausted;
+        let ended_at = utc_now();
+        run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+        run.ended_at = Some(ended_at.clone());
+        run.events.push(crate::domain::pipeline::RunEvent {
+            run_id: run.id.clone(),
+            status: Status::LimitExhausted,
+            occurred_at: ended_at,
+            message: Some(format!("Pipeline exhausted maxAttempts limit of {limit}")),
+        });
+        return Ok(());
+    }
     if let Some(limit) = step.max_attempts
         && run
             .steps
@@ -229,13 +258,6 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         return Ok(());
     }
     let attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
-    if attempt > run.session.as_ref().ok_or("Missing session")?.max_attempts {
-        run.status = Status::LimitExhausted;
-        let ended_at = utc_now();
-        run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
-        run.ended_at = Some(ended_at);
-        return Ok(());
-    }
     let status = if step.is_human() {
         Status::WaitingHuman
     } else {
@@ -277,9 +299,6 @@ async fn start_work_handler(
     command: StartWork,
 ) -> Result<PipelineRun, String> {
     bounded("Task", &command.task)?;
-    if command.max_attempts == 0 || command.max_attempts > 1000 {
-        return Err("maxAttempts must be between 1 and 1000".into());
-    }
     if command.source.as_ref().is_some_and(|s| s.len() > 4096) {
         return Err("Source exceeds 4096 bytes".into());
     }
@@ -294,11 +313,14 @@ async fn start_work_handler(
         ConfigState::Invalid(error) => return Err(error),
     };
     config.validate()?;
-    let pipeline = match command.pipeline_id {
-        Some(id) => config.pipelines.iter().find(|p| p.id == id).ok_or("Unknown pipeline ID")?,
-        None if config.pipelines.len() == 1 => &config.pipelines[0],
+    let pipeline_index = match command.pipeline_id {
+        Some(id) => config.pipelines.iter().position(|p| p.id == id).ok_or("Unknown pipeline ID")?,
+        None if config.pipelines.len() == 1 => 0,
         None => return Err("Select a pipeline with --pipeline (project must have exactly one pipeline to infer it)".into()),
     };
+    let mut config = config;
+    let pipeline = &mut config.pipelines[pipeline_index];
+    let max_attempts = *pipeline.max_attempts.get_or_insert(50);
     for check in &command.checks {
         bounded("Check command", &check.command)?;
         if !pipeline
@@ -349,7 +371,7 @@ async fn start_work_handler(
             workspace: resources.workspace,
             source: command.source,
             revision: 0,
-            max_attempts: command.max_attempts,
+            max_attempts,
             checks: command.checks,
             submissions: vec![],
         }),
@@ -671,6 +693,28 @@ mod tests {
             publication_message(&run, "External worker submission accepted"),
             "Step review exhausted maxAttempts limit of 2"
         );
+    }
+
+    #[test]
+    fn external_prepare_uses_frozen_session_limit_and_legacy_session_precedence() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"external", "pipelineId":"p", "task":"task", "startedAt":"2026-01-01T00:00:00Z",
+            "status":"running", "currentStep":"next", "steps":[{
+                "stepId":"old", "agentId":"agent", "status":"failed", "attempt":1
+            }],
+            "configSnapshot":{"schemaVersion":7,"agents":[],"pipelines":[{"id":"p","maxAttempts":100,"steps":[
+                {"id":"old","name":"Old","type":"human"},{"id":"next","name":"Next","type":"human"}
+            ]}]},
+            "session":{"workspace":"/tmp/work","revision":0,"maxAttempts":1,"checks":[],"submissions":[]}
+        })).unwrap();
+        prepare(&mut run).unwrap();
+        assert_eq!(run.status, Status::LimitExhausted);
+        assert!(
+            run.events
+                .iter()
+                .any(|e| e.message.as_deref() == Some("Pipeline exhausted maxAttempts limit of 1"))
+        );
+        assert!(run.ended_at.is_some());
     }
 
     #[test]

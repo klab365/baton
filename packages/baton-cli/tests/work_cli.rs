@@ -129,6 +129,17 @@ printf 'FINAL ANSWER'
 }
 
 #[test]
+fn start_rejects_removed_max_attempts_flag_and_help_omits_it() {
+    let f = Fixture::new();
+    let output = f.work(&["start", "--issue", "task", "--max-attempts", "3"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("max-attempts"));
+    let output = f.work(&["--help"]);
+    let help: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!help["help"].as_str().unwrap().contains("max-attempts"));
+}
+
+#[test]
 fn pipelines_lists_configured_ids_and_reports_invalid_configuration() {
     let f = Fixture::new();
     let pipelines = f.value(&["pipelines"]);
