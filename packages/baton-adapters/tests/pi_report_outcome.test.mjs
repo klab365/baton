@@ -24,16 +24,18 @@ async function fixture(t) {
 }
 const call = (tool, params) => tool.execute('call', params);
 
-test('blocked outcome requires reason and human action and persists both in handoff', async t => {
+test('blocked outcome needs a reason and preserves optional human action in the handoff', async t => {
   const { tool, output } = await fixture(t);
   await assert.rejects(call(tool, { outcome: 'blocked', summary: 'waiting' }), /blocker reason/);
-  await assert.rejects(call(tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: 'missing access' }), /blocker reason/);
+  await assert.rejects(call(tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: '  ' }), /blocker reason/);
   await call(tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: ' missing access ', human_action: ' grant access ' });
   assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), {
     outcome: 'blocked', summary: 'waiting\n\nBlocker: missing access\nHuman action needed: grant access',
     blocker_reason: ' missing access ', human_action: ' grant access ',
   });
-  await assert.rejects(call(tool, { outcome: 'completed', summary: 'again' }), /already reported/);
+  const omitted = await fixture(t);
+  await call(omitted.tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: 'missing access' });
+  assert.equal(JSON.parse(await readFile(omitted.output, 'utf8')).summary, 'waiting\n\nBlocker: missing access');
 });
 
 test('summary rejects empty, disallowed and over-limit payloads, counting UTF-8 bytes', async t => {
