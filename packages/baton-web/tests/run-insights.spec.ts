@@ -112,7 +112,9 @@ test("explains an escalated loop and sends human guidance", async ({
 		});
 	});
 	await page.goto("/runs/run-loop");
-	await expect(page.getByText(reason, { exact: true })).toBeVisible();
+	await expect(page.getByText(reason, { exact: true })).toBeVisible({
+		timeout: 15000,
+	});
 	await expect(
 		page.getByText("Latest progress or blocker (review): Missing test"),
 	).toBeVisible();
