@@ -437,6 +437,52 @@ async fn demo_pipeline_runs_in_temporary_workspace() {
 }
 
 #[tokio::test]
+async fn external_step_limit_counts_submissions_and_next_reads_are_idempotent() {
+    let f = Fixture::new();
+    let mut config = common::read_config(&f.path);
+    config["pipelines"][0]["steps"][0]["maxAttempts"] = json!(2);
+    common::write_config(&f.path, &config);
+    let app = f.app();
+    let start = f.start(&app, 10, json!([])).await;
+    let first_next = f
+        .call(&app, json!({"command":"next", "id":start["id"]}))
+        .await
+        .unwrap();
+    let second_next = f
+        .call(&app, json!({"command":"next", "id":start["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(first_next, second_next);
+    let first = f.submit(&app, &start, "revise_build").await.unwrap();
+    let second = f.submit(&app, &first, "revise_build").await.unwrap();
+    assert_eq!(second["status"], "limitExhausted");
+    assert_eq!(
+        second["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|step| step["stepId"] == "build")
+            .count(),
+        2
+    );
+    assert!(second["events"].as_array().unwrap().iter().any(|event| {
+        event["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("build") && message.contains("2"))
+    }));
+    drop(app);
+    let restored = f
+        .app()
+        .execute(WorkCommand::Status {
+            id: Some(start["id"].as_str().unwrap().into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(restored["status"], "limitExhausted");
+    assert_eq!(restored["events"], second["events"]);
+}
+
+#[tokio::test]
 async fn rework_and_human_wait_survive_reopening_without_runtime_or_worktree_allocation() {
     let f = Fixture::new();
     let app = f.app();

@@ -75,7 +75,12 @@ function add() {
 function setStepType(index: number, value: string) {
 	if (!draft || !config) return;
 	const { id, name } = draft.steps[index];
-	const common = { id, name, transitions: [] };
+	const common = {
+		id,
+		name,
+		maxAttempts: draft.steps[index].maxAttempts,
+		transitions: [],
+	};
 	if (value === "human") draft.steps[index] = { ...common, type: "human" };
 	else if (value === "shell")
 		draft.steps[index] = { ...common, type: "shell", command: "" };
@@ -171,6 +176,7 @@ async function save(remove = false) {
           <Field label="Step type" for={`type-${step.id}`}>{#snippet children()}<ResourceSelect id={`type-${step.id}`} value={step.type} items={[{ id: "agent", name: "Agent" }, { id: "human", name: "Human wait" }, { id: "shell", name: "Shell" }]} placeholder="Select a step type" label="Step types" disabled={busy} onValueChange={(value) => setStepType(index, value)} />{/snippet}</Field>
           {#if step.type === "shell"}<Field label="Command" for={`command-${step.id}`} required>{#snippet children({ describedBy })}<input id={`command-${step.id}`} bind:value={step.command} required aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
           {#if step.type === "agent"}<Field label="Agent" for={`agent-${step.id}`} required>{#snippet children({ describedBy, invalid })}<ResourceSelect id={`agent-${step.id}`} bind:value={step.agentId} items={config.agents} placeholder="Select an agent" kind="agent" {describedBy} {invalid} disabled={busy} />{/snippet}</Field>{/if}
+          <Field label="Maximum attempts" for={`max-attempts-${step.id}`} hint="Optional per-run limit for this step; failed and interrupted attempts count.">{#snippet children({ describedBy })}<input id={`max-attempts-${step.id}`} type="number" min="1" step="1" value={step.maxAttempts ?? ""} oninput={(event) => { const value = event.currentTarget.value; step.maxAttempts = value === "" ? undefined : Number(value); }} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>
           {#if step.type === "shell"}<Field label="Timeout in seconds" for={`timeout-${step.id}`}>{#snippet children({ describedBy })}<input id={`timeout-${step.id}`} type="number" min="1" max="86400" placeholder="300" bind:value={step.timeoutSeconds} aria-describedby={describedBy} disabled={busy} />{/snippet}</Field>{/if}
           {#if step.type === "agent"}<Field label="Original task" for={`include-task-${step.id}`} hint="Controls newly supplied context; an existing agent session may retain earlier information.">{#snippet children({ describedBy, invalid })}<ResourceSelect id={`include-task-${step.id}`} value={step.includeTask === true ? "include" : "omit"} items={[{ id: "include", name: "Include original task" }, { id: "omit", name: "Omit original task" }]} label="Original task context" placeholder="Select task context" {describedBy} {invalid} disabled={busy} onValueChange={(value) => step.includeTask = value === "include"} />{/snippet}</Field>{/if}
           {#if step.type === "agent"}<div class="step-full-width"><Field label="Step prompt" for={`prompt-${step.id}`} hint="Instructions for this step, in addition to the agent’s instructions, task, and handoff.">{#snippet children({ describedBy })}<MultilineInput id={`prompt-${step.id}`} bind:value={step.prompt} rows={4} disabled={busy} {describedBy} placeholder="What should the agent do in this step?" />{/snippet}</Field></div>{/if}

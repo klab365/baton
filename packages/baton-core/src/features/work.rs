@@ -177,6 +177,15 @@ fn outcomes(step: &PipelineStep) -> Vec<Outcome> {
         step.transitions.iter().map(|t| t.outcome.clone()).collect()
     }
 }
+fn publication_message<'a>(run: &'a PipelineRun, fallback: &'a str) -> &'a str {
+    run.events
+        .iter()
+        .rev()
+        .find(|event| event.status == Status::LimitExhausted)
+        .and_then(|event| event.message.as_deref())
+        .unwrap_or(fallback)
+}
+
 /// Prepare exactly one attempt. Re-reading `next` never creates another attempt.
 fn prepare(run: &mut PipelineRun) -> Result<(), String> {
     if run.status != Status::Running {
@@ -194,6 +203,29 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         .iter()
         .any(|s| s.step_id == step.id && matches!(s.status, Status::Running | Status::WaitingHuman))
     {
+        return Ok(());
+    }
+    if let Some(limit) = step.max_attempts
+        && run
+            .steps
+            .iter()
+            .filter(|s| s.step_id == step.id && s.status != Status::Pending)
+            .count()
+            >= limit as usize
+    {
+        run.status = Status::LimitExhausted;
+        let ended_at = utc_now();
+        run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+        run.ended_at = Some(ended_at.clone());
+        run.events.push(crate::domain::pipeline::RunEvent {
+            run_id: run.id.clone(),
+            status: Status::LimitExhausted,
+            occurred_at: ended_at,
+            message: Some(format!(
+                "Step {} exhausted maxAttempts limit of {}",
+                step.id, limit
+            )),
+        });
         return Ok(());
     }
     let attempt = run.steps.iter().map(|s| s.attempt).max().unwrap_or(0) + 1;
@@ -534,11 +566,8 @@ async fn submit_work_handler(
                 checks,
             });
         complete(&mut run, index, result.outcome, result.summary)?;
-        publish(
-            resources.runs.as_ref(),
-            &mut run,
-            Some("External worker submission accepted".into()),
-        )?;
+        let message = publication_message(&run, "External worker submission accepted").to_owned();
+        publish(resources.runs.as_ref(), &mut run, Some(message))?;
         Ok(run)
     })
     .await
@@ -619,12 +648,53 @@ async fn respond_work_handler(
         return Err("Response exceeds 16384 bytes".into());
     }
     complete(&mut run, index, action.outcome, action.response)?;
-    publish(
-        resources.runs.as_ref(),
-        &mut run,
-        Some("Explicit human response received".into()),
-    )?;
+    let message = publication_message(&run, "Explicit human response received").to_owned();
+    publish(resources.runs.as_ref(), &mut run, Some(message))?;
     Ok(run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn limit_reason_is_used_for_external_publication_message() {
+        let run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"external", "pipelineId":"p", "task":"task", "startedAt":"now",
+            "status":"limitExhausted", "steps":[], "events":[{
+                "runId":"external", "status":"limitExhausted", "occurredAt":"now",
+                "message":"Step review exhausted maxAttempts limit of 2"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            publication_message(&run, "External worker submission accepted"),
+            "Step review exhausted maxAttempts limit of 2"
+        );
+    }
+
+    #[test]
+    fn external_prepare_exhausts_per_step_limit_and_keeps_reason_in_persisted_events() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"external", "pipelineId":"p", "task":"task", "startedAt":"2026-01-01T00:00:00Z",
+            "status":"running", "currentStep":"step", "steps":[{
+                "stepId":"step", "agentId":"agent", "status":"failed", "attempt":1
+            }],
+            "configSnapshot":{"schemaVersion":7,"agents":[],"pipelines":[{"id":"p","steps":[{
+                "id":"step","name":"Step","type":"human","maxAttempts":1
+            }]}]},
+            "session":{"workspace":"/tmp/work","revision":0,"maxAttempts":10,"checks":[],"submissions":[]}
+        })).unwrap();
+        prepare(&mut run).unwrap();
+        assert_eq!(run.status, Status::LimitExhausted);
+        assert!(run.events.iter().any(|event| {
+            event
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("step") && message.contains("1"))
+        }));
+        assert!(run.ended_at.is_some());
+    }
 }
 
 medi_module! {

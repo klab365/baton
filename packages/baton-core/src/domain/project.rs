@@ -76,6 +76,8 @@ impl Agent {
 pub struct PipelineStep {
     pub id: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
     #[serde(flatten)]
     pub kind: PipelineStepKind,
     #[serde(default)]
@@ -125,12 +127,16 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 include_task: Option<bool>,
                 #[serde(default)]
                 transitions: Vec<Transition>,
+                #[serde(default)]
+                max_attempts: Option<u32>,
             },
             Human {
                 id: String,
                 name: String,
                 #[serde(default)]
                 transitions: Vec<Transition>,
+                #[serde(default)]
+                max_attempts: Option<u32>,
             },
             Shell {
                 id: String,
@@ -140,6 +146,8 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 timeout_seconds: Option<u32>,
                 #[serde(default)]
                 transitions: Vec<Transition>,
+                #[serde(default)]
+                max_attempts: Option<u32>,
             },
         }
         Ok(match Wire::deserialize(deserializer)? {
@@ -150,9 +158,11 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 prompt,
                 include_task,
                 transitions,
+                max_attempts,
             } => Self {
                 id,
                 name,
+                max_attempts,
                 kind: PipelineStepKind::Agent {
                     agent_id,
                     prompt,
@@ -164,9 +174,11 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 id,
                 name,
                 transitions,
+                max_attempts,
             } => Self {
                 id,
                 name,
+                max_attempts,
                 kind: PipelineStepKind::Human,
                 transitions,
             },
@@ -176,9 +188,11 @@ impl<'de> Deserialize<'de> for PipelineStep {
                 command,
                 timeout_seconds,
                 transitions,
+                max_attempts,
             } => Self {
                 id,
                 name,
+                max_attempts,
                 kind: PipelineStepKind::Shell {
                     command,
                     timeout_seconds,
@@ -316,6 +330,9 @@ impl ProjectConfig {
             )?;
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
+                if step.max_attempts == Some(0) {
+                    return Err(format!("{step_path}: maxAttempts must be positive"));
+                }
                 nonempty(&format!("{step_path}.name"), &step.name)?;
                 match &step.kind {
                     PipelineStepKind::Shell {
@@ -664,6 +681,44 @@ mod project_identity_tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn max_attempts_is_optional_and_must_be_positive() {
+        use super::PipelineStep;
+        let valid: PipelineStep =
+            serde_json::from_str(r#"{"id":"h","name":"Human","type":"human","maxAttempts":2}"#)
+                .unwrap();
+        assert_eq!(valid.max_attempts, Some(2));
+        assert_eq!(
+            serde_json::from_str::<PipelineStep>(r#"{"id":"h","name":"Human","type":"human"}"#)
+                .unwrap()
+                .max_attempts,
+            None
+        );
+        let mut config: super::ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        config.pipelines[0].steps[0].max_attempts = Some(0);
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("maxAttempts must be positive")
+        );
+        config.pipelines[0].steps[0].max_attempts = Some(1);
+        assert!(config.validate().is_ok());
+        assert!(
+            serde_json::from_str::<PipelineStep>(
+                r#"{"id":"h","name":"Human","type":"human","maxAttempts":-1}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<PipelineStep>(
+                r#"{"id":"h","name":"Human","type":"human","maxAttempts":1.5}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
