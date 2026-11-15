@@ -471,6 +471,7 @@ fn prepare(run: &mut PipelineRun) -> Result<(), String> {
         output: None,
         error: None,
         outcome: None,
+        structured_handoff: None,
         selected_transition: None,
         attempt,
         started_at: Some(utc_now()),

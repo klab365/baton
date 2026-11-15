@@ -7,10 +7,10 @@ mod wire_trace;
 
 use self::{
     plugins::{Activities, Completed, RegisteredTools, StepPlugin},
-    tools::{ReportOutcome, outcome_name},
+    tools::{GetHandoff, ReportOutcome, outcome_name},
 };
 use baton_core::{
-    domain::pipeline::RunTraceEntry,
+    domain::pipeline::{RunTraceEntry, StructuredHandoffAttempt},
     domain::project::{Agent as BatonAgent, Outcome, Skill},
     ports::runtime::AgentDecision,
 };
@@ -217,6 +217,7 @@ pub struct RigAgentContext<'a> {
     pub run_id: &'a str,
     pub session_root: &'a Path,
     pub history_required: bool,
+    pub structured_history: &'a [StructuredHandoffAttempt],
     pub credential: Option<(baton_core::domain::credentials::Credential, Option<String>)>,
     pub auth_store_dir: Option<std::path::PathBuf>,
     pub observer: &'a mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
@@ -466,7 +467,9 @@ impl RigRuntime {
                 StepPlugin,
             ));
         let decision = Arc::new(Mutex::new(None));
-        let mut registered_tools = Vec::new();
+        let handoff_history = Arc::new(Mutex::new(agent_context.structured_history.to_vec()));
+        let mut registered_tools = vec!["get_structured_handoff"];
+        app.add_tool(GetHandoff::new(handoff_history));
         if baton_agent.allows_tool("read") {
             registered_tools.push("read");
             app.add_tool(rig_tools::Read {
@@ -519,7 +522,7 @@ impl RigRuntime {
                 seen: Default::default(),
             });
         }
-        if !allowed_outcomes.is_empty() && baton_agent.allows_tool("report_outcome") {
+        if baton_agent.allows_tool("report_outcome") {
             registered_tools.push("report_outcome");
             app.add_tool(ReportOutcome::new(
                 allowed_outcomes.to_vec(),
@@ -562,7 +565,11 @@ impl RigRuntime {
                 .ok_or_else(|| format!("Unknown skill {skill_id:?}"))?;
             preamble.push_str(&format!("\n\nSkill {}:\n{}", skill.id, skill.instructions));
         }
+        preamble.push_str("\n\nUse get_structured_handoff(attempt) to retrieve the complete report when the structured-context notice says details were omitted; the attempt number identifies its producer.");
         append_outcome_instruction(&mut preamble, allowed_outcomes);
+        if allowed_outcomes.is_empty() && baton_agent.allows_tool("report_outcome") {
+            preamble.push_str("\n\nOptional: call report_outcome with outcome `completed` and a version-1 structured_handoff when you have structured findings or verification to pass on. This does not replace your final text response.");
+        }
         let setup_trace = RunTraceEntry {
             attempt: None,
             occurred_at: baton_core::features::pipeline_engine::utc_now(),

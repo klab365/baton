@@ -24,6 +24,8 @@ pub struct StepRun {
     pub error: Option<String>,
     #[serde(default)]
     pub outcome: Option<crate::domain::project::Outcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_handoff: Option<super::StructuredHandoff>,
     #[serde(default)]
     pub selected_transition: Option<crate::domain::project::Transition>,
     #[serde(default)]
@@ -88,6 +90,14 @@ pub struct PipelineRun {
     pub handoff: Option<String>,
     #[serde(default)]
     pub pending_actions: Vec<crate::domain::project::Outcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredHandoffAttempt {
+    pub attempt: u32,
+    pub step_id: String,
+    pub report: super::StructuredHandoff,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

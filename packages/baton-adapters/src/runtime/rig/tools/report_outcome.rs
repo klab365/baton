@@ -14,6 +14,9 @@ pub(crate) struct ReportOutcomeArgs {
     /// Optional actionable human request for blocked outcomes; otherwise use an empty string.
     #[serde(default)]
     human_action: String,
+    /// Optional versioned structured handoff; summary remains the legacy text handoff.
+    #[serde(default)]
+    structured_handoff: Option<serde_json::Value>,
 }
 
 pub(crate) fn outcome_name(outcome: &Outcome) -> String {
@@ -53,15 +56,24 @@ impl Tool for ReportOutcome {
             .map(outcome_name)
             .collect::<Vec<_>>()
             .join(", ");
-        format!(
-            "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in this summary."
-        )
+        if self.allowed.is_empty() {
+            "Optional report_outcome tool for this sequential step; call it only when providing structured_handoff, and keep the final response as the legacy text handoff. Use outcome `completed`. Structured schema: {version: 1, summary: nonblank string, findings?: [{id: stable unique string, status: open|resolved|accepted, description: nonblank string}], verification?: [{description: nonblank string, result: nonblank string}], nextAction?: nonblank string}. Example: {\"version\":1,\"summary\":\"Ready\",\"findings\":[{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}]}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification.".into()
+        } else {
+            format!(
+                "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in summary. Optional structured_handoff schema: {{version: 1, summary: nonblank string, findings?: [{{id: stable unique string, status: open|resolved|accepted, description: nonblank string}}], verification?: [{{description: nonblank string, result: nonblank string}}], nextAction?: nonblank string}}. Example: {{\"version\":1,\"summary\":\"Ready\",\"findings\":[{{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}}]}}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification."
+            )
+        }
     }
 
     fn parameters(&self) -> serde_json::Value {
         let mut schema = rig::__core::tool::args_schema::<ReportOutcomeArgs>();
+        let choices = if self.allowed.is_empty() {
+            vec![Outcome::Completed]
+        } else {
+            self.allowed.clone()
+        };
         schema["properties"]["outcome"]["enum"] = serde_json::Value::Array(
-            self.allowed
+            choices
                 .iter()
                 .map(outcome_name)
                 .map(serde_json::Value::String)
@@ -78,11 +90,23 @@ impl Tool for ReportOutcome {
         let value = serde_json::Value::String(args.outcome);
         let outcome: Outcome = serde_json::from_value(value)
             .map_err(|error| ToolExecutionError::invalid_args(error.to_string()))?;
-        if !self.allowed.contains(&outcome) {
+        if !self.allowed.contains(&outcome)
+            && !(self.allowed.is_empty() && outcome == Outcome::Completed)
+        {
             return Err(ToolExecutionError::invalid_args(
                 "Outcome is not configured for this pipeline step",
             ));
         }
+        let structured_handoff = args
+            .structured_handoff
+            .map(|value| {
+                baton_core::domain::pipeline::StructuredHandoff::parse(
+                    &serde_json::to_vec(&value)
+                        .map_err(|error| ToolExecutionError::invalid_args(error.to_string()))?,
+                )
+                .map_err(ToolExecutionError::invalid_args)
+            })
+            .transpose()?;
         let mut summary = args.summary.trim().to_owned();
         if summary.is_empty() {
             return Err(ToolExecutionError::invalid_args(
@@ -116,7 +140,11 @@ impl Tool for ReportOutcome {
                 "An outcome has already been reported for this step",
             ));
         }
-        *decision = Some(AgentDecision { outcome, summary });
+        *decision = Some(AgentDecision {
+            outcome,
+            summary,
+            structured_handoff,
+        });
         Ok("Pipeline outcome recorded".into())
     }
 }
@@ -133,6 +161,9 @@ mod tests {
         let decision = Arc::new(Mutex::new(None));
         let tool = ReportOutcome::new(vec![Outcome::Blocked], decision.clone());
         let schema = tool.parameters();
+        let description = tool.description();
+        assert!(description.contains("status: open|resolved|accepted"));
+        assert!(description.contains("verification is an assertion"));
         assert!(
             !schema["required"]
                 .as_array()
@@ -154,6 +185,7 @@ mod tests {
                     summary: "Cannot continue".into(),
                     blocker_reason: "  ".into(),
                     human_action: String::new(),
+                    structured_handoff: None,
                 }
             )
             .await
@@ -166,6 +198,7 @@ mod tests {
                 summary: "Cannot continue".into(),
                 blocker_reason: "Missing credentials".into(),
                 human_action: String::new(),
+                structured_handoff: None,
             },
         )
         .await
@@ -184,6 +217,7 @@ mod tests {
                 summary: "Cannot continue".into(),
                 blocker_reason: "Missing credentials".into(),
                 human_action: "Provide credentials".into(),
+                structured_handoff: None,
             },
         )
         .await
@@ -223,12 +257,103 @@ mod tests {
                     summary: "Partial work".into(),
                     blocker_reason: String::new(),
                     human_action: String::new(),
+                    structured_handoff: None,
                 },
             )
             .await
             .is_err()
         );
         assert!(decision.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn sequential_report_outcome_is_optional_and_accepts_only_completed() {
+        let decision = Arc::new(Mutex::new(None));
+        let tool = ReportOutcome::new(vec![], decision.clone());
+        assert!(tool.description().contains("Optional report_outcome"));
+        assert_eq!(
+            tool.parameters()["properties"]["outcome"]["enum"],
+            serde_json::json!(["completed"])
+        );
+        let report = serde_json::json!({"version":1,"summary":"Ready"});
+        tool.call(
+            &mut ToolContext::default(),
+            super::ReportOutcomeArgs {
+                outcome: "completed".into(),
+                summary: "Ready".into(),
+                blocker_reason: String::new(),
+                human_action: String::new(),
+                structured_handoff: Some(report),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            decision
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .structured_handoff
+                .is_some()
+        );
+        let unused = Arc::new(Mutex::new(None));
+        let _optional_tool = ReportOutcome::new(vec![], unused.clone());
+        assert!(unused.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn report_outcome_accepts_valid_structured_handoff_and_rejects_unknown_fields() {
+        let decision = Arc::new(Mutex::new(None));
+        let tool = ReportOutcome::new(vec![Outcome::Approved], decision.clone());
+        let valid = serde_json::json!({
+            "version": 1, "summary": "Ready", "findings": [], "verification": [],
+            "nextAction": "Review"
+        });
+        tool.call(
+            &mut ToolContext::default(),
+            super::ReportOutcomeArgs {
+                outcome: "approved".into(),
+                summary: "Ready".into(),
+                blocker_reason: String::new(),
+                human_action: String::new(),
+                structured_handoff: Some(valid),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decision
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .structured_handoff
+                .as_ref()
+                .unwrap()
+                .next_action
+                .as_deref(),
+            Some("Review")
+        );
+
+        let tool = ReportOutcome::new(vec![Outcome::Approved], Arc::new(Mutex::new(None)));
+        let invalid = serde_json::json!({ "version": 1, "summary": "Ready", "summery": "typo" });
+        assert!(
+            tool.call(
+                &mut ToolContext::default(),
+                super::ReportOutcomeArgs {
+                    outcome: "approved".into(),
+                    summary: "Ready".into(),
+                    blocker_reason: String::new(),
+                    human_action: String::new(),
+                    structured_handoff: Some(invalid),
+                },
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unknown field")
+        );
     }
 
     #[tokio::test]
@@ -247,6 +372,7 @@ mod tests {
                 summary: "  Review passed.  ".into(),
                 blocker_reason: String::new(),
                 human_action: String::new(),
+                structured_handoff: None,
             },
         )
         .await
@@ -256,6 +382,7 @@ mod tests {
             Some(AgentDecision {
                 outcome: Outcome::Approved,
                 summary: "Review passed.".into(),
+                structured_handoff: None,
             })
         );
         assert!(
@@ -266,6 +393,7 @@ mod tests {
                     summary: "Not configured".into(),
                     blocker_reason: String::new(),
                     human_action: String::new(),
+                    structured_handoff: None,
                 },
             )
             .await
