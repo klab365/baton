@@ -70,3 +70,39 @@ for (const status of ["running", "succeeded"]) {
 		await expect(page.getByText("saved result")).toBeVisible();
 	});
 }
+
+test("shows the persisted pipeline exhaustion reason", async ({ page }) => {
+	const reason = "Pipeline exhausted maxAttempts limit of 50";
+	await page.route("**/api/**", (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/runs/run-limit/events") return route.abort();
+		if (path === "/api/runs/run-limit")
+			return route.fulfill({
+				json: {
+					id: "run-limit",
+					pipelineId: "factory",
+					task: "Example",
+					startedAt: "2026-01-01T00:00:00Z",
+					status: "limitExhausted",
+					currentStep: null,
+					events: [
+						{
+							runId: "run-limit",
+							status: "limitExhausted",
+							occurredAt: "2026-01-01T00:00:01Z",
+							message: reason,
+						},
+					],
+					steps: [],
+					trace: [],
+					pendingActions: [],
+					configSnapshot: null,
+				},
+			});
+		return route.fulfill({
+			json: { status: "ready", name: "Test", config: { pipelines: [] } },
+		});
+	});
+	await page.goto("/runs/run-limit");
+	await expect(page.locator(".run-overview strong")).toContainText(reason);
+});

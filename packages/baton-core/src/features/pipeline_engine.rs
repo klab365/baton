@@ -442,11 +442,16 @@ pub fn start_pipeline_for_task_with_worktree(
     if task.trim().is_empty() || task.len() > MAX_HANDOFF_BYTES {
         return Err("Task must be nonempty and at most 16384 bytes".into());
     }
-    let pipeline = config
+    let mut resolved_config = config.clone();
+    let pipeline = resolved_config
         .pipelines
-        .iter()
+        .iter_mut()
         .find(|p| p.id == pipeline_id)
         .ok_or("Unknown pipeline ID")?;
+    if pipeline.max_attempts.is_none() {
+        pipeline.max_attempts = Some(50);
+    }
+    let pipeline = pipeline.clone();
     let started_clock = Instant::now();
     let mut run = PipelineRun {
         id: run_id.into(),
@@ -461,7 +466,7 @@ pub fn start_pipeline_for_task_with_worktree(
         duration_ms: None,
         events: Vec::new(),
         trace: Vec::new(),
-        config_snapshot: Some(config.clone()),
+        config_snapshot: Some(resolved_config.clone()),
         current_step: Some(pipeline.steps[0].id.clone()),
         handoff: None,
         pending_actions: Vec::new(),
@@ -519,7 +524,7 @@ pub fn start_pipeline_for_task_with_worktree(
             "Task worktree allocated or reused; retained until task completion or deletion".into(),
         ),
     )?;
-    execute_graph(config, run, runtime, repository)
+    execute_graph(&resolved_config, run, runtime, repository)
 }
 
 fn pending(step: &PipelineStep) -> StepRun {
@@ -728,6 +733,25 @@ pub fn execute_graph(
                 return Err(error);
             }
         };
+        if let Some(limit) = pipeline.max_attempts
+            && run
+                .steps
+                .iter()
+                .filter(|s| s.status != Status::Pending)
+                .count()
+                >= limit as usize
+        {
+            run.status = Status::LimitExhausted;
+            let ended_at = utc_now();
+            run.ended_at = Some(ended_at.clone());
+            run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+            publish(
+                repository,
+                &mut run,
+                Some(format!("Pipeline exhausted maxAttempts limit of {limit}")),
+            )?;
+            return Ok(run);
+        }
         if let Some(limit) = step.max_attempts
             && step_attempt_count(&run, &step.id) >= limit as usize
         {
@@ -978,6 +1002,37 @@ pub fn execute_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_attempt_count_ignores_pending_placeholders_and_counts_started_visits() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":"p", "task":"t", "startedAt":"now", "status":"running", "steps":[]
+        })).unwrap();
+        let mut attempt = pending(&PipelineStep {
+            id: "human".into(),
+            name: "Human".into(),
+            max_attempts: None,
+            kind: crate::domain::project::PipelineStepKind::Human,
+            transitions: vec![],
+        });
+        run.steps.push(attempt.clone());
+        assert_eq!(
+            run.steps
+                .iter()
+                .filter(|s| s.status != Status::Pending)
+                .count(),
+            0
+        );
+        attempt.status = Status::WaitingHuman;
+        run.steps[0] = attempt;
+        assert_eq!(
+            run.steps
+                .iter()
+                .filter(|s| s.status != Status::Pending)
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn step_attempt_count_ignores_pending_placeholders_but_counts_started_legacy_records() {

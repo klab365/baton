@@ -52,7 +52,10 @@ impl Fixture {
         }
     }
     async fn start(&self, app: &WorkApplication, limit: u32, checks: Value) -> Value {
-        self.call(app, json!({"command":"start", "task":"Issue body\nAcceptance criteria: preserve the original wording", "source":"https://github.com/a/b/issues/1", "pipeline":null, "maxAttempts":limit, "checks":checks})).await.unwrap()
+        let mut config = common::read_config(&self.path);
+        config["pipelines"][0]["maxAttempts"] = json!(limit);
+        common::write_config(&self.path, &config);
+        self.call(app, json!({"command":"start", "task":"Issue body\nAcceptance criteria: preserve the original wording", "source":"https://github.com/a/b/issues/1", "pipeline":null, "checks":checks})).await.unwrap()
     }
     async fn submit(
         &self,
@@ -69,6 +72,21 @@ fn submission(run: &Value, outcome: &str) -> Value {
         "revision":run["session"]["revision"], "stepId":step["stepId"], "attempt":step["attempt"],
         "outcome":outcome, "summary":"Result and acceptance criterion verification"
     }})
+}
+
+#[tokio::test]
+async fn new_external_session_defaults_pipeline_and_session_limits_to_fifty() {
+    let f = Fixture::new();
+    let app = f.app();
+    let run = f
+        .call(
+            &app,
+            json!({"command":"start", "task":"task", "source":null, "pipeline":null, "checks":[]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run["configSnapshot"]["pipelines"][0]["maxAttempts"], 50);
+    assert_eq!(run["session"]["maxAttempts"], 50);
 }
 
 #[tokio::test]

@@ -52,7 +52,7 @@ function open(pipeline?: Pipeline) {
 					step.type === "agent" ? { ...step, prompt: step.prompt ?? "" } : step,
 				),
 			}
-		: { id: "", steps: [] };
+		: { id: "", maxAttempts: 50, steps: [] };
 	expandedStepIds = new Set();
 	revision = config.revision;
 	editing = Boolean(pipeline);
@@ -164,6 +164,7 @@ async function save(remove = false) {
    {:else}
     <form onsubmit={(event) => { event.preventDefault(); save(); }}>
      <div class="editor-toolbar"><div class="editor-title-fields"><span class="eyebrow">{editing ? "Editing pipeline" : "New pipeline"}</span><Field label="Pipeline ID" for="pipeline-name" required>{#snippet children({ describedBy })}<input id="pipeline-name" value={draft?.id ?? ""} oninput={(event) => { if (draft) draft.id = event.currentTarget.value; }} required aria-describedby={describedBy} disabled={busy || editing} placeholder="e.g. product-delivery" />{/snippet}</Field></div><div class="toolbar-actions"><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button><Button type="submit" loading={busy} disabled={!draft.steps.length}>Save changes</Button></div></div>
+     <Field label="Maximum pipeline attempts" for="pipeline-max-attempts" hint="Default 50. Counts every started agent, shell, and human visit; failed and interrupted visits count.">{#snippet children({ describedBy })}<input id="pipeline-max-attempts" type="number" min="1" max="1000" step="1" value={draft?.maxAttempts ?? 50} oninput={(event) => { if (draft) draft.maxAttempts = Number(event.currentTarget.value); }} aria-describedby={describedBy} disabled={busy} required />{/snippet}</Field>
      <div class="flow-caption"><span>Task input</span><span>Each step hands its result to the next</span><span>Final output</span></div>
      <ol class="step-flow" aria-label="Ordered pipeline steps">
       {#each draft.steps as step, index (step.id)}
