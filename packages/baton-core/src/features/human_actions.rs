@@ -71,6 +71,34 @@ pub fn prepare_human_resume(
         .iter()
         .find(|pipeline| pipeline.id == run.pipeline_id)
         .ok_or("Unknown pipeline")?;
+    let loop_pause = !run
+        .steps
+        .iter()
+        .any(|attempt| attempt.status == Status::WaitingHuman)
+        && run.events.iter().rev().any(|event| {
+            event
+                .message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Possible unproductive loop:"))
+        });
+    if loop_pause {
+        if outcome != Outcome::Responded {
+            return Err("Expected a response to continue the paused run".into());
+        }
+        let workspace = run.worktree.as_ref().ok_or("Missing isolated worktree")?;
+        repository
+            .worktree_manager()?
+            .validate(&workspace.owner, workspace)?;
+        run.handoff = Some(human_handoff(run.handoff.as_deref(), response)?);
+        run.status = Status::Running;
+        run.pending_actions.clear();
+        publish(
+            repository,
+            &mut run,
+            Some("Human continued after possible unproductive loop".into()),
+        )?;
+        return Ok((config, run));
+    }
     let step = pipeline
         .steps
         .iter()

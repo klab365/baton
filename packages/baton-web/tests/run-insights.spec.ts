@@ -67,9 +67,61 @@ for (const status of ["running", "succeeded"]) {
 		});
 		await expect(page.getByText(/output tokens: 3 \(partial\)/)).toBeVisible();
 		await expect(page.getByText(/Run cost: not available/)).toBeVisible();
-		await expect(page.getByText("saved result")).toBeVisible();
+		await expect(page.getByText("saved result", { exact: true })).toBeVisible();
 	});
 }
+
+test("explains an escalated loop and sends human guidance", async ({
+	page,
+}) => {
+	const reason =
+		"Possible unproductive loop: step review reported the same unresolved outcome and summary 3 times (threshold 3). Review the attempts and worktree, then respond to continue or cancel.";
+	const run = {
+		id: "run-loop",
+		pipelineId: "factory",
+		task: "Example",
+		startedAt: "2026-01-01T00:00:00Z",
+		status: "waitingHuman",
+		currentStep: "build",
+		events: [{ message: reason, occurredAt: "2026-01-01T00:00:01Z" }],
+		steps: [
+			{
+				stepId: "review",
+				agentId: "reviewer",
+				attempt: 3,
+				status: "succeeded",
+				outcome: "rejected",
+				output: "Missing test",
+			},
+		],
+		trace: [],
+		pendingActions: ["responded"],
+		configSnapshot: null,
+	};
+	let response = "";
+	await page.route("**/api/**", (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith("/events")) return route.abort();
+		if (path.endsWith("/actions")) {
+			response = route.request().postDataJSON().response;
+			return route.fulfill({ json: run });
+		}
+		if (path === "/api/runs/run-loop") return route.fulfill({ json: run });
+		return route.fulfill({
+			json: { status: "ready", name: "Test", config: { pipelines: [] } },
+		});
+	});
+	await page.goto("/runs/run-loop");
+	await expect(page.getByText(reason, { exact: true })).toBeVisible();
+	await expect(
+		page.getByText("Latest progress or blocker (review): Missing test"),
+	).toBeVisible();
+	await page
+		.getByLabel("Your response (optional)")
+		.fill("Add the missing test");
+	await page.getByRole("button", { name: "Send response" }).click();
+	await expect.poll(() => response).toBe("Add the missing test");
+});
 
 test("shows the persisted pipeline exhaustion reason", async ({ page }) => {
 	const reason = "Pipeline exhausted maxAttempts limit of 50";

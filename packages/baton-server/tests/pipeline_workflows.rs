@@ -231,6 +231,109 @@ fn config() -> ProjectConfig {
     ]);
     parse_config(&json.to_string()).unwrap()
 }
+#[test]
+fn repeated_review_findings_pause_and_resume_after_repository_reload() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
+        {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer", "transitions":[
+            {"outcome":"revise_build", "to":"build"}, {"outcome":"approved", "to":null}
+        ]}
+    ]))
+    .unwrap();
+    let repo = fixture.repo();
+    let mut script = Script::new(&[
+        "build 1",
+        r#"{"outcome":"revise_build","output":"Missing test"}"#,
+        "build 2",
+        r#"{"outcome":"revise_build","output":"Missing test"}"#,
+        "build 3",
+        r#"{"outcome":"revise_build","output":"Missing test"}"#,
+    ]);
+    let paused =
+        start_pipeline(&graph, "draft", "task", "loop-review", &mut script, &repo).unwrap();
+    assert_eq!(paused.status, Status::WaitingHuman);
+    assert!(paused.ended_at.is_none());
+    assert_eq!(paused.current_step.as_deref(), Some("build"));
+    assert!(paused.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("threshold 3"))
+    }));
+    let worktree = paused.worktree.clone();
+    fixture.repo().recover_interrupted().unwrap();
+    let recovered = fixture.repo().load("loop-review").unwrap();
+    assert_eq!(recovered, paused);
+    assert!(
+        resume_human(
+            "loop-review",
+            Outcome::Approved,
+            "",
+            &mut Script::default(),
+            &fixture.repo()
+        )
+        .is_err()
+    );
+    assert_eq!(fixture.repo().load("loop-review").unwrap(), paused);
+    let mut continuation = Script::new(&["fixed", r#"{"outcome":"approved","output":"Verified"}"#]);
+    let resumed = resume_human(
+        "loop-review",
+        Outcome::Responded,
+        "Add the missing test",
+        &mut continuation,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+    assert_eq!(resumed.worktree, worktree);
+    assert!(resumed.steps.iter().any(|step| {
+        step.input
+            .as_deref()
+            .is_some_and(|input| input.contains("Add the missing test"))
+    }));
+}
+
+#[test]
+fn changing_review_findings_do_not_pause_productive_iterations() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"writer"},
+        {"id":"review", "name":"Review", "type":"agent", "agentId":"reviewer", "transitions":[
+            {"outcome":"revise_build", "to":"build"}, {"outcome":"approved", "to":null}
+        ]}
+    ]))
+    .unwrap();
+    let mut script = Script::new(&[
+        "build",
+        r#"{"outcome":"revise_build","output":"Fix A"}"#,
+        "build",
+        r#"{"outcome":"revise_build","output":"Fix B"}"#,
+        "build",
+        r#"{"outcome":"revise_build","output":"Fix C"}"#,
+        "build",
+        r#"{"outcome":"approved","output":"Verified"}"#,
+    ]);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "productive-review",
+        &mut script,
+        &fixture.repo(),
+    )
+    .unwrap();
+    assert_eq!(run.status, Status::Succeeded);
+    assert!(!run.events.iter().any(|event| {
+        event
+            .message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("Possible unproductive loop:"))
+    }));
+}
+
 struct ResumeFactory;
 impl AgentRuntimeFactory for ResumeFactory {
     fn create(&self, _: &ProjectConfig, _: &str) -> Result<Box<dyn AgentRuntime>, String> {
@@ -1542,11 +1645,11 @@ fn review_can_repeat_rework_without_a_traversal_limit() {
         r#"{"outcome":"revise_plan","output":"New plan"}"#,
         "new plan",
         "new build",
-        REWORK,
+        r#"{"outcome":"revise_build","output":"Fix first issue"}"#,
         "fixed",
-        REWORK,
+        r#"{"outcome":"revise_build","output":"Fix second issue"}"#,
         "another build",
-        REWORK,
+        r#"{"outcome":"revise_build","output":"Fix third issue"}"#,
         "final build",
         APPROVED,
     ]);
