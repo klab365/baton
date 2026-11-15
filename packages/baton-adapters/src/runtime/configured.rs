@@ -292,6 +292,7 @@ printf 'done'
         assert_eq!(std::fs::read_to_string(prompt).unwrap(), large_prompt);
         let args = std::fs::read_to_string(args).unwrap();
         assert!(args.contains("--no-extensions") && args.contains("--no-mcp"));
+        assert!(args.contains("--no-skills"));
         assert!(args.contains("--model\nopenai/gpt-4.1"));
         assert!(args.contains("--tools\nread,bash"));
         assert!(args.ends_with("--\n"));
@@ -474,7 +475,11 @@ printf 'done'
         let pi = root.path().join("pi");
         std::fs::write(&pi, r##"#!/bin/sh
 args="$*"
+system_prompt=""
+skills_flag="no"
 while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--no-skills' ]; then skills_flag="yes"; fi
+  if [ "$1" = '--system-prompt' ]; then shift; system_prompt="$1"; fi
   if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
   if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
   if [ "$1" = '--session' ]; then shift; file="$1"; fi
@@ -482,6 +487,10 @@ while [ "$#" -gt 0 ]; do
 done
 prompt=$(cat)
 printf '%s\n' "$args" >> "$session/args"
+call=$(find "$session" -name 'system-prompt-*' | wc -l)
+printf '%s\n' "$system_prompt" > "$session/system-prompt-$call"
+printf '%s\n' "$skills_flag" > "$session/skills-flag-$call"
+printf '%s\n' "$prompt" > "$session/invocation-prompt-$call"
 if [ -z "$file" ]; then file="$session/test_$id.jsonl"; fi
 if [ -f "$file" ]; then
   grep -q 'prior-conversation' "$file" || exit 9
@@ -503,8 +512,22 @@ printf 'handoff'
             runtime.pi_command = pi.clone().into();
             runtime
         };
-        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"first", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":["report_outcome"]})).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"first", "instructions":"role", "provider":"pi", "skillIds":["assigned"], "allowedTools":["report_outcome"]})).unwrap();
         let mut runtime = make_runtime();
+        runtime.skills = vec![
+            baton_core::domain::project::Skill {
+                id: "assigned".into(),
+                description: String::new(),
+                metadata: String::new(),
+                instructions: "assigned-only-instruction".into(),
+            },
+            baton_core::domain::project::Skill {
+                id: "unassigned".into(),
+                description: String::new(),
+                metadata: String::new(),
+                instructions: "unassigned-must-not-appear".into(),
+            },
+        ];
         runtime.set_run_id("run-one").unwrap();
         assert_eq!(
             runtime
@@ -522,7 +545,29 @@ printf 'handoff'
         let first = vault.join("runtime-sessions/run-one/agent-first/pi");
         let prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
         assert!(prompts.contains("original task"));
+        let args = std::fs::read_to_string(first.join("args")).unwrap();
+        assert!(args.contains("--no-skills"));
+        let first_system_prompt = std::fs::read_to_string(first.join("system-prompt-0")).unwrap();
+        assert!(first_system_prompt.contains("assigned-only-instruction"));
+        assert!(!first_system_prompt.contains("unassigned-must-not-appear"));
+        assert_eq!(
+            std::fs::read_to_string(first.join("skills-flag-0"))
+                .unwrap()
+                .trim(),
+            "yes"
+        );
         assert!(prompts.contains("You did not call report_outcome"));
+        let retry_prompt = std::fs::read_to_string(first.join("invocation-prompt-1")).unwrap();
+        assert!(retry_prompt.contains("You did not call report_outcome"));
+        let retry_system_prompt = std::fs::read_to_string(first.join("system-prompt-1")).unwrap();
+        assert!(retry_system_prompt.contains("assigned-only-instruction"));
+        assert!(!retry_system_prompt.contains("unassigned-must-not-appear"));
+        assert_eq!(
+            std::fs::read_to_string(first.join("skills-flag-1"))
+                .unwrap()
+                .trim(),
+            "yes"
+        );
         let session_path = std::fs::read_dir(&first)
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -532,15 +577,27 @@ printf 'handoff'
         assert!(args.contains("--session-id "));
         assert!(args.contains(&format!("--session {}", session_path.display())));
         let mut restarted = make_runtime();
+        restarted.skills = runtime.skills.clone();
         restarted.set_run_id("run-one").unwrap();
         restarted.set_history_required(true);
         restarted
             .execute(root.path(), &agent, "new handoff")
             .unwrap();
+        let resumed_prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
+        assert!(resumed_prompts.contains("new handoff"));
         assert!(
-            std::fs::read_to_string(first.join("prompts"))
+            std::fs::read_to_string(first.join("invocation-prompt-2"))
                 .unwrap()
                 .contains("new handoff")
+        );
+        let resumed_system_prompt = std::fs::read_to_string(first.join("system-prompt-2")).unwrap();
+        assert!(resumed_system_prompt.contains("assigned-only-instruction"));
+        assert!(!resumed_system_prompt.contains("unassigned-must-not-appear"));
+        assert_eq!(
+            std::fs::read_to_string(first.join("skills-flag-2"))
+                .unwrap()
+                .trim(),
+            "yes"
         );
         let mut other = agent.clone();
         other.id = "second".into();

@@ -330,6 +330,7 @@ fn execute_once(
         "--print",
         "--no-extensions",
         "--no-mcp",
+        "--no-skills",
         "--system-prompt",
         &system_prompt,
     ]);
