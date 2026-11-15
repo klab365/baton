@@ -113,14 +113,21 @@ steps:
   agentId: factory-ci
   includeTask: true
   prompt: |
-    Verify the pull request's CI results. Report successful checks, actionable
-    failures for the builder, or external blockers requiring human assistance.
-    Check all applicable required checks and requested reviews against the current PR
-    head. Wait up to 30 minutes, checking at least once per minute, for pending or
-    missing checks and requested reviews before treating them as external blockers.
-    Process actionable review feedback and CI failures with revise_build; use blocked
-    for unresolved external blockers. Missing, pending or inconclusive checks and
-    outstanding requested reviews are not success. Report results and URLs.
+    Verify the pull request's CI results. Use the shell to inspect the current PR
+    head, applicable required checks and requested reviews, then decide immediately
+    whether to report revise_build, completed, or continue waiting. Recheck every 15
+    seconds for at most 30 minutes total; do not run an opaque sleep/poll command that
+    prevents evaluating results between checks. On each iteration, fetch the current
+    head and evaluate only results for that head. If the head changes, discard stale
+    check conclusions and re-evaluate against the new head without resetting the
+    deadline. Report revise_build immediately for an actionable CI failure or
+    changes-requested review, even while other checks are pending. Report completed
+    immediately only when every applicable required check passes and all requested
+    reviews are resolved. Wait only while checks/reviews are pending or missing; at
+    the deadline report blocked for unresolved external blockers. API/auth errors or
+    inability to determine required checks are not success: report blocked. Include
+    the head SHA, check/review status, relevant unresolved details and URLs in every
+    handoff.
   transitions:
   - outcome: completed
     to: null

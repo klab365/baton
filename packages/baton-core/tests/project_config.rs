@@ -105,6 +105,15 @@ fn project_factory_checks_ci_before_finishing() {
     assert!(routes_to("ci", Outcome::Blocked, Some("ci-help")));
     assert!(step("ci-help").is_human());
     assert!(routes_to("ci-help", Outcome::Responded, Some("ci")));
+    let prompt = match &step("ci").kind {
+        baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
+        _ => panic!("CI step must be an agent"),
+    };
+    assert!(prompt.contains("every 15"));
+    assert!(prompt.contains("head changes"));
+    assert!(prompt.contains("Report revise_build immediately"));
+    assert!(prompt.contains("Report completed\nimmediately only when"));
+    assert!(prompt.contains("API/auth errors"));
 }
 
 #[test]
