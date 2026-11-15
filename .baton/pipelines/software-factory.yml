@@ -14,7 +14,7 @@ steps:
   - outcome: completed
     to: build
   - outcome: blocked
-    to: help
+    to: plan-help
   type: agent
 
 - id: build
@@ -62,7 +62,7 @@ steps:
   - outcome: revise_plan
     to: plan
   - outcome: blocked
-    to: help
+    to: build-help
   type: agent
 
 - id: review
@@ -146,8 +146,26 @@ steps:
     to: null
   type: human
 
+- id: plan-help
+  name: Clarify planning blocker
+  transitions:
+  - outcome: responded
+    to: plan
+  - outcome: rejected
+    to: null
+  type: human
+
+- id: build-help
+  name: Resolve implementation blocker
+  transitions:
+  - outcome: responded
+    to: build
+  - outcome: rejected
+    to: null
+  type: human
+
 - id: help
-  name: Resolve blocker
+  name: Resolve workflow blocker
   transitions:
   - outcome: responded
     to: plan

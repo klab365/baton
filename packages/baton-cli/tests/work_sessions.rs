@@ -75,6 +75,76 @@ fn submission(run: &Value, outcome: &str) -> Value {
 }
 
 #[tokio::test]
+async fn external_human_response_exposes_composed_handoff_to_next_worker() {
+    let f = Fixture::new();
+    let mut config = common::read_config(&f.path);
+    config["pipelines"][0]["steps"] = json!([
+        {"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "transitions":[{"outcome":"blocked","to":"help"},{"outcome":"completed","to":null}]},
+        {"id":"help", "name":"Help", "type":"human", "transitions":[{"outcome":"responded","to":"build"}]}
+    ]);
+    common::write_config(&f.path, &config);
+    let app = f.app();
+    let run = f.start(&app, 10, json!([])).await;
+    let started = f
+        .call(&app, json!({"command":"next","id":run["id"]}))
+        .await
+        .unwrap();
+    let blocked = f.call(&app, json!({"command":"submit","id":run["id"],"result":{
+        "revision":started["revision"],"stepId":"build","attempt":started["attempt"],"outcome":"blocked","summary":"prior blocker diagnosis"
+    }})).await.unwrap();
+    let human_attempt = blocked["steps"].as_array().unwrap().last().unwrap()["attempt"].clone();
+    let invalid = json!({"command":"respond","id":run["id"],"action":{
+        "revision":blocked["session"]["revision"],"stepId":"help","attempt":human_attempt,"outcome":"approved","response":"bad choice"
+    }});
+    assert!(f.call(&app, invalid).await.is_err());
+    let unchanged = f
+        .call(&app, json!({"command":"status","id":run["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(unchanged, blocked);
+    let oversized = "x".repeat(16_385);
+    let invalid = json!({"command":"respond","id":run["id"],"action":{
+        "revision":blocked["session"]["revision"],"stepId":"help","attempt":human_attempt,"outcome":"responded","response":oversized
+    }});
+    assert!(f.call(&app, invalid).await.is_err());
+    assert_eq!(
+        f.call(&app, json!({"command":"status","id":run["id"]}))
+            .await
+            .unwrap(),
+        blocked
+    );
+    let human = f.call(&app, json!({"command":"respond","id":run["id"],"action":{
+        "revision":blocked["session"]["revision"],"stepId":"help","attempt":human_attempt,"outcome":"responded","response":"use cached artifact"
+    }})).await.unwrap();
+    let next = f
+        .call(&app, json!({"command":"next","id":run["id"]}))
+        .await
+        .unwrap();
+    assert_eq!(
+        human["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|step| step["stepId"] == "help")
+            .unwrap()["output"],
+        "use cached artifact"
+    );
+    assert!(
+        next["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("prior blocker diagnosis")
+    );
+    assert!(
+        next["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("use cached artifact")
+    );
+    assert_eq!(next["lastResult"]["output"], "use cached artifact");
+}
+
+#[tokio::test]
 async fn new_external_session_defaults_pipeline_and_session_limits_to_fifty() {
     let f = Fixture::new();
     let app = f.app();

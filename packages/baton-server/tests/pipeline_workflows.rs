@@ -347,6 +347,223 @@ fn interrupted_shell_is_not_replayed_automatically() {
 }
 
 #[test]
+fn planning_blocker_human_response_returns_to_plan_with_both_contexts() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({"id":"plan","name":"Plan","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"plan-help"},{"outcome":"completed","to":null}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"plan-help","name":"Clarify plan","type":"human","transitions":[{"outcome":"responded","to":"plan"}]})).unwrap(),
+    ];
+    let repository = fixture.repo();
+    let waiting = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "planning-blocked",
+        &mut Script::new(&[r#"{"outcome":"blocked","output":"Need product decision","blocker_reason":"unclear acceptance"}"#]),
+        &repository,
+    ).unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    assert_eq!(waiting.current_step.as_deref(), Some("plan-help"));
+    let human_index = waiting
+        .steps
+        .iter()
+        .position(|step| step.step_id == "plan-help")
+        .unwrap();
+    let original = waiting.clone();
+    assert!(
+        resume_human(
+            "planning-blocked",
+            Outcome::Approved,
+            "wrong action",
+            &mut Script::default(),
+            &repository
+        )
+        .is_err()
+    );
+    assert_eq!(repository.load("planning-blocked").unwrap(), original);
+    let mut runtime = Script::new(&[r#"{"outcome":"completed","output":"Revised plan"}"#]);
+    let resumed = resume_human(
+        "planning-blocked",
+        Outcome::Responded,
+        "Use acceptance criteria A",
+        &mut runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded, "{:#?}", resumed.steps);
+    let selected = resumed
+        .steps
+        .iter()
+        .find(|step| step.step_id == "plan-help")
+        .unwrap();
+    assert_eq!(
+        selected
+            .selected_transition
+            .as_ref()
+            .and_then(|edge| edge.to.as_deref()),
+        Some("plan")
+    );
+    let resumed_plan = resumed
+        .steps
+        .iter()
+        .find(|step| {
+            step.step_id == "plan"
+                && step.attempt
+                    > waiting
+                        .steps
+                        .iter()
+                        .find(|step| step.step_id == "plan")
+                        .unwrap()
+                        .attempt
+        })
+        .unwrap();
+    assert!(
+        resumed_plan
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Use acceptance criteria A")
+    );
+    assert!(
+        resumed_plan
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("unclear acceptance")
+    );
+    assert_eq!(
+        resumed.steps[human_index].output.as_deref(),
+        Some("Use acceptance criteria A")
+    );
+}
+
+#[test]
+fn implementation_blocker_debug_human_response_returns_to_build() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({"id":"plan","name":"Plan","type":"agent","agentId":"writer","transitions":[{"outcome":"completed","to":"build"}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"build","name":"Build","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"debug"},{"outcome":"completed","to":null}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"debug","name":"Diagnose","type":"agent","agentId":"reviewer","transitions":[{"outcome":"blocked","to":"build-help"}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"build-help","name":"Resolve blocker","type":"human","transitions":[{"outcome":"responded","to":"build"}]})).unwrap(),
+    ];
+    let repository = fixture.repo();
+    let waiting = start_pipeline(
+        &graph, "draft", "task", "build-blocked",
+        &mut Script::new(&[r#"{"outcome":"completed","output":"Plan"}"#, r#"{"outcome":"blocked","output":"Compilation fails","blocker_reason":"missing dependency"}"#, r#"{"outcome":"blocked","output":"Diagnosis needs credentials","blocker_reason":"private registry access"}"#]),
+        &repository,
+    ).unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    assert_eq!(waiting.current_step.as_deref(), Some("build-help"));
+    let mut runtime = Script::new(&[r#"{"outcome":"completed","output":"Build fixed"}"#]);
+    let resumed = resume_human(
+        "build-blocked",
+        Outcome::Responded,
+        "Use approved mirror",
+        &mut runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+    let help = resumed
+        .steps
+        .iter()
+        .find(|step| step.step_id == "build-help")
+        .unwrap();
+    assert_eq!(
+        help.selected_transition
+            .as_ref()
+            .and_then(|edge| edge.to.as_deref()),
+        Some("build")
+    );
+    let build = resumed
+        .steps
+        .iter()
+        .filter(|step| step.step_id == "build")
+        .max_by_key(|step| step.attempt)
+        .unwrap();
+    let input = build.input.as_deref().unwrap();
+    assert!(input.contains("private registry access"));
+    assert!(input.contains("Use approved mirror"));
+}
+
+#[test]
+fn configured_human_wait_resumes_from_frozen_snapshot_after_restart() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({"id":"build","name":"Build","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"build-help"},{"outcome":"completed","to":null}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"build-help","name":"Help","type":"human","transitions":[{"outcome":"responded","to":"build"}]})).unwrap(),
+    ];
+    let repository = fixture.repo();
+    let waiting = start_pipeline(&graph, "draft", "task", "frozen-help", &mut Script::new(&[r#"{"outcome":"blocked","output":"Build blocked","blocker_reason":"registry unavailable"}"#]), &repository).unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "configured_human_restart_reader"])
+        .env("BATON_CONFIGURED_RESTART", &fixture.0)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let resumed = repository.load("frozen-help").unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+    let help = resumed
+        .steps
+        .iter()
+        .find(|step| step.step_id == "build-help")
+        .unwrap();
+    assert_eq!(
+        help.selected_transition
+            .as_ref()
+            .and_then(|edge| edge.to.as_deref()),
+        Some("build")
+    );
+    let build = resumed
+        .steps
+        .iter()
+        .filter(|step| step.step_id == "build")
+        .max_by_key(|step| step.attempt)
+        .unwrap();
+    assert!(
+        build
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("registry unavailable")
+    );
+    assert!(
+        build
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Use cached artifact")
+    );
+}
+
+#[test]
+fn configured_human_restart_reader() {
+    let Some(path) = std::env::var_os("BATON_CONFIGURED_RESTART") else {
+        return;
+    };
+    let repository = FilesystemRunRepository(path.into());
+    repository.recover_interrupted().unwrap();
+    assert_eq!(
+        repository.load("frozen-help").unwrap().status,
+        Status::WaitingHuman
+    );
+    let mut runtime = Script::new(&[r#"{"outcome":"completed","output":"Build complete"}"#]);
+    let resumed = resume_human(
+        "frozen-help",
+        Outcome::Responded,
+        "Use cached artifact",
+        &mut runtime,
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::Succeeded);
+}
+
+#[test]
 fn human_resume_releases_action_lease_before_live_observation() {
     let fixture = Fixture::new();
     let mut config = config();
