@@ -104,5 +104,5 @@ test("shows the persisted pipeline exhaustion reason", async ({ page }) => {
 		});
 	});
 	await page.goto("/runs/run-limit");
-	await expect(page.locator(".run-overview strong")).toContainText(reason);
+	await expect(page.getByText(reason, { exact: true })).toBeVisible();
 });

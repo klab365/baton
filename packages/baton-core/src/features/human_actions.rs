@@ -122,6 +122,18 @@ pub fn prepare_human_resume(
     Ok((config, run))
 }
 
+/// Explicit user action only. Invalid actions do not consume or mutate the wait.
+pub fn resume_human(
+    id: &str,
+    outcome: Outcome,
+    response: &str,
+    runtime: &mut dyn AgentRuntime,
+    repository: &dyn RunRepository,
+) -> Result<PipelineRun, String> {
+    let (config, run) = prepare_human_resume(id, outcome, response, repository)?;
+    execute_graph(&config, run, runtime, repository)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,16 +175,4 @@ mod tests {
         let response = "r".repeat(MAX_HANDOFF_BYTES);
         assert_eq!(human_handoff(Some("prior"), &response).unwrap(), response);
     }
-}
-
-/// Explicit user action only. Invalid actions do not consume or mutate the wait.
-pub fn resume_human(
-    id: &str,
-    outcome: Outcome,
-    response: &str,
-    runtime: &mut dyn AgentRuntime,
-    repository: &dyn RunRepository,
-) -> Result<PipelineRun, String> {
-    let (config, run) = prepare_human_resume(id, outcome, response, repository)?;
-    execute_graph(&config, run, runtime, repository)
 }
