@@ -15,7 +15,10 @@ for (const status of ["running", "succeeded"]) {
 			events: [],
 			trace: [],
 			pendingActions: [],
-			configSnapshot: null,
+			configSnapshot: {
+				agents: [{ id: "builder", thinkingLevel: "high" }],
+				pipelines: [],
+			},
 			steps: [
 				{
 					stepId: "build",
@@ -68,6 +71,12 @@ for (const status of ["running", "succeeded"]) {
 		await expect(page.getByText(/output tokens: 3 \(partial\)/)).toBeVisible();
 		await expect(page.getByText(/Run cost: not available/)).toBeVisible();
 		await expect(page.getByText("saved result", { exact: true })).toBeVisible();
+		await expect(
+			page.getByText(
+				"Requested thinking level: high (from run configuration snapshot; provider application is not confirmed).",
+				{ exact: true },
+			),
+		).toBeVisible();
 	});
 }
 

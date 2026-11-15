@@ -631,6 +631,18 @@ fn execute_once(
     if let Some(model) = &agent.model {
         command.args(["--model", &format!("{}/{}", model.provider, model.model)]);
     }
+    if let Some(level) = agent.thinking_level {
+        let level = match level {
+            baton_core::domain::project::ThinkingLevel::Off => "off",
+            baton_core::domain::project::ThinkingLevel::Minimal => "minimal",
+            baton_core::domain::project::ThinkingLevel::Low => "low",
+            baton_core::domain::project::ThinkingLevel::Medium => "medium",
+            baton_core::domain::project::ThinkingLevel::High => "high",
+            baton_core::domain::project::ThinkingLevel::XHigh => "xhigh",
+            baton_core::domain::project::ThinkingLevel::Max => "max",
+        };
+        command.args(["--thinking", level]);
+    }
     let default_tools = ["read", "list", "search", "shell", "write", "edit"].map(str::to_owned);
     let tools = agent.allowed_tools.as_deref().unwrap_or(&default_tools);
     if tools.is_empty() && runtime.structured_history.is_empty() {

@@ -161,7 +161,122 @@ impl Serve for CopilotAnthropic {
 
 #[cfg(test)]
 mod tests {
-    use super::{CopilotAnthropic, valid_endpoint};
+    use super::{CopilotAnthropic, adapter, valid_endpoint};
+
+    #[test]
+    fn selected_copilot_model_catalog_lists_high_effort() {
+        use rig::{
+            catalog::{Catalog, ReasoningSupport},
+            completion::Effort,
+        };
+        let spec = Catalog::builtin()
+            .resolve("copilot/gpt-5.3-codex")
+            .unwrap()
+            .spec;
+        assert!(matches!(
+            &spec.reasoning,
+            ReasoningSupport::Listed { levels, .. } if levels.contains(&Effort::High)
+        ));
+        assert!(super::super::copilot_uses_responses(spec));
+    }
+
+    #[tokio::test]
+    async fn copilot_responses_serializes_requested_reasoning_to_wire() {
+        use rig::{
+            completion::{CompletionRequest, Effort, GenerationOptions},
+            effect::{EffectId, EffectKind},
+            http_client::{DynHttpClient, ReqwestClient},
+            serve::{Dispatch, ErasedHandler},
+        };
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::mpsc,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("mock HTTP request was not received: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 4096];
+            loop {
+                let count = stream.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(header_end) =
+                    request.windows(4).position(|window| window == b"\r\n\r\n")
+                {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    let body_len = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= header_end + 4 + body_len {
+                        break;
+                    }
+                }
+            }
+            let body_start = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            sender
+                .send(serde_json::from_slice::<serde_json::Value>(&request[body_start..]).unwrap())
+                .unwrap();
+            stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+
+        let handler = ErasedHandler::new(adapter(
+            "gpt-5.3-codex",
+            "dummy",
+            &format!("http://{address}"),
+            DynHttpClient::new(ReqwestClient::default()),
+            true,
+        ));
+        let request = CompletionRequest::new("test")
+            .options(GenerationOptions::default().reasoning(Effort::High));
+        let _ = handler
+            .handle(
+                EffectKind::Completion {
+                    request: request.into(),
+                    stream: false,
+                },
+                Dispatch::new(EffectId::from_raw(1), true),
+            )
+            .await;
+        server.join().unwrap();
+        let wire: serde_json::Value = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("mock server captured the request");
+        assert_eq!(wire["reasoning"]["effort"], "high");
+    }
 
     #[tokio::test]
     #[ignore = "requires a real Copilot session and consumes quota"]

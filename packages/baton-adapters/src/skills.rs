@@ -225,7 +225,8 @@ mod tests {
                     model: None,
                     credential_id: None,
                     skill_ids: vec!["style".into()],
-                    allowed_tools: None
+                    allowed_tools: None,
+                    thinking_level: None
                 },
                 &repo.list().unwrap()
             )

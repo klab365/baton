@@ -502,6 +502,7 @@ mod tests {
             credential_id: None,
             skill_ids: vec![],
             allowed_tools: None,
+            thinking_level: None,
         });
         repo.create(&config).await.unwrap();
         let agent_path = root.path().join(".baton/agents/test.yml");
@@ -547,6 +548,7 @@ mod tests {
                 credential_id: None,
                 skill_ids: vec![],
                 allowed_tools: None,
+                thinking_level: None,
             });
             let files = encode(&config).unwrap();
             let serialized = &files["agents/test.yml"];
@@ -574,6 +576,7 @@ mod tests {
             credential_id: None,
             skill_ids: vec![],
             allowed_tools: None,
+            thinking_level: None,
         });
         let mut files = encode(&config).unwrap();
         assert!(files["agents/test.yml"].contains("model: openai/family/model"));
@@ -616,6 +619,7 @@ mod tests {
             credential_id: None,
             skill_ids: vec![],
             allowed_tools: None,
+            thinking_level: None,
         });
         let files = encode(&config).unwrap();
         assert_eq!(decode(&files).unwrap(), config);
@@ -635,6 +639,7 @@ mod tests {
             credential_id: None,
             skill_ids: vec![],
             allowed_tools: None,
+            thinking_level: None,
         });
         config.agents[0].instructions = "hello".into();
         repo.create(&config).await.unwrap();

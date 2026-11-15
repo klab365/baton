@@ -13,6 +13,18 @@ fn example() -> serde_json::Value {
 }
 
 #[test]
+fn agent_thinking_level_is_optional_and_round_trips() {
+    let mut value = example();
+    value["agents"][0]["thinkingLevel"] = serde_json::json!("high");
+    let config = parse_config(&value.to_string()).unwrap();
+    let saved = serde_json::to_value(config).unwrap();
+    assert_eq!(saved["agents"][0]["thinkingLevel"], "high");
+    assert!(parse_config(&example().to_string()).is_ok());
+    value["agents"][0]["thinkingLevel"] = serde_json::json!("unlimited");
+    assert!(parse_config(&value.to_string()).is_err());
+}
+
+#[test]
 fn legacy_pipeline_names_are_accepted_but_not_serialized() {
     use baton_core::domain::project::Pipeline;
 
