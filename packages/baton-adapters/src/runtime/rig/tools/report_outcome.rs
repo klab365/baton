@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct ReportOutcomeArgs {
     outcome: String,
     summary: String,
-    /// For blocked outcomes, explain why work cannot continue without human help; otherwise use an empty string.
+    /// For blocked outcomes, explain why work cannot continue; otherwise omit it or use an empty string.
+    #[serde(default)]
     blocker_reason: String,
-    /// For blocked outcomes, state the specific question or action needed from a human; otherwise use an empty string.
+    /// Optional actionable human request for blocked outcomes; otherwise use an empty string.
+    #[serde(default)]
     human_action: String,
 }
 
@@ -52,7 +54,7 @@ impl Tool for ReportOutcome {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. Include the complete authoritative handoff for the next step in this summary."
+            "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in this summary."
         )
     }
 
@@ -90,14 +92,15 @@ impl Tool for ReportOutcome {
         if outcome == Outcome::Blocked {
             let reason = args.blocker_reason.trim();
             let action = args.human_action.trim();
-            if reason.is_empty() || action.is_empty() {
+            if reason.is_empty() {
                 return Err(ToolExecutionError::invalid_args(
-                    "Blocked outcomes require a blocker reason and a specific human action",
+                    "Blocked outcomes require a blocker reason",
                 ));
             }
-            summary.push_str(&format!(
-                "\n\nBlocker: {reason}\nHuman action needed: {action}"
-            ));
+            summary.push_str(&format!("\n\nBlocker: {reason}"));
+            if !action.is_empty() {
+                summary.push_str(&format!("\nHuman action needed: {action}"));
+            }
         }
         if summary.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES {
             return Err(ToolExecutionError::invalid_args(
@@ -126,38 +129,54 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[tokio::test]
-    async fn blocked_requires_reason_and_human_action() {
+    async fn blocked_requires_reason_and_accepts_optional_human_action() {
         let decision = Arc::new(Mutex::new(None));
         let tool = ReportOutcome::new(vec![Outcome::Blocked], decision.clone());
         let schema = tool.parameters();
         assert!(
-            schema["required"]
+            !schema["required"]
                 .as_array()
                 .unwrap()
                 .contains(&serde_json::json!("blocker_reason"))
         );
         assert!(
-            schema["required"]
+            !schema["required"]
                 .as_array()
                 .unwrap()
                 .contains(&serde_json::json!("human_action"))
         );
         let mut context = ToolContext::default();
-        for (reason, action) in [("", "Provide credentials"), ("Missing credentials", "")] {
-            assert!(
-                tool.call(
-                    &mut context,
-                    super::ReportOutcomeArgs {
-                        outcome: "blocked".into(),
-                        summary: "Cannot continue".into(),
-                        blocker_reason: reason.into(),
-                        human_action: action.into(),
-                    }
-                )
-                .await
-                .is_err()
-            );
-        }
+        assert!(
+            tool.call(
+                &mut context,
+                super::ReportOutcomeArgs {
+                    outcome: "blocked".into(),
+                    summary: "Cannot continue".into(),
+                    blocker_reason: "  ".into(),
+                    human_action: String::new(),
+                }
+            )
+            .await
+            .is_err()
+        );
+        tool.call(
+            &mut context,
+            super::ReportOutcomeArgs {
+                outcome: "blocked".into(),
+                summary: "Cannot continue".into(),
+                blocker_reason: "Missing credentials".into(),
+                human_action: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decision.lock().unwrap().as_ref().unwrap().summary,
+            "Cannot continue\n\nBlocker: Missing credentials"
+        );
+
+        let decision = Arc::new(Mutex::new(None));
+        let tool = ReportOutcome::new(vec![Outcome::Blocked], decision.clone());
         tool.call(
             &mut context,
             super::ReportOutcomeArgs {
@@ -169,15 +188,20 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            decision
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .summary
-                .contains("Human action needed: Provide credentials")
+        assert_eq!(
+            decision.lock().unwrap().as_ref().unwrap().summary,
+            "Cannot continue\n\nBlocker: Missing credentials\nHuman action needed: Provide credentials"
         );
+    }
+
+    #[test]
+    fn blocker_reason_can_be_omitted_from_non_blocked_calls() {
+        let args: super::ReportOutcomeArgs = serde_json::from_value(serde_json::json!({
+            "outcome": "approved",
+            "summary": "Looks good"
+        }))
+        .unwrap();
+        assert_eq!(args.blocker_reason, "");
     }
 
     #[tokio::test]

@@ -146,11 +146,28 @@ impl AgentRuntime for Script {
             final_output: Option<String>,
             #[serde(default)]
             final_output_bytes: Option<usize>,
+            #[serde(default)]
+            blocker_reason: Option<String>,
+            #[serde(default)]
+            human_action: Option<String>,
         }
         if let Ok(decision) = serde_json::from_str::<FixtureDecision>(&output) {
+            let mut summary = decision.output.clone();
+            if decision.outcome == Outcome::Blocked
+                && let Some(reason) = decision.blocker_reason.as_deref()
+            {
+                summary.push_str(&format!("\n\nBlocker: {}", reason.trim()));
+                if let Some(action) = decision
+                    .human_action
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    summary.push_str(&format!("\nHuman action needed: {}", action.trim()));
+                }
+            }
             self.decision = Some(AgentDecision {
                 outcome: decision.outcome,
-                summary: decision.output.clone(),
+                summary,
             });
             Ok(decision.final_output_bytes.map_or_else(
                 || decision.final_output.unwrap_or(decision.output),
@@ -980,6 +997,69 @@ fn shell_failure_routes_with_output_to_next_step() {
             .contains("Exit status: 7")
     );
     assert!(run.steps[1].input.as_ref().unwrap().contains("diagnostic"));
+}
+
+#[test]
+fn blocked_handoffs_route_to_agent_and_human_and_are_persisted() {
+    for (destination, action, expected) in [
+        (
+            "agent",
+            None,
+            "Cannot access service\n\nBlocker: Missing credentials",
+        ),
+        (
+            "human",
+            Some("Grant access"),
+            "Cannot access service\n\nBlocker: Missing credentials\nHuman action needed: Grant access",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let mut json: serde_json::Value =
+            serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json"))
+                .unwrap();
+        json["pipelines"][0]["steps"] = if destination == "agent" {
+            serde_json::json!([
+                {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "transitions":[{"outcome":"blocked", "to":"assist"}]},
+                {"id":"assist", "name":"Assist", "type":"agent", "agentId":"reviewer", "transitions":[{"outcome":"completed", "to":null}]}
+            ])
+        } else {
+            serde_json::json!([
+                {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "transitions":[{"outcome":"blocked", "to":"assist"}]},
+                {"id":"assist", "name":"Human assistance", "type":"human"}
+            ])
+        };
+        let config = parse_config(&json.to_string()).unwrap();
+        let outcome = serde_json::json!({"outcome":"blocked", "output":"Cannot access service", "blocker_reason":"Missing credentials", "human_action":action});
+        let mut runtime = if destination == "agent" {
+            Script::new(&[
+                &outcome.to_string(),
+                r#"{"outcome":"completed","output":"Resolved"}"#,
+            ])
+        } else {
+            Script::new(&[&outcome.to_string()])
+        };
+        let run = start_pipeline(
+            &config,
+            "draft",
+            "task",
+            destination,
+            &mut runtime,
+            &fixture.repo(),
+        )
+        .unwrap();
+        assert_eq!(
+            run.status,
+            if destination == "agent" {
+                Status::Succeeded
+            } else {
+                Status::WaitingHuman
+            }
+        );
+        let stored = fixture.repo().load(destination).unwrap();
+        assert_eq!(stored, run);
+        assert_eq!(run.steps[0].output.as_deref(), Some(expected));
+        assert!(run.steps[1].input.as_deref().unwrap().contains(expected));
+    }
 }
 
 #[test]
