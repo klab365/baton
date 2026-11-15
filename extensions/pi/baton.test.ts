@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import baton from "./baton";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { choosePipeline, drive, manage } from "./baton";
 
 function ui(
@@ -16,6 +17,53 @@ function ui(
 		...overrides,
 	};
 }
+
+test("selects newest attempts by global attempt number, not stored placeholder order", async () => {
+	const messages: string[] = [];
+	const steps = Array.from({ length: 40 }, (_, index) => ({
+		stepId: `step-${index}`, attempt: 40 - index, status: "succeeded",
+	}));
+	steps[0] = { stepId: "latest", attempt: 41, status: "running" };
+	steps[1] = { stepId: "pending-placeholder", attempt: 0, status: "pending" };
+	await manage("inspect run-order", async () => ({ id: "run-order", status: "running", steps }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("latest");
+	expect(messages[0]).toContain('"stepId": "step-10"');
+	expect(messages[0]).not.toContain('"stepId": "step-39"');
+	expect(messages[0]).not.toContain("pending-placeholder");
+});
+
+test("bounds large cost summaries and preserves run identity and attempt details", async () => {
+	const messages: string[] = [];
+	const steps = Array.from({ length: 40 }, (_, attempt) => ({
+		stepId: `step-${attempt}`, attempt: attempt + 1, status: "succeeded", durationMs: 1,
+		usage: { estimatedCost: "0.01", priceSource: "x".repeat(1000), inputTokens: 1 },
+	}));
+	await manage("inspect run-long", async () => ({ id: "run-long", status: "succeeded", steps }), ui(), (text) => messages.push(text));
+	expect(messages[0].length).toBeLessThanOrEqual(8000);
+	expect(messages[0]).toContain("run-long");
+	expect(messages[0]).toContain("step-39");
+	expect(messages[0]).toContain("omittedEarlierSteps");
+});
+
+test("Pi inspection summarizes persisted metrics without treating missing values as zero", async () => {
+	const messages: string[] = [];
+	await manage("inspect run-1", async () => ({ id: "run-1", steps: [
+		{ stepId: "build", attempt: 1, status: "succeeded", durationMs: 0, usage: { inputTokens: 0, outputTokens: 4, cacheReadTokens: 2, estimatedCost: "0.01", priceSource: "catalog", priceCheckedAt: "now" } },
+		{ stepId: "build", attempt: 2, status: "failed", durationMs: null, selectedTransition: { to: "build" }, usage: { inputTokens: 1 } },
+		{ stepId: "finish", attempt: 0, status: "pending" },
+	] }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Attempts: 2 · retries: 1");
+	expect(messages[0]).toContain("1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
+	expect(messages[0]).toContain("Run cost: unavailable (currency/unit not recorded)");
+	expect(messages[0]).toContain("Attempt costs: 0.01 · catalog · checked now");
+	expect(messages[0]).toContain("Tokens input/output/cache read/cache write: 1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
+	expect(messages[0]).toContain("Duration: 0 ms (partial)");
+});
+
+test("shipped single-file Pi extension has no project-relative runtime imports", async () => {
+	const source = await readFile(resolve(import.meta.dir, "baton.ts"), "utf8");
+	expect(source).not.toMatch(/from [\"']\.\.?\//);
+});
 
 test("lists and inspects persisted work sessions without executing them", async () => {
 	const calls: string[][] = [];
@@ -63,7 +111,7 @@ test("marks omitted work sessions and inspection data when output is bounded", a
 	await manage("inspect run-1", async () => ({
 		id: "run-1", steps: Array.from({ length: 32 }, (_, i) => ({ stepId: `step-${i}`, output: "x".repeat(1200) })),
 	}), ui(), (text) => messages.push(text));
-	expect(messages[0]).toContain("Work session details");
+	expect(messages[0]).toContain("Work session run-1");
 	expect(messages[0]).toContain("2 earlier steps omitted");
 	expect(messages[0]).toContain("output truncated");
 });
