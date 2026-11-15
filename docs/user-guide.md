@@ -65,7 +65,7 @@ A route to **End run** ends successfully except for `failed`, `blocked` or `reje
 
 ### Ask a person for clarification
 
-A planner can route `blocked` to a human step with its question in its final response; configure the human step's `responded` route back to the planner. This is a new agent attempt, not an in-turn chat. The response becomes the next handoff. Earlier results are not automatically included; agents must carry forward any context needed by later steps. There is currently no custom `needs_input` outcome or dedicated ask-user tool.
+A planner can route `blocked` to a human step with its question in its final response; configure the human step's `responded` route back to the planner. This is a new agent attempt, not an in-turn chat. The response becomes the next handoff. Explicit human responses remain available to later steps with their source; other earlier results are not automatically included. There is currently no custom `needs_input` outcome or dedicated ask-user tool.
 
 ## Tasks and worktrees
 
@@ -79,7 +79,7 @@ Baton does not automatically commit, merge or push. A pipeline may configure an 
 
 ## Runs and human decisions
 
-Open **Runs** and select a run to see its status, configured steps, ordered attempts, inputs and handoffs, execution trace and events. A step can have multiple attempts when a pipeline loops. Each step receives the immediately preceding handoff. Agent steps omit the original task by default; set `includeTask: true` to include it in newly supplied context. Earlier attempts remain available for inspection but are not automatically included. A reused agent session may still contain earlier conversation. Run state persists across a human pause and backend restart. Trace availability depends on the runtime; older runs may not contain a trace. Treat run data and transcripts as potentially sensitive.
+Open **Runs** and select a run to see its status, configured steps, ordered attempts, inputs and handoffs, execution trace and events. A step can have multiple attempts when a pipeline loops. Each step receives the immediately preceding handoff and explicit human responses from earlier human steps, with their provenance. Later corrections take precedence where applicable. Agent steps include the original task when there are explicit human responses; otherwise they omit it by default. Set `includeTask: true` to always include it in newly supplied context. Other earlier attempts remain available for inspection but are not automatically included. A reused agent session may still contain earlier conversation. Run state persists across a human pause and backend restart. Trace availability depends on the runtime; older runs may not contain a trace. Treat run data and transcripts as potentially sensitive.
 
 When a run reaches a human step, it enters `waitingHuman`. In **Action required**, read the step context, optionally enter a response and select one of the configured outcomes. The chosen outcome determines the route; the response is the next handoff. Waiting has no automatic timeout or approval. A run can be cancelled while running or waiting; cancellation is cooperative for in-flight work, and a cancelled run cannot be resumed. Its task worktree remains until the task is done or deleted.
 

@@ -309,6 +309,11 @@ pub struct WorkItem {
     pub allowed_outcomes: Vec<Outcome>,
     pub checks: Vec<WorkCheck>,
     pub last_result: Option<WorkResult>,
+    /// Explicit human responses in chronological order; later corrections take precedence.
+    pub human_decisions: Vec<String>,
+    /// Original task accompanying explicit human decisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_task: Option<String>,
     /// Present only immediately after a human response when prior context was composed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handoff: Option<String>,
@@ -608,6 +613,7 @@ async fn next_work_handler(
             );
         }
     }
+    let human_decisions = crate::features::pipeline_engine::human_decisions(&run, pipeline);
     Ok(WorkItem {
         run_id: run.id.clone(),
         revision: session.revision,
@@ -619,6 +625,8 @@ async fn next_work_handler(
         } else {
             None
         },
+        original_task: (!human_decisions.is_empty()).then(|| run.task.clone()),
+        human_decisions,
         last_result: run.steps.iter().rev().find_map(|s| {
             s.output.as_ref().map(|output| WorkResult {
                 step_id: s.step_id.clone(),

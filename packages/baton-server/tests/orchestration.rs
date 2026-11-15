@@ -698,7 +698,9 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
                     }
                     3 => {
                         assert!(input.contains("Plan ready"));
-                        assert!(!input.contains("Tokio, WASM and Embassy"));
+                        assert!(input.contains("Original task:\ntimers"));
+                        assert!(input.contains("Explicit human decisions"));
+                        assert!(input.contains("Tokio, WASM and Embassy"));
                         (Outcome::Completed, "Built")
                     }
                     _ => panic!("unexpected call"),

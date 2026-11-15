@@ -142,6 +142,39 @@ async fn external_human_response_exposes_composed_handoff_to_next_worker() {
             .contains("use cached artifact")
     );
     assert_eq!(next["lastResult"]["output"], "use cached artifact");
+    assert!(
+        next["humanDecisions"][0]
+            .as_str()
+            .unwrap()
+            .contains("use cached artifact")
+    );
+    let blocked_again = f.call(&app, json!({"command":"submit","id":run["id"],"result":{
+        "revision":next["revision"],"stepId":"build","attempt":next["attempt"],"outcome":"blocked","summary":"new blocker"
+    }})).await.unwrap();
+    let attempt = blocked_again["steps"].as_array().unwrap().last().unwrap()["attempt"].clone();
+    f.call(&app, json!({"command":"respond","id":run["id"],"action":{
+        "revision":blocked_again["session"]["revision"],"stepId":"help","attempt":attempt,"outcome":"responded","response":"correction: use fresh artifact"
+    }})).await.unwrap();
+    drop(app);
+    let app = f.app();
+    let recovered = f
+        .call(&app, json!({"command":"next","id":run["id"]}))
+        .await
+        .unwrap();
+    let decisions = recovered["humanDecisions"].as_array().unwrap();
+    assert_eq!(decisions.len(), 2);
+    assert!(
+        decisions[0]
+            .as_str()
+            .unwrap()
+            .contains("use cached artifact")
+    );
+    assert!(
+        decisions[1]
+            .as_str()
+            .unwrap()
+            .contains("correction: use fresh artifact")
+    );
 }
 
 #[tokio::test]
@@ -846,7 +879,7 @@ async fn standalone_lock_excludes_other_work_processes_without_initializing_serv
 }
 
 #[tokio::test]
-async fn next_leaves_context_with_pi_while_explicit_status_retains_decisions() {
+async fn next_restores_human_decisions_after_restart_without_replaying_trace() {
     let f = Fixture::new();
     let mut config = common::read_config(&f.path);
     config["pipelines"][0]["steps"] = json!([
@@ -876,7 +909,13 @@ async fn next_leaves_context_with_pi_while_explicit_status_retains_decisions() {
     for field in ["input", "handoff", "task", "source", "steps"] {
         assert!(next.get(field).is_none(), "next must not replay {field}");
     }
-    assert!(!next.to_string().contains(&answer));
+    assert!(
+        next["humanDecisions"][0]
+            .as_str()
+            .unwrap()
+            .contains(&answer)
+    );
+    assert_eq!(next["originalTask"], start["task"]);
     assert_eq!(next["step"]["id"], "review");
     let saved = f
         .call(&app, json!({"command":"status", "id":id}))
