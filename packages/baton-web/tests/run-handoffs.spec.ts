@@ -1,5 +1,42 @@
 import { expect, test } from "@playwright/test";
 
+test("failure summary links to the matching saved timeline entry", async ({
+	page,
+}) => {
+	const run = {
+		id: "failed-run",
+		pipelineId: "factory",
+		task: "Example",
+		startedAt: "2026-01-01T00:00:00Z",
+		status: "failed",
+		events: [],
+		trace: [],
+		pendingActions: [],
+		configSnapshot: null,
+		steps: [
+			{ stepId: "legacy", attempt: 0, status: "succeeded" },
+			{
+				stepId: "review",
+				attempt: 7,
+				status: "failed",
+				error: "review failed",
+			},
+		],
+	};
+	await page.route("**/api/**", (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path === "/api/runs/failed-run/events") return route.abort();
+		if (path === "/api/runs/failed-run") return route.fulfill({ json: run });
+		return route.fulfill({
+			json: { status: "ready", name: "Test", config: { pipelines: [] } },
+		});
+	});
+	await page.goto("/runs/failed-run");
+	await expect(
+		page.getByRole("link", { name: "View attempt 7 in timeline" }),
+	).toHaveAttribute("href", "#attempt-entry-1");
+});
+
 test("compares legacy visits and attributes structured evidence to its agent", async ({
 	page,
 }) => {

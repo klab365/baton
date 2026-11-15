@@ -193,7 +193,7 @@ async function cancel() {
 
 {#if loopWarning}<div class="failure-summary"><StatusMessage tone="warning" title="Possible unproductive loop">{loopWarning}</StatusMessage></div>{/if}
 
-{#if failure}<div class="failure-summary"><StatusMessage tone="error" title={failure.title}><p>{failure.detail}</p>{#if failure.attempt}<a href={`#attempt-entry-${attempts.findIndex((step) => step.attempt === failure.attempt)}`}>View attempt {failure.attempt} in timeline</a>{:else}<a href="#diagnostics">View run diagnostics</a>{/if}</StatusMessage></div>{/if}
+{#if failure}<div class="failure-summary"><StatusMessage tone="error" title={failure.title}><p>{failure.detail}</p>{#if failure.attempt && attempts.some((step) => step.attempt === failure.attempt)}<a href={`#attempt-entry-${attempts.findIndex((step) => step.attempt === failure.attempt)}`}>View attempt {failure.attempt} in timeline</a>{:else}<a href="#diagnostics">View run diagnostics</a>{/if}</StatusMessage></div>{/if}
 
 {#if data.run.status === "waitingHuman"}
 <div class="action-panel"><DetailPanel title="Your input is needed">
