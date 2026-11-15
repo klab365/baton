@@ -153,16 +153,16 @@ impl AgentRuntime for Script {
         }
         if let Ok(decision) = serde_json::from_str::<FixtureDecision>(&output) {
             let mut summary = decision.output.clone();
-            if decision.outcome == Outcome::Blocked {
-                if let Some(reason) = decision.blocker_reason.as_deref() {
-                    summary.push_str(&format!("\n\nBlocker: {}", reason.trim()));
-                    if let Some(action) = decision
-                        .human_action
-                        .as_deref()
-                        .filter(|s| !s.trim().is_empty())
-                    {
-                        summary.push_str(&format!("\nHuman action needed: {}", action.trim()));
-                    }
+            if decision.outcome == Outcome::Blocked
+                && let Some(reason) = decision.blocker_reason.as_deref()
+            {
+                summary.push_str(&format!("\n\nBlocker: {}", reason.trim()));
+                if let Some(action) = decision
+                    .human_action
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    summary.push_str(&format!("\nHuman action needed: {}", action.trim()));
                 }
             }
             self.decision = Some(AgentDecision {
