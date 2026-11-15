@@ -656,7 +656,7 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
     }
 }
 
-fn repeated_blocker(
+pub(crate) fn repeated_blocker(
     run: &PipelineRun,
     pipeline: &crate::domain::project::Pipeline,
     index: usize,
@@ -701,6 +701,10 @@ fn repeated_blocker(
         }
     }
     false
+}
+
+pub(crate) fn repeated_blocker_message(step_id: &str) -> String {
+    format!("Step {step_id} repeated an identical blocker after a human response")
 }
 
 fn step_attempt_count(run: &PipelineRun, step_id: &str) -> usize {
@@ -1006,10 +1010,7 @@ pub fn execute_graph(
                     publish(
                         repository,
                         &mut run,
-                        Some(format!(
-                            "Step {} repeated an identical blocker after a human response",
-                            step.id
-                        )),
+                        Some(repeated_blocker_message(&step.id)),
                     )?;
                 }
             }
@@ -1204,6 +1205,17 @@ mod tests {
         run.steps = vec![response, blocked, current];
         assert!(repeated_blocker(&run, &pipeline, 2, " which   BACKENDS? "));
         assert!(!repeated_blocker(&run, &pipeline, 2, "What timer API?"));
+        let reloaded: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        assert!(repeated_blocker(
+            &reloaded,
+            &pipeline,
+            2,
+            " WHICH backends? "
+        ));
+        run.steps[1].step_id = "another-step".into();
+        assert!(!repeated_blocker(&run, &pipeline, 2, "Which backends?"));
+        run.steps[1].step_id = pipeline.steps[0].id.clone();
         run.steps[0].outcome = Some(Outcome::Rejected);
         assert!(!repeated_blocker(&run, &pipeline, 2, "Which backends?"));
     }

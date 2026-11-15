@@ -151,6 +151,14 @@ async fn external_human_response_exposes_composed_handoff_to_next_worker() {
     let blocked_again = f.call(&app, json!({"command":"submit","id":run["id"],"result":{
         "revision":next["revision"],"stepId":"build","attempt":next["attempt"],"outcome":"blocked","summary":"new blocker"
     }})).await.unwrap();
+    assert!(
+        !blocked_again["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["message"]
+                == "Step build repeated an identical blocker after a human response")
+    );
     let attempt = blocked_again["steps"].as_array().unwrap().last().unwrap()["attempt"].clone();
     f.call(&app, json!({"command":"respond","id":run["id"],"action":{
         "revision":blocked_again["session"]["revision"],"stepId":"help","attempt":attempt,"outcome":"responded","response":"correction: use fresh artifact"
@@ -174,6 +182,31 @@ async fn external_human_response_exposes_composed_handoff_to_next_worker() {
             .as_str()
             .unwrap()
             .contains("correction: use fresh artifact")
+    );
+    let repeated = f.call(&app, json!({"command":"submit","id":run["id"],"result":{
+        "revision":recovered["revision"],"stepId":"build","attempt":recovered["attempt"],"outcome":"blocked","summary":" NEW   BLOCKER "
+    }})).await.unwrap();
+    assert_eq!(repeated["currentStep"], "help");
+    assert_eq!(repeated["status"], "waitingHuman");
+    drop(app);
+    let reloaded = f
+        .call(&f.app(), json!({"command":"status","id":run["id"]}))
+        .await
+        .unwrap();
+    assert!(
+        reloaded["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["message"]
+                == "Step build repeated an identical blocker after a human response")
+    );
+    assert!(
+        reloaded["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["output"] == " NEW   BLOCKER ")
     );
 }
 

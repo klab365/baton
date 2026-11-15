@@ -439,6 +439,52 @@ fn planning_blocker_human_response_returns_to_plan_with_both_contexts() {
 }
 
 #[test]
+fn managed_repeated_blocker_warns_and_preserves_transition_after_reload() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({"id":"plan","name":"Plan","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"help"},{"outcome":"completed","to":null}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"help","name":"Help","type":"human","transitions":[{"outcome":"responded","to":"plan"}]})).unwrap(),
+    ];
+    let repository = fixture.repo();
+    let waiting = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "repeated-blocker",
+        &mut Script::new(&[
+            r#"{"outcome":"blocked","output":"Need decision","blocker_reason":"unclear"}"#,
+        ]),
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(waiting.status, Status::WaitingHuman);
+    let resumed = resume_human(
+        "repeated-blocker",
+        Outcome::Responded,
+        "Use A",
+        &mut Script::new(&[
+            r#"{"outcome":"blocked","output":"Need decision","blocker_reason":"unclear"}"#,
+        ]),
+        &repository,
+    )
+    .unwrap();
+    assert_eq!(resumed.status, Status::WaitingHuman);
+    assert_eq!(resumed.current_step.as_deref(), Some("help"));
+    let reloaded = repository.load("repeated-blocker").unwrap();
+    assert!(reloaded.events.iter().any(|event| event.message.as_deref()
+        == Some("Step plan repeated an identical blocker after a human response")));
+    assert_eq!(
+        reloaded
+            .steps
+            .iter()
+            .filter(|step| step.step_id == "plan" && step.outcome == Some(Outcome::Blocked))
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn implementation_blocker_debug_human_response_returns_to_build() {
     let fixture = Fixture::new();
     let mut graph = config();
