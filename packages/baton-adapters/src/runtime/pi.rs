@@ -425,7 +425,9 @@ fn execute_once(
                 && stderr.contains(" not found. use --list-models to see available models.")
             {
                 "configured model was not found"
-            } else if stderr.starts_with("no api key found for ") && stderr.lines().count() == 1 {
+            } else if stderr.lines().next().is_some_and(|line| {
+                line.starts_with("no api key found for ") && line.ends_with('.')
+            }) {
                 "provider API key is not configured"
             } else {
                 "no safe diagnostic available"

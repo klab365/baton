@@ -363,7 +363,7 @@ printf 'done'
         runtime.pi_command = pi.clone().into();
         std::fs::write(
             &pi,
-            "#!/bin/sh\necho 'No API key found for private-provider.' >&2\nexit 7\n",
+            "#!/bin/sh\nprintf 'No API key found for private-provider.\\n\\nLogin with pi auth login\\nSee /private/path/config.json\\n' >&2\nexit 7\n",
         )
         .unwrap();
         let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
