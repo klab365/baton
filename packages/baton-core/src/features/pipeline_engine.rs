@@ -567,6 +567,33 @@ pub fn validate_handoff(run: &PipelineRun) -> Result<(), String> {
     Ok(())
 }
 
+/// Explicit human responses in chronological order, never agent-generated summaries.
+pub fn human_decisions(
+    run: &PipelineRun,
+    pipeline: &crate::domain::project::Pipeline,
+) -> Vec<String> {
+    run.steps
+        .iter()
+        .filter(|attempt| {
+            attempt.status == Status::Succeeded
+                && pipeline
+                    .steps
+                    .iter()
+                    .any(|step| step.id == attempt.step_id && step.is_human())
+        })
+        .filter_map(|attempt| {
+            let response = attempt.output.as_deref()?.trim();
+            if response.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "Human step {} (attempt {}, outcome {:?}):\n{}",
+                attempt.step_id, attempt.attempt, attempt.outcome, response
+            ))
+        })
+        .collect()
+}
+
 pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline) -> String {
     let include_task = pipeline
         .steps
@@ -579,8 +606,10 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
             _ => true,
         })
         .unwrap_or(true);
+    let decisions = human_decisions(run, pipeline);
     let first_step = run.steps.iter().all(|attempt| attempt.attempt == 0);
     if first_step
+        && decisions.is_empty()
         && include_task
         && run
             .handoff
@@ -590,7 +619,7 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
         return run.task.clone();
     }
     let mut parts = Vec::new();
-    if include_task {
+    if include_task || !decisions.is_empty() {
         parts.push(format!("Original task:\n{}", run.task));
     }
     let handoff = run.handoff.as_ref().or_else(|| {
@@ -600,6 +629,9 @@ pub fn step_input(run: &PipelineRun, pipeline: &crate::domain::project::Pipeline
             .max_by_key(|attempt| attempt.attempt)
             .and_then(|attempt| attempt.output.as_ref())
     });
+    if !decisions.is_empty() {
+        parts.push(format!("Explicit human decisions (chronological; later corrections supersede earlier decisions where applicable):\n{}", decisions.join("\n\n")));
+    }
     if let Some(handoff) = handoff
         && !(first_step && handoff == &run.task)
     {
@@ -1174,6 +1206,49 @@ mod tests {
         assert!(!repeated_blocker(&run, &pipeline, 2, "What timer API?"));
         run.steps[0].outcome = Some(Outcome::Rejected);
         assert!(!repeated_blocker(&run, &pipeline, 2, "Which backends?"));
+    }
+
+    #[test]
+    fn human_decisions_survive_handoffs_corrections_and_reload() {
+        let mut config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &mut config.pipelines[0];
+        let human = serde_json::from_str(r#"{"id":"help","name":"Help","type":"human"}"#).unwrap();
+        pipeline.steps.push(human);
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"original", "startedAt":"now",
+            "status":"running", "steps":[], "currentStep":pipeline.steps[0].id, "handoff":"builder handoff"
+        })).unwrap();
+        for (attempt, response) in [
+            (1, "List Pi models like Rig"),
+            (3, "Correction: list only available Pi models"),
+        ] {
+            let mut decision = pending(pipeline.steps.last().unwrap());
+            decision.attempt = attempt;
+            decision.status = Status::Succeeded;
+            decision.output = Some(response.into());
+            decision.outcome = Some(Outcome::Responded);
+            run.steps.push(decision);
+        }
+        let mut agent = pending(&pipeline.steps[0]);
+        agent.attempt = 2;
+        agent.status = Status::Succeeded;
+        agent.output = Some("unverified agent summary".into());
+        run.steps.insert(1, agent);
+        let recovered: PipelineRun =
+            serde_json::from_str(&serde_json::to_string(&run).unwrap()).unwrap();
+        let input = step_input(&recovered, pipeline);
+        assert!(input.contains("Original task:\noriginal"));
+        assert!(input.contains("builder handoff"));
+        assert!(input.contains("Human step help (attempt 1"));
+        assert!(
+            input.find("List Pi models like Rig").unwrap()
+                < input
+                    .find("Correction: list only available Pi models")
+                    .unwrap()
+        );
+        assert!(!input.contains("unverified agent summary"));
+        assert_eq!(human_decisions(&recovered, pipeline).len(), 2);
     }
 
     #[test]
