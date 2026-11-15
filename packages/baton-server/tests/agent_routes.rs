@@ -28,6 +28,54 @@ async fn json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn pi_model_route_returns_only_provider_scoped_models() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = fixture();
+    let pi = directory.join("fake-pi");
+    std::fs::write(
+        &pi,
+        "#!/bin/sh\nprintf 'provider model context\\nanthropic claude-4 100K\\nanthropic custom/model-v2 32K\\nopenai gpt-4.1 1M\\n'; echo hidden-secret >&2\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let app = router(AppState::new_with_pi_command(
+        directory.clone(),
+        pi.into_os_string(),
+    ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/pi/models/anthropic")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json(response).await,
+        serde_json::json!([
+            {"id":"claude-4", "label":"claude-4"},
+            {"id":"custom/model-v2", "label":"custom/model-v2"}
+        ])
+    );
+    let invalid_provider = app
+        .oneshot(
+            Request::get("/api/pi/models/provider%3Becho")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_provider.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!json(invalid_provider).await.to_string().contains("secret"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[tokio::test]
 async fn agent_routes_accept_direct_runtime_configuration_and_enforce_pipeline_references() {
     let directory = fixture();

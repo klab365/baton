@@ -11,6 +11,8 @@ import MultilineInput from "../../components/MultilineInput.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
 import type { Agent } from "../../lib/generated/Agent";
+import type { PiModelOption } from "../../lib/generated/PiModelOption";
+import { piProviders } from "../../lib/pi-providers";
 
 const tools = [
 	"read",
@@ -29,7 +31,6 @@ type Credential = {
 	status: string;
 };
 type CredentialType = { id: string; label: string; provider: string | null };
-type ModelOption = { id: string; label: string };
 type Configuration = {
 	revision: string;
 	agents: Agent[];
@@ -55,9 +56,26 @@ let busy = $state(false);
 let error = $state("");
 let message = $state("");
 let deleting = $state(false);
-let models = $state<ModelOption[]>([]);
+let models = $state<PiModelOption[]>([]);
 let modelsLoading = $state(false);
 let modelsError = $state("");
+let piProvider = $state("");
+let piModel = $state("");
+let piCustomSelected = $state(false);
+let piDefaultSelected = $state(false);
+let piModels = $state<PiModelOption[]>([]);
+let piModelsLoading = $state(false);
+let piModelsError = $state("");
+let piModelsRequest = 0;
+let piModelDebounce: ReturnType<typeof setTimeout> | undefined;
+
+function parsePiModel(value: string | null): [string, string] {
+	if (!value) return ["", ""];
+	const separator = value.indexOf("/");
+	return separator < 0
+		? ["", value]
+		: [value.slice(0, separator), value.slice(separator + 1)];
+}
 
 function open(agent?: Agent) {
 	if (!config) return;
@@ -83,6 +101,16 @@ function open(agent?: Agent) {
 	models = [];
 	modelsError = "";
 	if (draft.credentialId) void loadModels(draft.credentialId);
+	[piProvider, piModel] = parsePiModel(draft.model);
+	piCustomSelected =
+		Boolean(piProvider) && !piProviders.some((item) => item.id === piProvider);
+	piDefaultSelected = draft.provider === "pi" && !draft.model;
+	piModelsRequest++;
+	clearTimeout(piModelDebounce);
+	piModels = [];
+	piModelsLoading = false;
+	piModelsError = "";
+	if (draft.provider === "pi" && piProvider) void loadPiModels(piProvider);
 }
 async function loadModels(credentialId: string) {
 	modelsLoading = true;
@@ -114,6 +142,63 @@ async function loadModels(credentialId: string) {
 		modelsLoading = false;
 	}
 }
+function selectPiProvider(value: string, custom: boolean) {
+	const useDefault = value === "default";
+	const provider = useDefault || custom ? "" : value;
+	if (useDefault || provider !== piProvider) piModel = "";
+	piCustomSelected = custom;
+	piDefaultSelected = useDefault;
+	piProvider = provider;
+	piModelsRequest++;
+	clearTimeout(piModelDebounce);
+	piModels = [];
+	piModelsLoading = false;
+	piModelsError = "";
+	if (provider) void loadPiModels(provider);
+}
+
+function schedulePiModelLoad(provider: string) {
+	piModelsRequest++;
+	clearTimeout(piModelDebounce);
+	piModels = [];
+	piModelsError = "";
+	piModelsLoading = Boolean(provider);
+	if (provider)
+		piModelDebounce = setTimeout(() => void loadPiModels(provider), 250);
+}
+
+async function loadPiModels(provider: string) {
+	const request = ++piModelsRequest;
+	piModelsLoading = true;
+	piModelsError = "";
+	try {
+		const response = await fetch(
+			`/api/pi/models/${encodeURIComponent(provider)}`,
+		);
+		if (!response.ok) {
+			const body: unknown = await response.json().catch(() => null);
+			const message =
+				typeof body === "object" &&
+				body !== null &&
+				"error" in body &&
+				typeof body.error === "string"
+					? body.error
+					: "Could not list Pi models";
+			throw new Error(message);
+		}
+		const options: PiModelOption[] = await response.json();
+		if (request === piModelsRequest && provider === piProvider)
+			piModels = options;
+	} catch (cause) {
+		if (request === piModelsRequest && provider === piProvider) {
+			piModels = [];
+			piModelsError = `${cause instanceof Error ? cause.message : "Pi model list is unavailable"}; enter the model ID manually.`;
+		}
+	} finally {
+		if (request === piModelsRequest) piModelsLoading = false;
+	}
+}
+
 async function selectCredential(credentialId: string) {
 	if (!draft) return;
 	draft.credentialId = credentialId || null;
@@ -171,14 +256,14 @@ async function save(remove = false) {
 			{#if !draft}
 				<EmptyState title="Select or create an agent" description="Agents hold instructions, provider credentials, model and skills." />
 			{:else}
-				<form onsubmit={(event) => { event.preventDefault(); if (draft?.provider === "pi") draft.model = draft.model?.trim() || null; save(); }}>
+				<form onsubmit={(event) => { event.preventDefault(); if (draft?.provider === "pi") { const provider = piProvider.trim(); const model = piModel.trim(); if (provider.includes("/")) { error = "A Pi provider ID cannot contain '/'. Enter the provider name only."; return; } if (provider && !/^[A-Za-z0-9_.-]+$/.test(provider)) { error = "Pi provider IDs may contain only letters, numbers, dots, hyphens and underscores."; return; } if (provider && !model) { error = "Select a Pi model for this provider, or select 'Use Pi configured default' to use Pi's configured default."; return; } if (!provider && model) { error = "Choose a provider for this model, or select Pi configured default."; return; } draft.model = provider && model ? `${provider}/${model}` : null; } save(); }}>
 					<div class="editor-header"><div><span class="eyebrow">{editing ? "Editing agent" : "New agent"}</span>{#if !editing}<h2>{draft.id || "Untitled agent"}</h2>{/if}</div><div><Button variant="secondary" disabled={busy} onclick={() => { draft = null; error = ""; }}>Cancel</Button> <Button type="submit" loading={busy}>Save agent</Button></div></div>
 					<section class="form-section" aria-labelledby="agent-runtime-heading"><header><span class="eyebrow">Runtime</span><h3 id="agent-runtime-heading">Identity and model</h3></header><div class="form-grid">
 						<div class="agent-id-field"><Field label="Agent ID" for="agent-id" required hint="IDs cannot be changed after creation.">{#snippet children({ describedBy })}<input id="agent-id" bind:value={draft!.id} required disabled={busy || editing} aria-describedby={describedBy} />{/snippet}</Field></div>
-						<Field label="Runtime" for="agent-provider" required hint="Pi uses its local CLI authentication and does not use a Baton credential.">{#snippet children({ describedBy })}<ResourceSelect id="agent-provider" value={draft!.provider} items={[{ id: "rig", name: "Rig" }, { id: "pi", name: "Pi CLI" }, { id: "fake", name: "Fake" }]} placeholder="Select runtime" label="Agent runtime" {describedBy} disabled={busy} onValueChange={(provider) => { if (draft) { draft.provider = provider as Agent["provider"]; if (provider === "pi" || provider === "fake") { draft.credentialId = null; draft.model = null; } } }} />{/snippet}</Field>
+						<Field label="Runtime" for="agent-provider" required hint="Pi uses its local CLI authentication and does not use a Baton credential.">{#snippet children({ describedBy })}<ResourceSelect id="agent-provider" value={draft!.provider} items={[{ id: "rig", name: "Rig" }, { id: "pi", name: "Pi CLI" }, { id: "fake", name: "Fake" }]} placeholder="Select runtime" label="Agent runtime" {describedBy} disabled={busy} onValueChange={(provider) => { if (draft) { draft.provider = provider as Agent["provider"]; if (provider === "pi" || provider === "fake") { draft.credentialId = null; draft.model = null; piProvider = ""; piModel = ""; piCustomSelected = false; piDefaultSelected = false; piModelsRequest++; clearTimeout(piModelDebounce); piModels = []; piModelsLoading = false; piModelsError = ""; } } }} />{/snippet}</Field>
 						{#if draft.provider === "rig"}<div class="credential-field"><Field label="Credential" for="agent-credential" required hint="Credentials are managed in Settings and can be reused by agents.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-credential" value={draft!.credentialId ?? ""} items={availableCredentials} placeholder="Select a credential" label="Available credentials" {describedBy} {invalid} required disabled={busy} onValueChange={(credentialId) => void selectCredential(credentialId)} />{/snippet}</Field></div>
 						<Field label="Model" for="agent-model" required hint="Available models are loaded from the provider.">{#snippet children({ describedBy, invalid })}<ResourceSelect id="agent-model" value={draft!.model?.split("/").slice(1).join("/") ?? ""} onValueChange={(model) => { if (draft) { const credential = (data.credentials as Credential[]).find((item) => item.id === draft?.credentialId); const type = (data.credentialTypes as CredentialType[]).find((item) => item.id === credential?.credentialType); draft.model = type?.provider && model ? `${type.provider}/${model}` : null; } }} items={models.map((model) => ({ id: model.id, name: model.label }))} placeholder={modelsLoading ? "Loading models…" : "Select a model"} label="Available models" {describedBy} {invalid} required disabled={busy || modelsLoading || !draft!.credentialId} />{#if modelsError}<small role="alert" class="status-error">{modelsError}</small>{/if}{/snippet}</Field>
-					{:else if draft.provider === "pi"}<Field label="Pi model" for="pi-model" hint="Optional Pi model ID, such as provider/model-id; leave blank to use Pi's configured default.">{#snippet children({ describedBy })}<input id="pi-model" bind:value={draft!.model} disabled={busy} aria-describedby={describedBy} />{/snippet}</Field>{/if}</div></section>
+					{:else if draft.provider === "pi"}<Field label="Pi provider" for="pi-provider" hint="Choose a documented provider or select Other / custom and enter its Pi provider ID.">{#snippet children({ describedBy })}<ResourceSelect id="pi-provider" value={piDefaultSelected ? "default" : piProviders.some((item) => item.id === piProvider) ? piProvider : piCustomSelected ? "custom" : ""} items={[{ id: "default", name: "Use Pi configured default" }, ...piProviders]} placeholder="Select Pi provider" label="Pi providers" {describedBy} disabled={busy} onValueChange={(value) => selectPiProvider(value, value === "custom")} />{#if piCustomSelected || (piProvider && !piProviders.some((item) => item.id === piProvider))}<input aria-label="Custom Pi provider ID" value={piProvider} disabled={busy} placeholder="Pi provider ID" oninput={(event) => { if (event.currentTarget.value !== piProvider) piModel = ""; piDefaultSelected = false; piProvider = event.currentTarget.value; schedulePiModelLoad(piProvider); }} />{/if}{/snippet}</Field><Field label="Pi model" for="pi-model-picker" hint="Select a locally listed model or enter an ID manually. Pi's list may be incomplete; use `pi --offline --list-models PROVIDER` on the runtime host as a fallback. Custom IDs are accepted. To use Pi's configured default, select &quot;Use Pi configured default&quot;; Baton then saves no provider or model. Authentication status: unknown; Pi may use local or environment credentials.">{#snippet children({ describedBy })}<ResourceSelect id="pi-model-picker" value={piModels.some((model) => model.id === piModel) ? piModel : ""} items={piModels.map((model) => ({ id: model.id, name: model.label }))} placeholder={piModelsLoading ? "Loading Pi models…" : "Available Pi models"} label="Pi models" {describedBy} disabled={busy || piModelsLoading || !piModels.length} onValueChange={(model) => piModel = model} />{#if piModelsError}<small role="alert" class="status-error">{piModelsError}</small>{:else if piProvider && !piModelsLoading && !piModels.length}<small role="status">No models were listed; enter a model ID manually or select "Use Pi configured default".</small>{/if}<input id="pi-model" aria-label="Pi model ID (manual)" bind:value={piModel} disabled={busy} aria-describedby={describedBy} placeholder="Enter model ID, e.g. claude-sonnet-4" />{/snippet}</Field>{/if}</div></section>
 					<section class="form-section" aria-labelledby="agent-instructions-heading"><header><span class="eyebrow">Instructions</span><h3 id="agent-instructions-heading">Behavior</h3></header><Field label="Instructions" for="agent-prompt" required hint="Define this agent’s reusable role, scope, and response style.">{#snippet children({ describedBy })}<MultilineInput id="agent-prompt" name="instructions" bind:value={draft!.instructions} rows={6} placeholder="Describe this agent's role and behavior." disabled={busy} {describedBy} required />{/snippet}</Field>
 					</section>
 					<section class="references form-section" aria-label="Tools">

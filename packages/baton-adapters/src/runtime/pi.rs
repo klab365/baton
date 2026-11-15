@@ -417,22 +417,25 @@ fn execute_once(
     if !status.success() {
         let stderr = String::from_utf8_lossy(&collected.stderr).to_ascii_lowercase();
         let stderr = stderr.trim();
-        let diagnostic =
-            if stderr.starts_with("authentication failed") || stderr.starts_with("unauthorized") {
-                "authentication failed"
-            } else if stderr.starts_with("error: unknown option:") {
-                "unsupported CLI option"
-            } else if stderr.starts_with("error: model ")
-                && stderr.contains(" not found. use --list-models to see available models.")
-            {
-                "configured model was not found"
-            } else if stderr.lines().next().is_some_and(|line| {
-                line.starts_with("no api key found for ") && line.ends_with('.')
-            }) {
-                "provider API key is not configured"
-            } else {
-                "no safe diagnostic available"
-            };
+        let diagnostic = if stderr.starts_with("authentication failed")
+            || stderr.starts_with("unauthorized")
+        {
+            "authentication failed"
+        } else if stderr.starts_with("error: unknown option:") {
+            "unsupported CLI option"
+        } else if stderr.starts_with("error: model ")
+            && stderr.contains(" not found. use --list-models to see available models.")
+        {
+            "configured model was not found; verify it with `pi --offline --list-models PROVIDER`"
+        } else if stderr
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("no api key found for ") && line.ends_with('.'))
+        {
+            "provider API key is not configured; authenticate Pi on the runtime host"
+        } else {
+            "no safe diagnostic available"
+        };
         return Err(format!(
             "Pi CLI failed with status {status}: {diagnostic}{}",
             if collected.stderr_truncated {
@@ -480,4 +483,95 @@ fn execute_once(
         }
     }
     Ok(output)
+}
+
+const MODEL_LIST_LIMIT: usize = 1024 * 1024;
+const MODEL_COUNT_LIMIT: usize = 1000;
+
+pub(super) fn parse_model_list(
+    output: &str,
+    provider: &str,
+) -> Result<Vec<baton_core::domain::runtime::RuntimeModel>, String> {
+    if output.len() > MODEL_LIST_LIMIT
+        || provider.is_empty()
+        || !provider
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    {
+        return Err("Pi model list is invalid or exceeds the supported limit".into());
+    }
+    if output.trim() == format!("No models matching \"{provider}\"") {
+        return Ok(Vec::new());
+    }
+    let mut lines = output.lines();
+    if !lines
+        .next()
+        .is_some_and(|header| header.split_whitespace().take(2).eq(["provider", "model"]))
+    {
+        return Err("Pi model list could not be parsed".into());
+    }
+    let mut models = Vec::new();
+    for line in lines {
+        let mut columns = line.split_whitespace();
+        let Some(row_provider) = columns.next() else {
+            continue;
+        };
+        if row_provider != provider {
+            continue;
+        }
+        let model = columns
+            .next()
+            .filter(|model| {
+                !model.is_empty()
+                    && model.len() <= 256
+                    && model
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:/@+".contains(&byte))
+            })
+            .ok_or("Pi model list could not be parsed")?;
+        models.push(baton_core::domain::runtime::RuntimeModel {
+            provider: provider.into(),
+            model: model.into(),
+        });
+        if models.len() >= MODEL_COUNT_LIMIT {
+            return Err("Pi model list exceeds the supported model count".into());
+        }
+    }
+    Ok(models)
+}
+
+#[cfg(test)]
+mod model_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_malformed_model_list_output() {
+        assert!(parse_model_list("unexpected output\nanthropic model-a\n", "anthropic").is_err());
+    }
+
+    #[test]
+    fn treats_pi_no_matching_models_response_as_an_empty_catalog() {
+        assert_eq!(
+            parse_model_list("No models matching \"anthropic\"\n", "anthropic").unwrap(),
+            Vec::<baton_core::domain::runtime::RuntimeModel>::new()
+        );
+    }
+
+    #[test]
+    fn parses_only_the_selected_provider_and_preserves_model_slashes() {
+        let output = "provider model context max-out thinking images\nanthropic claude-sonnet-4 200K 64K yes yes\nanthropic custom/model-v2 32K 8K no no\nopenai gpt-4.1 1M 64K yes yes\n";
+        assert_eq!(
+            parse_model_list(output, "anthropic").unwrap(),
+            vec![
+                baton_core::domain::runtime::RuntimeModel {
+                    provider: "anthropic".into(),
+                    model: "claude-sonnet-4".into(),
+                },
+                baton_core::domain::runtime::RuntimeModel {
+                    provider: "anthropic".into(),
+                    model: "custom/model-v2".into(),
+                },
+            ]
+        );
+    }
 }

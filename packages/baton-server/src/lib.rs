@@ -96,6 +96,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
+        Self::new_with_pi_command(project_dir, baton_adapters::runtime::PI_EXECUTABLE.into())
+    }
+
+    pub fn new_with_pi_command(project_dir: PathBuf, pi_command: std::ffi::OsString) -> Self {
         let repository = FilesystemProjectConfigRepository::new(project_dir.clone());
         let runs = FilesystemRunRepository(project_dir.clone());
         // Record interruptions durably before attempting to resume their agent steps.
@@ -132,6 +136,7 @@ impl AppState {
             project_dir: project_dir.clone(),
             credentials: credentials.clone(),
             auth_root,
+            pi_command: pi_command.clone(),
         });
         let skills: Arc<dyn baton_core::ports::skills::SkillRepository> = Arc::new(
             baton_adapters::skills::FilesystemSkillRepository::new(project_dir.clone()),
@@ -177,8 +182,12 @@ impl AppState {
             tasks: task_repository,
             runtime_factory,
         };
+        let pi_model_catalog: Arc<dyn baton_core::ports::pi_models::PiModelCatalog> = Arc::new(
+            baton_adapters::runtime::PiCliModelCatalog::with_command(pi_command),
+        );
         let mediator = Arc::new(mediator::new(
             repository.clone(),
+            baton_core::features::pi_models::PiModelCatalogResource(pi_model_catalog),
             credentials,
             credential_types,
             credential_models,

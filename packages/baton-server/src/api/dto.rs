@@ -7,6 +7,13 @@ use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PiModelOption {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectConfig {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

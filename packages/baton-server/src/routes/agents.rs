@@ -1,4 +1,4 @@
-use crate::api::dto::Agent as AgentDto;
+use crate::api::dto::{Agent as AgentDto, PiModelOption};
 use crate::{ApiError, AppState, StatusCode};
 use axum::{
     Json, Router,
@@ -7,7 +7,23 @@ use axum::{
 };
 use baton_core::features::agents::AgentError;
 use baton_core::features::agents::{ListAgents, MutateAgent, Mutation};
+use baton_core::features::pi_models::{ListPiModels, PiModelError};
 use serde::Deserialize;
+
+impl From<PiModelError> for ApiError {
+    fn from(error: PiModelError) -> Self {
+        match error {
+            PiModelError::Validation(message) => Self {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message,
+            },
+            PiModelError::Unavailable(message) => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message,
+            },
+        }
+    }
+}
 
 impl From<AgentError> for ApiError {
     fn from(error: AgentError) -> Self {
@@ -19,6 +35,22 @@ impl From<AgentError> for ApiError {
         };
         Self { status, message }
     }
+}
+
+async fn list_pi_models(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> Result<Json<Vec<PiModelOption>>, ApiError> {
+    let models = state.mediator.send(ListPiModels { provider }).await?;
+    Ok(Json(
+        models
+            .into_iter()
+            .map(|model| PiModelOption {
+                id: model.model.clone(),
+                label: model.model,
+            })
+            .collect(),
+    ))
 }
 
 async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -82,6 +114,7 @@ async fn delete(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/api/pi/models/{provider}", get(list_pi_models))
         .route("/api/agents", get(list).post(create))
         .route(
             "/api/agents/{id}",

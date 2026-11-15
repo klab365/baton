@@ -7,12 +7,13 @@ use baton_core::{
     features::{
         agents::AgentRepositoryResource,
         credentials::CredentialRepositoryResource,
+        pi_models::PiModelCatalogResource,
         pipelines::PipelineRepositoryResource,
         runs::RunFeatureResources,
         skills::{SkillDownloaderResource, SkillRepositoryResource},
         tasks::TaskFeatureResources,
     },
-    pipelines_feature,
+    pi_models_feature, pipelines_feature,
     ports::project_config::ProjectConfigRepository,
     project_config, runs_feature, skills_feature, tasks_feature,
 };
@@ -27,6 +28,7 @@ mediator! {
             project_config,
             agents_feature,
             pipelines_feature,
+            pi_models_feature,
             credentials_feature,
             tasks_feature,
             runs_feature,
@@ -37,6 +39,7 @@ mediator! {
 
 pub fn new(
     repository: Arc<dyn ProjectConfigRepository>,
+    pi_model_catalog: PiModelCatalogResource,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     credential_types: Arc<dyn baton_core::ports::credentials::CredentialTypeCatalog>,
     credential_models: Arc<dyn baton_core::ports::credentials::CredentialModelCatalog>,
@@ -48,6 +51,7 @@ pub fn new(
 ) -> ServerMediator {
     ServerMediator::builder()
         .repository(repository.clone())
+        .pi_model_catalog(pi_model_catalog)
         .agent_repository(AgentRepositoryResource(repository.clone()))
         .pipeline_repository(PipelineRepositoryResource(repository.clone()))
         .credential_repository(CredentialRepositoryResource(

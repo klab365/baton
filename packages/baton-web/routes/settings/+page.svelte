@@ -6,6 +6,7 @@ import Button from "../../components/Button.svelte";
 import ConfirmationDialog from "../../components/ConfirmationDialog.svelte";
 import PageHeader from "../../components/PageHeader.svelte";
 import ResourceSelect from "../../components/ResourceSelect.svelte";
+import { piProviders } from "../../lib/pi-providers";
 let { data } = $props();
 type Credential = {
 	id: string;
@@ -28,6 +29,14 @@ type CredentialType = {
 let credentials = $state<Credential[]>([]);
 let credentialTypes = $state<CredentialType[]>([]);
 let credentialId = $state("");
+let piProvider = $state("");
+let piCustomSelected = $state(false);
+const piProviderSelection = $derived(
+	piCustomSelected ||
+		(piProvider && !piProviders.some((item) => item.id === piProvider))
+		? "custom"
+		: piProvider,
+);
 const validCredentialId = $derived(
 	/^[A-Za-z0-9_-]+$/.test(credentialId) &&
 		!credentials.some((credential) => credential.id === credentialId),
@@ -224,6 +233,24 @@ onMount(() => {
 
 <svelte:head><title>Settings · Baton</title></svelte:head>
 <PageHeader title="Settings" />
+<section aria-labelledby="pi-auth-heading" class="pi-auth-guidance">
+	<h2 id="pi-auth-heading">Pi CLI authentication</h2>
+	<label for="pi-auth-provider">Pi provider</label>
+	<ResourceSelect id="pi-auth-provider" value={piProviderSelection} items={piProviders} placeholder="Select Pi provider" label="Pi providers" onValueChange={(value) => { piCustomSelected = value === "custom"; piProvider = value === "custom" ? "" : value; }} />
+	{#if piProviderSelection === "custom"}<input aria-label="Custom Pi provider ID" bind:value={piProvider} placeholder="Pi provider ID" autocomplete="off" />{/if}
+	<p>Credential source: Pi-managed local credentials, environment variables, or provider ambient credentials may be used; Baton cannot determine which source is active. Authentication status: unknown.</p>
+	{#if piProvider.trim() === "anthropic"}
+		<p><strong>Anthropic (verified against Pi 1.5.2 docs):</strong> on the runtime host, run <code>pi auth login anthropic --api-key</code> for Pi-managed API-key setup, or <code>pi auth login anthropic</code> for the provider's supported interactive sign-in. Alternatively set <code>ANTHROPIC_API_KEY</code>; Pi also supports workload identity federation with its documented environment settings. Headless use requires configuring credentials/identity on the runtime host before runs; Baton never reads or verifies them. Other Pi versions may differ.</p>
+	{:else if ["amazon-bedrock", "google-vertex"].includes(piProvider.trim())}
+		<p><strong>{piProvider.trim()} (Pi 1.5.2 docs):</strong> Pi supports ambient cloud credentials for this provider; Google Vertex also documents API-key setup. Configure cloud identity on the runtime host before headless runs. Baton cannot verify the active identity. Consult Pi's <code>/login {piProvider.trim()}</code> methods if using interactive setup.</p>
+	{:else if piProvider.trim()}
+		<p><strong>{piProvider.trim()}:</strong> Baton has no verified provider-specific authentication instructions or method for this provider. Check the installed Pi documentation at <code>pi/docs/providers.md</code> or run <code>pi auth login --help</code>; use <code>pi auth login {piProvider.trim()} --api-key</code> only if Pi documents API-key support for it. Otherwise configure its documented environment or ambient credentials on the runtime host. No method or readiness is inferred here.</p>
+	{:else}
+		<p>Enter a provider for available guidance. Baton does not verify Pi provider support; authentication methods vary by provider.</p>
+	{/if}
+	{#if piProvider.trim()}<p>Pi-stored credentials can be removed with <code>pi auth logout {piProvider.trim()}</code>; logout does not clear environment variables or models.json credentials, or revoke access.</p>{/if}
+	<p>For headless hosts, complete a provider-supported login on that host before running agents. Authentication methods vary; consult Pi's provider documentation. Do not paste secrets into project configuration.</p>
+</section>
 {#if error && !showForm}<p role="alert" class="error">{error}</p>{/if}
 {#if showForm}
 	<div class="dialog-backdrop" role="presentation">

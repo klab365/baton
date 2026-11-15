@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod credentials;
 pub mod human_actions;
+pub mod pi_models;
 pub mod pipeline_engine;
 pub mod pipelines;
 pub mod project_config;

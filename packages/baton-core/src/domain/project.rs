@@ -301,6 +301,27 @@ impl ProjectConfig {
                     agent.id
                 ));
             }
+            if agent.runtime_kind == crate::domain::runtime::RuntimeKind::Pi
+                && agent.model.as_ref().is_some_and(|model| {
+                    !model
+                        .provider
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+                })
+            {
+                return Err(format!(
+                    "Agent {:?} has an invalid Pi provider ID",
+                    agent.id
+                ));
+            }
+            if agent.runtime_kind == crate::domain::runtime::RuntimeKind::Pi
+                && agent.credential_id.is_some()
+            {
+                return Err(format!(
+                    "Pi agent {:?} cannot use a Baton credential; authenticate with Pi on the runtime host",
+                    agent.id
+                ));
+            }
             if agent.credential_id.as_ref().is_some_and(|id| {
                 id.is_empty()
                     || !id

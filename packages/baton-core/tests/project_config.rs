@@ -117,6 +117,23 @@ fn project_factory_checks_ci_before_finishing() {
 }
 
 #[test]
+fn pi_agents_cannot_reference_baton_credentials_but_legacy_defaults_remain_valid() {
+    let mut value = example();
+    value["agents"][0]["provider"] = serde_json::json!("pi");
+    value["agents"][0].as_object_mut().unwrap().remove("model");
+    assert!(parse_config(&value.to_string()).is_ok());
+    value["agents"][0]["credentialId"] = serde_json::json!("rig-key");
+    let error = parse_config(&value.to_string()).unwrap_err();
+    assert!(error.contains("cannot use a Baton credential"));
+    assert!(!error.contains("secret"));
+
+    value["agents"][0]["credentialId"] = serde_json::Value::Null;
+    value["agents"][0]["model"] = serde_json::json!("bad provider/model-id");
+    let error = parse_config(&value.to_string()).unwrap_err();
+    assert!(error.contains("invalid Pi provider ID"));
+}
+
+#[test]
 fn roundtrip_preserves_pipeline_step_order_and_configuration() {
     let config = parse_config(&example().to_string()).unwrap();
     assert_eq!(

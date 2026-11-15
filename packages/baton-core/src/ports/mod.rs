@@ -1,4 +1,5 @@
 pub mod credentials;
+pub mod pi_models;
 pub mod project_config;
 pub mod runs;
 pub mod runtime;

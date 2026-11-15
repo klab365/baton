@@ -38,7 +38,7 @@ impl ConfiguredRuntime {
             credentials,
             auth_root,
             _credential_leases: None,
-            pi_command: "pi".into(),
+            pi_command: super::PI_EXECUTABLE.into(),
         }
     }
 }
@@ -47,6 +47,7 @@ pub struct ConfiguredRuntimeFactory {
     pub project_dir: std::path::PathBuf,
     pub credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     pub auth_root: std::path::PathBuf,
+    pub pi_command: std::ffi::OsString,
 }
 
 impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
@@ -82,6 +83,7 @@ impl AgentRuntimeFactory for ConfiguredRuntimeFactory {
             crate::skills::FilesystemSkillRepository::new(self.project_dir.clone()).list()?;
         let mut runtime =
             ConfiguredRuntime::new(self.credentials.clone(), self.auth_root.clone(), skills);
+        runtime.pi_command = self.pi_command.clone();
         runtime._credential_leases = leases;
         Ok(Box::new(runtime))
     }
@@ -357,6 +359,7 @@ printf 'done'
         .unwrap();
         let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
         assert!(error.contains("configured model was not found"), "{error}");
+        assert!(error.contains("pi --offline --list-models"), "{error}");
         assert!(!error.contains("nonexistent-secret"));
         let root = tempfile::tempdir().unwrap();
         let mut runtime =
@@ -370,6 +373,10 @@ printf 'done'
         let error = runtime.execute(root.path(), &agent, "task").unwrap_err();
         assert!(
             error.contains("provider API key is not configured"),
+            "{error}"
+        );
+        assert!(
+            error.contains("authenticate Pi on the runtime host"),
             "{error}"
         );
         assert!(!error.contains("private-provider"));
@@ -852,6 +859,7 @@ exit 0
             project_dir: root.path().into(),
             credentials: repository.clone(),
             auth_root: root.path().join("vault"),
+            pi_command: crate::runtime::PI_EXECUTABLE.into(),
         };
         let config = baton_core::domain::project::parse_config(r#"{
             "schemaVersion": 7,
