@@ -221,6 +221,10 @@ async fn api_stops_interrupted_rig_run_for_manual_reconciliation() {
         match client.get(&run_url).send().await {
             Ok(response) => response.json::<Value>().await.is_ok_and(|run| {
                 run["status"] == "failed"
+                    && run["endedAt"].is_string()
+                    && run["events"].as_array().is_some_and(|events| {
+                        events.iter().any(|event| event["message"] == "Run stopped")
+                    })
                     && run["steps"].as_array().is_some_and(|steps| {
                         steps.iter().any(|step| {
                             step["error"]

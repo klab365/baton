@@ -5,7 +5,10 @@ use crate::{
         project::{Agent, ConfigState, Outcome, Pipeline, PipelineStep, ProjectConfig, Skill},
         work::*,
     },
-    features::pipeline_engine::{append_bounded_trace, elapsed_ms, publish, utc_now},
+    features::{
+        human_actions::human_handoff,
+        pipeline_engine::{append_bounded_trace, elapsed_ms, publish, utc_now},
+    },
     ports::{
         project_config::ProjectConfigRepository, runs::RunRepository, runtime::MAX_HANDOFF_BYTES,
         skills::SkillRepository, work::WorkCheckRunner,
@@ -127,6 +130,9 @@ pub struct WorkItem {
     pub allowed_outcomes: Vec<Outcome>,
     pub checks: Vec<WorkCheck>,
     pub last_result: Option<WorkResult>,
+    /// Present only immediately after a human response when prior context was composed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -441,6 +447,25 @@ async fn next_work_handler(
                 output: output.clone(),
             })
         }),
+        handoff: run
+            .steps
+            .iter()
+            .rev()
+            .find(|attempt| attempt.output.is_some())
+            .and_then(|attempt| {
+                let output = attempt.output.as_ref()?;
+                let previous_step = pipeline
+                    .steps
+                    .iter()
+                    .find(|step| step.id == attempt.step_id)?;
+                (previous_step.is_human()
+                    && run
+                        .handoff
+                        .as_ref()
+                        .is_some_and(|handoff| handoff != output))
+                .then(|| run.handoff.clone())
+                .flatten()
+            }),
         checks: session
             .checks
             .iter()
@@ -506,6 +531,7 @@ fn complete(
 ) -> Result<(), String> {
     let (_, pipeline) = graph(run)?;
     let pipeline = pipeline.clone();
+    let human = run.steps[index].status == Status::WaitingHuman;
     run.steps[index].status = Status::Succeeded;
     let ended_at = utc_now();
     run.steps[index].duration_ms = run.steps[index]
@@ -514,7 +540,11 @@ fn complete(
         .and_then(|started| elapsed_ms(started, &ended_at));
     run.steps[index].ended_at = Some(ended_at);
     run.steps[index].output = Some(summary.clone());
-    run.handoff = Some(summary);
+    run.handoff = Some(if human {
+        human_handoff(run.handoff.as_deref(), &summary)?
+    } else {
+        summary
+    });
     run.steps[index].outcome = Some(outcome.clone());
     run.status = Status::Running;
     run.pending_actions.clear();
@@ -678,6 +708,39 @@ async fn respond_work_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_human_completion_keeps_prior_handoff_and_response() {
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"external", "pipelineId":"p", "task":"task", "startedAt":"now",
+            "status":"waitingHuman", "currentStep":"help", "handoff":"prior blocker diagnosis",
+            "steps":[{"stepId":"help","agentId":"","status":"waitingHuman","attempt":1}],
+            "configSnapshot":{"schemaVersion":7,"agents":[],"pipelines":[{"id":"p","steps":[
+                {"id":"help","name":"Help","type":"human","transitions":[{"outcome":"responded","to":"build"}]},
+                {"id":"build","name":"Build","type":"human"}
+            ]}]},
+            "session":{"workspace":"/tmp/work","revision":0,"maxAttempts":10,"checks":[],"submissions":[]}
+        })).unwrap();
+        complete(
+            &mut run,
+            0,
+            Outcome::Responded,
+            "use approved mirror".into(),
+        )
+        .unwrap();
+        assert_eq!(run.status, Status::WaitingHuman);
+        assert_eq!(run.current_step.as_deref(), Some("build"));
+        let handoff = run.handoff.as_deref().unwrap();
+        assert!(handoff.contains("prior blocker diagnosis"));
+        assert!(handoff.contains("use approved mirror"));
+        assert_eq!(
+            run.steps[0]
+                .selected_transition
+                .as_ref()
+                .and_then(|edge| edge.to.as_deref()),
+            Some("build")
+        );
+    }
 
     #[test]
     fn limit_reason_is_used_for_external_publication_message() {

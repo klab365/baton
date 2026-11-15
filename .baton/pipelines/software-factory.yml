@@ -14,7 +14,7 @@ steps:
   - outcome: completed
     to: build
   - outcome: blocked
-    to: help
+    to: plan-help
   type: agent
 
 - id: build
@@ -62,7 +62,7 @@ steps:
   - outcome: revise_plan
     to: plan
   - outcome: blocked
-    to: help
+    to: build-help
   type: agent
 
 - id: review
@@ -114,8 +114,7 @@ steps:
   includeTask: true
   prompt: |
     Verify the pull request's CI results. Use the shell to inspect the current PR
-    head, applicable required checks and requested reviews, then decide immediately
-    whether to report revise_build, completed, or continue waiting. Recheck every 15
+    head whether to report revise_build, completed, or continue waiting. Recheck every 15
     seconds for at most 30 minutes total; do not run an opaque sleep/poll command that
     prevents evaluating results between checks. On each iteration, fetch the current
     head and evaluate only results for that head. If the head changes, discard stale
@@ -146,8 +145,26 @@ steps:
     to: null
   type: human
 
+- id: plan-help
+  name: Clarify planning blocker
+  transitions:
+  - outcome: responded
+    to: plan
+  - outcome: rejected
+    to: null
+  type: human
+
+- id: build-help
+  name: Resolve implementation blocker
+  transitions:
+  - outcome: responded
+    to: build
+  - outcome: rejected
+    to: null
+  type: human
+
 - id: help
-  name: Resolve blocker
+  name: Resolve workflow blocker
   transitions:
   - outcome: responded
     to: plan

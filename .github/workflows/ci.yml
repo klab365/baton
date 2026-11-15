@@ -63,6 +63,15 @@ jobs:
       - name: Run browser tests
         run: mise run test-browser
 
+      - name: Upload Playwright failure context
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: packages/baton-web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build UI
         run: mise run build-web
 
