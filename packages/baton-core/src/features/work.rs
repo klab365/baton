@@ -7,7 +7,10 @@ use crate::{
     },
     features::{
         human_actions::human_handoff,
-        pipeline_engine::{append_bounded_trace, elapsed_ms, publish, utc_now},
+        pipeline_engine::{
+            append_bounded_trace, elapsed_ms, publish, repeated_blocker, repeated_blocker_message,
+            utc_now,
+        },
     },
     ports::{
         project_config::ProjectConfigRepository, runs::RunRepository, runtime::MAX_HANDOFF_BYTES,
@@ -768,6 +771,8 @@ async fn submit_work_handler(
         let mut routed = run.clone();
         let (_, pipeline) = graph(&run)?;
         route(&mut routed, pipeline, index, result.outcome.clone())?;
+        let repeated = result.outcome == Outcome::Blocked
+            && repeated_blocker(&run, pipeline, index, &result.summary);
         let session = run.session.as_ref().ok_or("Missing session")?;
         let mut checks = vec![];
         if matches!(
@@ -804,7 +809,15 @@ async fn submit_work_handler(
                 attempt: result.attempt,
                 checks,
             });
+        let step_id = result.step_id.clone();
         complete(&mut run, index, result.outcome, result.summary)?;
+        if repeated {
+            publish(
+                resources.runs.as_ref(),
+                &mut run,
+                Some(repeated_blocker_message(&step_id)),
+            )?;
+        }
         let message = publication_message(&run, "External worker submission accepted").to_owned();
         publish(resources.runs.as_ref(), &mut run, Some(message))?;
         Ok(run)
