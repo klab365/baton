@@ -202,16 +202,16 @@ impl AgentRuntime for Script {
         cancelled: &dyn Fn() -> bool,
         observer: &mut dyn FnMut(baton_core::domain::pipeline::RunTraceEntry) -> Result<(), String>,
     ) -> Result<String, String> {
-        if input.contains("Structured context limit:") {
-            if let Some(source) = self.structured_history.iter().find(|entry| {
+        if input.contains("Structured context limit:")
+            && let Some(source) = self.structured_history.iter().find(|entry| {
                 entry
                     .report
                     .findings
                     .iter()
                     .any(|finding| finding.id == "F-1")
-            }) {
-                self.retrieved_attempts.push(source.attempt);
-            }
+            })
+        {
+            self.retrieved_attempts.push(source.attempt);
         }
         if self.emit_observed_activity {
             observer(baton_core::domain::pipeline::RunTraceEntry {
@@ -323,7 +323,7 @@ fn later_agent_can_retrieve_and_resolve_a_finding_omitted_from_bounded_context()
             "version":1,"summary":"Progress","findings":(start..start+count).map(|n| serde_json::json!({"id":format!("F-{n}"),"status":"open","description":"Investigate the identified behavior"})).collect::<Vec<_>>()
         })
     };
-    let outputs = vec![
+    let outputs = [
         serde_json::json!({"outcome":"completed","output":"First","structured_handoff":report(1,128)}).to_string(),
         serde_json::json!({"outcome":"completed","output":"Second","structured_handoff":report(129,60)}).to_string(),
         serde_json::json!({"outcome":"completed","output":"Resolved F-1","structured_handoff":{"version":1,"summary":"Resolved","findings":[{"id":"F-1","status":"resolved","description":"Investigate the identified behavior"}]}}).to_string(),
