@@ -109,11 +109,90 @@ fn project_factory_checks_ci_before_finishing() {
         baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
         _ => panic!("CI step must be an agent"),
     };
-    assert!(prompt.contains("every 15"));
-    assert!(prompt.contains("head changes"));
-    assert!(prompt.contains("Report revise_build immediately"));
-    assert!(prompt.contains("Report completed\nimmediately only when"));
-    assert!(prompt.contains("API/auth errors"));
+    assert!(prompt.contains("Inspect the existing pull request once"));
+    assert!(prompt.contains("do not poll, sleep, or wait"));
+    assert!(prompt.contains("PENDING (not"));
+    assert!(prompt.contains("passed)"));
+    assert!(prompt.contains("changed head makes the result indeterminate and blocked"));
+    assert!(prompt.contains("actionable required-check failure"));
+    assert!(prompt.contains("required-check set"));
+    assert!(prompt.contains("state is unknown and must be blocked"));
+    assert!(prompt.contains("known but pending/has no result"));
+    assert!(prompt.contains("Authentication/API errors"));
+    assert!(prompt.contains("task runs always begin at plan"));
+
+    let plan_prompt = match &step("plan").kind {
+        baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
+        _ => panic!("plan step must be an agent"),
+    };
+    assert!(plan_prompt.contains("reinspection"));
+    assert!(plan_prompt.contains("automatically append"));
+    assert!(plan_prompt.contains("up to 8 KiB"));
+    assert!(plan_prompt.contains("Reopen & rerun"));
+    assert!(plan_prompt.contains("Do not block"));
+    assert!(plan_prompt.contains("task status is done"));
+    assert!(plan_prompt.contains("retained worktree"));
+    assert!(plan_prompt.contains("branch"));
+    assert!(plan_prompt.contains("still exist"));
+    let build_prompt = match &step("build").kind {
+        baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
+        _ => panic!("build step must be an agent"),
+    };
+    assert!(build_prompt.contains("incoming plan"));
+    assert!(build_prompt.contains("branch"));
+    assert!(build_prompt.contains("is clean"));
+    assert!(build_prompt.contains("report that no"));
+    assert!(build_prompt.contains("implementation changes"));
+    assert!(build_prompt.contains("same task worktree"));
+    assert!(matches!(
+        &step("build").kind,
+        baton_core::domain::project::PipelineStepKind::Agent {
+            include_task: Some(true),
+            ..
+        }
+    ));
+    for (agent, help, resume) in [
+        ("review", "review-help", "review"),
+        ("commit", "commit-help", "commit"),
+    ] {
+        assert!(routes_to(agent, Outcome::Blocked, Some(help)));
+        assert!(step(help).is_human());
+        assert!(routes_to(help, Outcome::Responded, Some(resume)));
+        assert!(routes_to(help, Outcome::Rejected, None));
+    }
+    let review_prompt = match &step("review").kind {
+        baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
+        _ => panic!("review step must be an agent"),
+    };
+    assert!(review_prompt.contains("reviewed diff/HEAD SHA"));
+    assert!(review_prompt.contains("existing task branch's committed diff"));
+    let commit_prompt = match &step("commit").kind {
+        baton_core::domain::project::PipelineStepKind::Agent { prompt, .. } => prompt,
+        _ => panic!("commit step must be an agent"),
+    };
+    assert!(commit_prompt.contains("changes that have not yet been committed"));
+    assert!(commit_prompt.contains("compare the staged diff"));
+    assert!(commit_prompt.contains("clean"));
+    assert!(commit_prompt.contains("without committing or pushing"));
+    assert!(commit_prompt.contains("pass through repository, branch, PR URL"));
+    assert!(commit_prompt.contains("PR target base SHA"));
+    assert!(commit_prompt.contains("pre-commit task HEAD SHA"));
+    assert!(commit_prompt.contains("expected remote"));
+    assert!(commit_prompt.contains("task-branch SHA or ABSENT"));
+    assert!(commit_prompt.contains("incremental reviewed paths/fingerprint"));
+    assert!(commit_prompt.contains("must be the pre-commit task HEAD"));
+    assert!(commit_prompt.contains("exactly one new local"));
+    assert!(commit_prompt.contains("patch matches"));
+    assert!(commit_prompt.contains("expected ABSENT"));
+    assert!(commit_prompt.contains("normal non-force push"));
+    assert!(commit_prompt.contains("preserve every"));
+    assert!(commit_prompt.contains("reviewer fact verbatim"));
+    assert!(commit_prompt.contains("the worktree is clean"));
+    assert!(commit_prompt.contains("do not"));
+    assert!(commit_prompt.contains("create another commit"));
+    assert!(commit_prompt.contains("remote"));
+    assert!(commit_prompt.contains("branch SHA"));
+    assert!(review_prompt.contains("patch fingerprint"));
 }
 
 #[test]

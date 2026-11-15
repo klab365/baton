@@ -6,10 +6,20 @@ steps:
   agentId: factory-planner
   includeTask: true
   prompt: |
-    Analyze the task and produce an actionable implementation plan. Include the
-    plan, task requirements, issue reference when available, and relevant evidence
-    in your handoff for the builder. Report blocked if critical information is
-    missing. Do not modify files or commit.
+    Analyze the task and produce an actionable implementation plan. If the task
+    explicitly requests PR/CI reinspection, treat this as a full subsequent run on
+    the existing task, not a new implementation. Task runs automatically append
+    successful step handoffs from the latest successful run to the original task;
+    this context is bounded (up to 8 KiB) and may omit later handoffs. Use the
+    supplied context and any PR details in the follow-up. The task detail UI's
+    Reopen & rerun action starts this subsequent run on the same task. Do not block
+    merely because the task status is done; verify its retained worktree and branch
+    still exist, blocking if unavailable or ambiguous. Plan for no code changes
+    unless inspection finds actionable failures. Preserve repository,
+    branch, PR URL and known head SHA in your handoff.
+    Include task requirements and issue reference when available. Report blocked if
+    critical identity information is missing or ambiguous. Do not modify files or
+    commit.
   transitions:
   - outcome: completed
     to: build
@@ -20,11 +30,19 @@ steps:
 - id: build
   name: Implement and verify
   agentId: factory-builder
+  includeTask: true
   prompt: |
     Execute the incoming plan, not as completed work but by inspecting and
     modifying the repository and verifying the changes. On re-entry, act on
     review or debugging feedback and continue the work. A missing implementation
     or clean repository alone is not a blocker.
+
+    For an explicit PR/CI reinspection request, verify the same task worktree and
+    branch exist, then inspect them. Do not create speculative changes. If the branch
+    is clean and the incoming plan identifies no actionable change, report that no
+    implementation changes are needed and pass repository/branch/PR/head identity
+    onward. If a CI/review handoff requests changes, implement only the actionable
+    fix and retain that identity. Never switch to a new task or branch to recheck.
 
     If the plan is broad, choose a concrete first implementation slice and
     continue iteratively toward the task's acceptance criteria. Use the issue
@@ -70,12 +88,22 @@ steps:
   agentId: factory-reviewer
   includeTask: true
   prompt: |
-    Independently review the changes against the task and prior handoff. Approve
-    only when appropriate; otherwise provide actionable findings for the builder
-    or planner, or explain the blocker. Inspect the actual diff and tests, run a
-    relevant regression test and verify the target branch is an ancestor of HEAD.
-    Return findings in the handoff; do not write project files. Do not attempt to
-    verify TDD chronology.
+    Independently review the changes against the task and prior handoff. For an
+    explicit reinspection run, verify the retained task worktree and inspect the
+    existing task branch's committed diff against its base even when the current
+    worktree has no changes; verify any new edits separately. Identify the exact base
+    and reviewed diff/HEAD SHA, repository, branch and existing PR URL in your
+    handoff. Separate the PR target-branch base SHA from the task branch's current
+    HEAD before any new commit. For this run's incremental changes, record changed
+    paths and a precise patch fingerprint (including newly added files). Record the
+    expected remote task-branch SHA, or explicitly ABSENT if no branch exists there;
+    do not substitute the PR target base for the task-branch commit parent. Approve only when appropriate;
+    otherwise provide actionable findings
+    for the builder or planner,
+    or explain the blocker. Inspect the actual diff and tests, run a relevant
+    regression test and verify the target branch is an ancestor of HEAD. Return
+    findings in the handoff; do not write project files. Do not attempt to verify
+    TDD chronology.
     Use approved only when checks pass; otherwise use revise_build, revise_plan or
     blocked. Do not modify files or commit.
   transitions:
@@ -86,7 +114,7 @@ steps:
   - outcome: revise_plan
     to: plan
   - outcome: blocked
-    to: help
+    to: review-help
   type: agent
 
 - id: commit
@@ -94,18 +122,46 @@ steps:
   agentId: factory-committer
   includeTask: true
   prompt: |
-    Commit the reviewed changes and publish or update the pull request. Report
-    the commit and pull request, or explain the blocker and any side effects.
-    Stage only intended changes; stop if staged changes or scope are unclear. Check
-    the staged diff, use a Conventional Commit, and push without force. Include actual
-    verification and a closing issue reference when applicable. Tell the next step
-    about pending CI checks and requested reviews. Never rewrite history, merge, push
-    a protected branch or create duplicate commits on re-entry.
+    Before any side effect, inspect the task branch, commits, remote branch and
+    existing PR; verify repository, branch and PR URL against the reviewer handoff.
+    Carry forward and compare each review fact separately: PR target base SHA,
+    pre-commit task HEAD SHA, incremental reviewed paths/fingerprint, expected remote
+    task-branch SHA or ABSENT, repository, branch and PR URL. The new commit's parent
+    must be the pre-commit task HEAD, not the PR target base.
+
+    If HEAD still equals the pre-commit task HEAD and the worktree is clean, verify the
+    remote branch also equals that HEAD, then pass through repository, branch, PR URL
+    and HEAD SHA without committing or pushing. If HEAD is exactly one new local
+    commit whose parent is the pre-commit task HEAD, the worktree is clean, and its
+    patch matches this run's reviewed fingerprint with no unrelated changes, treat
+    it as already committed; never create another commit. Compare the remote with the
+    separately recorded expected remote state: if unchanged at that SHA, push the
+    existing commit without force; if expected ABSENT, verify the exact task branch
+    is still absent and create it with a normal non-force push; if already at this
+    commit, do not push again. Never compare either remote state to the PR target
+    base as a substitute for the task branch SHA. Then create the PR only if none
+    exists, otherwise update/retain it, and pass its URL and resulting HEAD to CI.
+    Any unexpected local history, patch or remote state blocks the operation.
+
+    For changes that have not yet been committed, stage only intended reviewed work,
+    compare the staged diff to the reviewed diff, and stop on mismatch, unrelated
+    changes or ambiguous scope. Make no empty/duplicate commit; use a Conventional
+    Commit, push without force, update rather than duplicate a PR, and include actual
+    verification and a closing issue reference when applicable. If any publication
+    operation fails after a commit or push, the blocked handoff must preserve every
+    reviewer fact verbatim (target base SHA, pre-commit task HEAD SHA, incremental
+    paths/fingerprint, expected remote SHA or ABSENT, repository, branch and PR URL)
+    and add the exact new commit SHA/parent, actual remote SHA or ABSENT, push result,
+    PR state and remaining operation. The next commit-help attempt may not receive the
+    reviewer step's separate input, so never omit or replace those facts. Never
+    describe the whole publication as having had no side effects. Tell CI the repository,
+    branch, PR URL, head SHA, pending checks and requested reviews. Never rewrite
+    history, merge or push a protected branch.
   transitions:
   - outcome: completed
     to: ci
   - outcome: blocked
-    to: help
+    to: commit-help
   type: agent
 
 - id: ci
@@ -113,20 +169,25 @@ steps:
   agentId: factory-ci
   includeTask: true
   prompt: |
-    Verify the pull request's CI results. Use the shell to inspect the current PR
-    head whether to report revise_build, completed, or continue waiting. Recheck every 15
-    seconds for at most 30 minutes total; do not run an opaque sleep/poll command that
-    prevents evaluating results between checks. On each iteration, fetch the current
-    head and evaluate only results for that head. If the head changes, discard stale
-    check conclusions and re-evaluate against the new head without resetting the
-    deadline. Report revise_build immediately for an actionable CI failure or
-    changes-requested review, even while other checks are pending. Report completed
-    immediately only when every applicable required check passes and all requested
-    reviews are resolved. Wait only while checks/reviews are pending or missing; at
-    the deadline report blocked for unresolved external blockers. API/auth errors or
-    inability to determine required checks are not success: report blocked. Include
-    the head SHA, check/review status, relevant unresolved details and URLs in every
-    handoff.
+    Inspect the existing pull request once; do not poll, sleep, or wait. Locate it
+    using verified repository and task branch identity from the committer handoff.
+    New task runs always begin at plan; do not claim that a new run can enter directly
+    at this step. If the handoff does not establish task branch and repository
+    identity, report blocked.
+    If no unique matching PR can be established, report blocked. Inspect its current
+    head SHA, applicable required checks, reviews and relevant URLs. Associate every
+    result with that SHA and confirm the head did not change during inspection; a
+    changed head makes the result indeterminate and blocked. Report revise_build for
+    any actionable required-check failure or changes-requested review, even if other
+    results are pending. Otherwise report completed with an explicit PENDING (not
+    passed) status if a required check is known but pending/has no result, or a
+    requested review is unresolved. If you cannot determine the required-check set
+    itself, the state is unknown and must be blocked. Report completed as passed
+    only when all applicable required checks pass and requested reviews are resolved.
+    Authentication/API errors, ambiguous PR identity or other indeterminate state
+    must be blocked, never treated as passed. Include the head SHA and available
+    check/review statuses and URLs in every handoff; on inspection errors state which
+    details could not be obtained.
   transitions:
   - outcome: completed
     to: null
@@ -159,6 +220,24 @@ steps:
   transitions:
   - outcome: responded
     to: build
+  - outcome: rejected
+    to: null
+  type: human
+
+- id: review-help
+  name: Resolve review blocker
+  transitions:
+  - outcome: responded
+    to: review
+  - outcome: rejected
+    to: null
+  type: human
+
+- id: commit-help
+  name: Resolve commit blocker
+  transitions:
+  - outcome: responded
+    to: commit
   - outcome: rejected
     to: null
   type: human

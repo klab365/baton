@@ -106,6 +106,123 @@ async fn tasks_do_not_depend_on_obsolete_local_provider_settings() {
 }
 
 #[tokio::test]
+async fn successful_task_reinspection_reuses_worktree_and_prior_handoff() {
+    let _guard = PROVIDER_STORE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let directory = fixture();
+    configure_fake(&directory);
+    // The fake runtime echoes task text; PENDING here tests lifecycle/handoff,
+    // not actual GitHub CI classification.
+    let mut config = common::read_config(&directory);
+    let factory: serde_json::Value = serde_yaml_ng::from_str(include_str!(
+        "../../../.baton/pipelines/software-factory.yml"
+    ))
+    .unwrap();
+    let mut ci_step = factory["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "ci")
+        .unwrap()
+        .clone();
+    // Exercise the real CI prompt; this fake runtime models a successful pending
+    // report as its final response, not a structured outcome-tool call.
+    ci_step["transitions"] = serde_json::json!([]);
+    config["agents"][0]["id"] = "factory-ci".into();
+    config["pipelines"][0]["steps"] = serde_json::json!([ci_step]);
+    common::write_config(&directory, &config);
+    let app = router(AppState::new(directory.clone()));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post("/api/tasks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title":"Reinspect PR",
+                        "description":"Reinspect PR https://github.com/example/repo/pull/42\nPENDING: required check queued on head abc123",
+                        "pipelineId":"draft"
+                    }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let task_id = json(response).await["id"].as_str().unwrap().to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/tasks/{task_id}/runs"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let first = json(response).await;
+    assert_eq!(first["status"], "succeeded");
+    let worktree = first["worktree"]["path"].as_str().unwrap();
+    assert!(
+        first["steps"][0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("PENDING")
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/tasks/{task_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json(response).await["status"], "done");
+
+    // This mirrors the UI's Reopen & rerun action: append focused follow-up and
+    // start a new run on the same task instead of creating another task/branch.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::put(format!("/api/tasks/{task_id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title":"Reinspect PR",
+                        "description":"Reinspect PR https://github.com/example/repo/pull/42\nPENDING: required check queued on head abc123\n\nFollow-up work:\nReinspect CI for the existing PR.",
+                        "pipelineId":"draft",
+                        "status":"done"
+                    }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(
+            Request::post(format!("/api/tasks/{task_id}/runs"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let second = json(response).await;
+    assert_eq!(second["status"], "succeeded");
+    assert_eq!(second["worktree"]["path"], worktree);
+    let second_input = second["task"].as_str().unwrap();
+    assert!(second_input.contains("Reinspect CI for the existing PR."));
+    assert!(second_input.contains("Handoffs from previous successful run"));
+    assert!(second_input.contains("PENDING"));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
 async fn task_completes_after_human_approval_and_repairs_stale_status() {
     let _guard = PROVIDER_STORE_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
