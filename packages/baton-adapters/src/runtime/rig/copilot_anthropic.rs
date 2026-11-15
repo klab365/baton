@@ -177,7 +177,7 @@ mod tests {
             &spec.reasoning,
             ReasoningSupport::Listed { levels, .. } if levels.contains(&Effort::High)
         ));
-        assert!(super::super::copilot_uses_responses(&spec));
+        assert!(super::super::copilot_uses_responses(spec));
     }
 
     #[tokio::test]

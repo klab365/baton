@@ -442,7 +442,7 @@ impl RigRuntime {
         let handler = if let Some(handler) = agent_context.handler_override {
             handler
         } else {
-            let handler = if is_copilot_provider(&model_config.provider) {
+            if is_copilot_provider(&model_config.provider) {
                 use rig::providers::copilot::auth::{
                     AuthSource, Authenticator, DeviceCodeHandler, FileTokenStore,
                 };
@@ -564,8 +564,7 @@ impl RigRuntime {
                         .map_err(|error| format!("Rig provider configuration: {error}"))?
                 };
                 ErasedHandler::new(ModelAdapter::new(baton_agent.id.clone(), model))
-            };
-            handler
+            }
         };
         let request_traces = Arc::new(Mutex::new(Vec::new()));
         let connection = Connection {
