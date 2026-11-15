@@ -10,12 +10,11 @@ use baton_core::{
 use std::{path::Path, sync::Arc};
 
 fn supports_thinking_level(agent: &Agent) -> bool {
-    agent.runtime_kind == RuntimeKind::Rig
-        && agent.thinking_level == Some(baton_core::domain::project::ThinkingLevel::High)
-        && agent.model.as_ref().is_some_and(|model| {
-            matches!(model.provider.as_str(), "copilot" | "github-copilot")
-                && model.model == "gpt-5.3-codex"
-        })
+    match agent.runtime_kind {
+        RuntimeKind::Pi => true,
+        RuntimeKind::Rig => agent.model.is_some(),
+        RuntimeKind::Fake => false,
+    }
 }
 
 /// Dispatch strictly by the agent's configured runtime. Never fall back.
@@ -256,7 +255,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn only_the_verified_copilot_codex_high_combination_is_allowed() {
+    fn rig_thinking_levels_are_deferred_to_model_catalog_validation() {
         for provider in ["copilot", "github-copilot"] {
             let agent: Agent = serde_json::from_value(serde_json::json!({
                 "id":"agent", "instructions":"role", "provider":"rig",
@@ -275,7 +274,7 @@ mod tests {
                 "model":format!("{provider}/{model}"), "skillIds":[], "thinkingLevel":level
             }))
             .unwrap();
-            assert!(!super::supports_thinking_level(&agent));
+            assert!(super::supports_thinking_level(&agent));
         }
     }
 
@@ -283,7 +282,7 @@ mod tests {
     #[test]
     fn configured_thinking_level_is_rejected_before_runtime_dispatch() {
         use std::os::unix::fs::PermissionsExt;
-        for runtime_kind in [RuntimeKind::Rig, RuntimeKind::Fake, RuntimeKind::Pi] {
+        for runtime_kind in [RuntimeKind::Rig, RuntimeKind::Fake] {
             let root = tempfile::tempdir().unwrap();
             let repository = Arc::new(FilesystemCredentialRepository::new(root.path().into()));
             let mut runtime = ConfiguredRuntime::new(repository, root.path().into(), vec![]);
@@ -427,7 +426,7 @@ printf done
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        let args = root.path().join("args");
+        let args_path = root.path().join("args");
         let prompt = root.path().join("prompt");
         let pi = bin.join("pi");
         std::fs::write(
@@ -444,7 +443,7 @@ printf '{{"type":"session","id":"%s","cwd":"%s"}}\n{{"type":"message","message":
 cat > '{}'
 printf 'done'
 "#,
-                args.display(),
+                args_path.display(),
                 prompt.display()
             ),
         )
@@ -456,16 +455,51 @@ printf 'done'
         let mut runtime =
             ConfiguredRuntime::new(repository.clone(), root.path().join("vault"), vec![]);
         runtime.pi_command = pi.clone().into();
-        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "model":"openai/gpt-4.1", "credentialId":null, "skillIds":[], "allowedTools":["read", "shell", "report_outcome"]})).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "model":"openai/gpt-4.1", "credentialId":null, "skillIds":[], "allowedTools":["read", "shell", "report_outcome"], "thinkingLevel":"high"})).unwrap();
         let large_prompt = format!("- {}", "x".repeat(256 * 1024));
         let result = runtime.execute(root.path(), &agent, &large_prompt);
         assert_eq!(result.unwrap(), "done");
         assert_eq!(std::fs::read_to_string(prompt).unwrap(), large_prompt);
-        let args = std::fs::read_to_string(args).unwrap();
+        let args = std::fs::read_to_string(&args_path).unwrap();
         assert!(args.contains("--no-extensions") && args.contains("--no-mcp"));
         assert!(args.contains("--no-skills"));
         assert!(args.contains("--model\nopenai/gpt-4.1"));
+        assert!(args.contains("--thinking\nhigh"));
         assert!(args.contains("--tools\nread,bash"));
+        for level in ["off", "minimal", "low", "medium", "xhigh", "max"] {
+            let mut agent = agent.clone();
+            agent.thinking_level = Some(serde_json::from_value(serde_json::json!(level)).unwrap());
+            let vault = root.path().join(format!("vault-{level}"));
+            let mut level_runtime = ConfiguredRuntime::new(repository.clone(), vault, vec![]);
+            level_runtime.pi_command = pi.clone().into();
+            assert_eq!(
+                level_runtime
+                    .execute(root.path(), &agent, "prompt")
+                    .unwrap(),
+                "done"
+            );
+            assert!(
+                std::fs::read_to_string(&args_path)
+                    .unwrap()
+                    .contains(&format!("--thinking\n{level}"))
+            );
+        }
+        let mut unset_agent = agent.clone();
+        unset_agent.thinking_level = None;
+        let vault = root.path().join("vault-unset");
+        let mut unset_runtime = ConfiguredRuntime::new(repository.clone(), vault, vec![]);
+        unset_runtime.pi_command = pi.clone().into();
+        assert_eq!(
+            unset_runtime
+                .execute(root.path(), &unset_agent, "prompt")
+                .unwrap(),
+            "done"
+        );
+        assert!(
+            !std::fs::read_to_string(&args_path)
+                .unwrap()
+                .contains("--thinking")
+        );
         assert!(args.ends_with("--\n"));
         std::fs::write(
             &pi,
@@ -750,8 +784,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 prompt=$(cat)
-printf '%s\n' "$args" >> "$session/args"
-call=$(find "$session" -name 'system-prompt-*' | wc -l)
+call=$(find "$session" -name 'system-prompt-*' | wc -l | tr -d ' ')
+printf '%s\n' "$args" > "$session/args-$call"
 printf '%s\n' "$system_prompt" > "$session/system-prompt-$call"
 printf '%s\n' "$skills_flag" > "$session/skills-flag-$call"
 printf '%s\n' "$prompt" > "$session/invocation-prompt-$call"
@@ -776,7 +810,7 @@ printf 'handoff'
             runtime.pi_command = pi.clone().into();
             runtime
         };
-        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"first", "instructions":"role", "provider":"pi", "skillIds":["assigned"], "allowedTools":["report_outcome"]})).unwrap();
+        let agent: Agent = serde_json::from_value(serde_json::json!({"id":"first", "instructions":"role", "provider":"pi", "skillIds":["assigned"], "allowedTools":["report_outcome"], "thinkingLevel":"high"})).unwrap();
         let mut runtime = make_runtime();
         runtime.skills = vec![
             baton_core::domain::project::Skill {
@@ -809,7 +843,7 @@ printf 'handoff'
         let first = vault.join("runtime-sessions/run-one/agent-first/pi");
         let prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
         assert!(prompts.contains("original task"));
-        let args = std::fs::read_to_string(first.join("args")).unwrap();
+        let args = std::fs::read_to_string(first.join("args-0")).unwrap();
         assert!(args.contains("--no-skills"));
         let first_system_prompt = std::fs::read_to_string(first.join("system-prompt-0")).unwrap();
         assert!(first_system_prompt.contains("assigned-only-instruction"));
@@ -837,9 +871,11 @@ printf 'handoff'
             .map(|entry| entry.unwrap().path())
             .find(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
             .unwrap();
-        let args = std::fs::read_to_string(first.join("args")).unwrap();
+        let args = std::fs::read_to_string(first.join("args-0")).unwrap();
+        assert!(args.contains("--thinking high"));
         assert!(args.contains("--session-id "));
-        assert!(args.contains(&format!("--session {}", session_path.display())));
+        let retry_args = std::fs::read_to_string(first.join("args-1")).unwrap();
+        assert!(retry_args.contains(&format!("--session {}", session_path.display())));
         let mut restarted = make_runtime();
         restarted.skills = runtime.skills.clone();
         restarted.set_run_id("run-one").unwrap();
@@ -849,6 +885,9 @@ printf 'handoff'
             .unwrap();
         let resumed_prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
         assert!(resumed_prompts.contains("new handoff"));
+        let resumed_args = std::fs::read_to_string(first.join("args-2")).unwrap();
+        assert!(resumed_args.contains("--thinking high"));
+        assert!(resumed_args.contains(&format!("--session {}", session_path.display())));
         assert!(
             std::fs::read_to_string(first.join("invocation-prompt-2"))
                 .unwrap()

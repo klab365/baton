@@ -204,6 +204,21 @@ fn is_copilot_provider(provider: &str) -> bool {
     matches!(provider, "github-copilot" | "copilot")
 }
 
+fn configured_reasoning(
+    level: baton_core::domain::project::ThinkingLevel,
+) -> rig::completion::Reasoning {
+    use baton_core::domain::project::ThinkingLevel as Level;
+    match level {
+        Level::Off => rig::completion::Reasoning::Off,
+        Level::Minimal => rig::completion::Effort::Minimal.into(),
+        Level::Low => rig::completion::Effort::Low.into(),
+        Level::Medium => rig::completion::Effort::Medium.into(),
+        Level::High => rig::completion::Effort::High.into(),
+        Level::XHigh => rig::completion::Effort::XHigh.into(),
+        Level::Max => rig::completion::Effort::Max.into(),
+    }
+}
+
 fn apply_configured_reasoning(
     world: &mut bevy_ecs::world::World,
     entity: Entity,
@@ -225,9 +240,25 @@ fn copilot_uses_responses(spec: &ModelSpec) -> bool {
 
 #[cfg(test)]
 mod thinking_tests {
-    use super::apply_configured_reasoning;
+    use super::{apply_configured_reasoning, configured_reasoning};
+    use baton_core::domain::project::ThinkingLevel;
     use rig::completion::{Effort, Reasoning};
     use rig_harness::rig_ecs::model::ReasoningSetting;
+
+    #[test]
+    fn configured_levels_map_to_rig_reasoning_values_including_off() {
+        for (level, expected) in [
+            (ThinkingLevel::Off, Reasoning::Off),
+            (ThinkingLevel::Minimal, Effort::Minimal.into()),
+            (ThinkingLevel::Low, Effort::Low.into()),
+            (ThinkingLevel::Medium, Effort::Medium.into()),
+            (ThinkingLevel::High, Effort::High.into()),
+            (ThinkingLevel::XHigh, Effort::XHigh.into()),
+            (ThinkingLevel::Max, Effort::Max.into()),
+        ] {
+            assert_eq!(configured_reasoning(level), expected);
+        }
+    }
 
     #[test]
     fn absent_configuration_preserves_a_session_saved_setting() {
@@ -260,18 +291,18 @@ mod injected_execution_tests {
     };
 
     #[test]
-    fn unsupported_level_fails_before_mock_provider_call() {
+    fn catalog_unsupported_level_fails_before_mock_provider_call() {
         let root = tempfile::tempdir().unwrap();
         let sessions = tempfile::tempdir().unwrap();
         let mock = MockCompletionModel::text("must not run");
         let agent: Agent = serde_json::from_value(serde_json::json!({
             "id":"writer", "instructions":"Write clearly", "provider":"rig",
-            "model":"copilot/gpt-5.3-codex", "skillIds":[], "allowedTools":[],
+            "model":"openai/unlisted-model", "skillIds":[], "allowedTools":[],
             "thinkingLevel":"low"
         }))
         .unwrap();
         let mut observer = |_entry: RunTraceEntry| Ok(());
-        let error = RigRuntime::execute(
+        let result = RigRuntime::execute(
             root.path(),
             &agent,
             &[],
@@ -288,10 +319,59 @@ mod injected_execution_tests {
             },
             &[],
             &|| false,
-        )
-        .unwrap_err();
-        assert!(error.contains("Unsupported Rig thinkingLevel combination"));
+        );
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("does not support the requested thinkingLevel"),
+            "{error}"
+        );
         assert!(mock.requests().is_empty());
+    }
+
+    #[test]
+    fn configured_off_reaches_model_that_allows_reasoning_to_be_disabled() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = tempfile::tempdir().unwrap();
+        let mock = MockCompletionModel::from_stream_turns((1..=3).map(|turn| {
+            vec![
+                MockStreamEvent::text(format!("response {turn}")),
+                MockStreamEvent::final_response_with_default_usage(),
+            ]
+        }));
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"writer", "instructions":"Write clearly", "provider":"rig",
+            "model":"anthropic/claude-haiku-4-5", "skillIds":[], "allowedTools":[],
+            "thinkingLevel":"off"
+        }))
+        .unwrap();
+        let mut observer = |_entry: RunTraceEntry| Ok(());
+        let result = RigRuntime::execute(
+            root.path(),
+            &agent,
+            &[],
+            "input",
+            RigAgentContext {
+                agent: &agent,
+                run_id: "off-run",
+                session_root: sessions.path(),
+                history_required: false,
+                credential: None,
+                auth_store_dir: None,
+                observer: &mut observer,
+                handler_override: Some(ErasedHandler::new(ModelAdapter::new("mock", mock.clone()))),
+            },
+            &[],
+            &|| false,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(result.0.contains("response"), "{}", result.0);
+        let requests = mock.requests();
+        assert!(!requests.is_empty());
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.options.reasoning == Some(Reasoning::Off))
+        );
     }
 
     #[test]
@@ -406,34 +486,16 @@ impl RigRuntime {
             .resolve(&model_reference)
             .map(|resolved| resolved.spec.clone())
             .unwrap_or_else(|_| ModelSpec::new(provider, &model_config.model).with_tools(true));
-        let reasoning = match baton_agent.thinking_level {
-            Some(baton_core::domain::project::ThinkingLevel::High)
-                if is_copilot_provider(&model_config.provider)
-                    && model_config.model == "gpt-5.3-codex" =>
-            {
-                if !copilot_uses_responses(&spec) {
-                    return Err(
-                        "Rig catalog does not select the Copilot Responses route for this model"
-                            .into(),
-                    );
-                }
-                let supported = matches!(
-                    &spec.reasoning,
-                    rig::catalog::ReasoningSupport::Listed { levels, .. }
-                        if levels.contains(&rig::completion::Effort::High)
-                );
-                if !supported {
-                    return Err("Rig catalog does not verify high thinkingLevel support for this Copilot model".into());
-                }
-                Some(rig::completion::Effort::High.into())
-            }
-            Some(_) => return Err("Unsupported Rig thinkingLevel combination".into()),
-            None => None,
-        };
+        let reasoning = baton_agent.thinking_level.map(configured_reasoning);
         if let Some(reasoning) = reasoning {
+            if is_copilot_provider(&model_config.provider) && !copilot_uses_responses(&spec) {
+                return Err(
+                    "Rig catalog does not select the Copilot Responses route for this model".into(),
+                );
+            }
             spec.validate(&spec.default_options(Some(reasoning)))
                 .map_err(|error| {
-                    format!("Copilot model does not support the requested thinkingLevel: {error}")
+                    format!("Rig model does not support the requested thinkingLevel: {error}")
                 })?;
         }
         let wire_traces = Arc::new(Mutex::new(Vec::new()));
