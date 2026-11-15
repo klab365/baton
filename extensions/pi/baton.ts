@@ -32,7 +32,7 @@ export async function choosePipeline(exec: Exec, ui: UI): Promise<string | undef
 }
 
 function boundedText(text: string): string {
-	return text.length > 8000 ? `${text.slice(0, 8000)}\n… inspection output truncated` : text;
+	return text.length > 8000 ? `${text.slice(0, 7970)}\n… inspection output truncated` : text;
 }
 
 function listRecords(value: unknown, page: number): string {
@@ -60,22 +60,57 @@ function listRecords(value: unknown, page: number): string {
 	return boundedText(`Work sessions — ${navigation}\n${JSON.stringify(pages[page - 1], null, 2)}`);
 }
 
+function formatInsights(steps: Record<string, unknown>[]) {
+	const executed = steps.filter((step) => step.status !== "pending" || Number(step.attempt) > 0);
+	const retries = executed.reduce((count, step, index) => count + (executed.slice(0, index).some((prior) => prior.stepId === step.stepId) ? 1 : 0), 0);
+	const total = (key: string) => {
+		const values = executed.map((step) => (step.usage as Record<string, unknown> | undefined)?.[key]).filter((value): value is number => typeof value === "number");
+		return `${values.length ? values.reduce((sum, value) => sum + value, 0) : "unavailable"} (${values.length === 0 ? "unavailable" : values.length === executed.length ? "complete" : "partial"})`;
+	};
+	const durations = executed.map((step) => step.durationMs).filter((value): value is number => typeof value === "number");
+	const prices = executed.flatMap((step) => {
+		const usage = step.usage as Record<string, unknown> | undefined;
+		const value = usage?.estimatedCost;
+		return typeof value === "string" && value.trim() && Number.isFinite(Number(value)) ? [{ value, source: usage?.priceSource, checked: usage?.priceCheckedAt }] : [];
+	});
+	const costSummary = prices.slice(0, 3).map((price) => `${price.value}${typeof price.source === "string" ? ` · ${price.source.slice(0, 80)}` : ""}${typeof price.checked === "string" ? ` · checked ${price.checked.slice(0, 80)}` : ""}`).join("; ");
+	return `Attempts: ${executed.length} · retries: ${retries}\nDuration: ${durations.length ? durations.reduce((sum, value) => sum + value, 0) : "unavailable"} ms (${durations.length === 0 ? "unavailable" : durations.length === executed.length ? "complete" : "partial"})\nTokens input/output/cache read/cache write: ${total("inputTokens")} / ${total("outputTokens")} / ${total("cacheReadTokens")} / ${total("cacheWriteTokens")}\nRun cost: unavailable (currency/unit not recorded)\nAttempt costs: ${costSummary || "unavailable"}${prices.length > 3 ? `; ${prices.length - 3} further observations in attempt details` : ""}`;
+}
+
 function inspectRecord(value: unknown): string {
 	if (!value || typeof value !== "object") throw new Error("Invalid work record");
 	const run = value as Record<string, unknown>;
 	const allSteps = Array.isArray(run.steps) ? run.steps : [];
-	const steps = allSteps.slice(-30).map((value) => {
+	const recorded = allSteps
+		.map((value, index) => ({ value, index }))
+		.filter(({ value }) => value && typeof value === "object" && (value.status !== "pending" || Number(value.attempt) > 0))
+		.sort((a, b) => {
+			const aAttempt = Number((a.value as Record<string, unknown>).attempt);
+			const bAttempt = Number((b.value as Record<string, unknown>).attempt);
+			return aAttempt > 0 && bAttempt > 0 ? aAttempt - bAttempt || a.index - b.index : aAttempt > 0 ? 1 : bAttempt > 0 ? -1 : a.index - b.index;
+		});
+	const visible = recorded.slice(-30).reverse();
+	const steps = visible.map(({ value }) => {
 		if (!value || typeof value !== "object") return {};
 		const step = value as Record<string, unknown>;
-		return Object.fromEntries(["stepId", "status", "attempt", "outcome", "startedAt", "endedAt", "durationMs", "output", "error"]
+		const record = Object.fromEntries(["stepId", "status", "attempt", "outcome", "startedAt", "endedAt", "durationMs", "output", "error", "model"]
 			.filter((key) => step[key] !== undefined)
 			.map((key) => [key, typeof step[key] === "string" && step[key].length > 1000 ? `${step[key].slice(0, 1000)}… output truncated` : step[key]]));
+		if (step.usage && typeof step.usage === "object") {
+			record.usage = Object.fromEntries(["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "estimatedCost", "priceSource", "priceCheckedAt"]
+				.filter((key) => (step.usage as Record<string, unknown>)[key] !== undefined)
+				.map((key) => {
+					const value = (step.usage as Record<string, unknown>)[key];
+					return [key, typeof value === "string" && value.length > 160 ? `${value.slice(0, 160)}… truncated` : value];
+				}));
+		}
+		return record;
 	}) as unknown[];
 	const record: Record<string, unknown> = Object.fromEntries(["id", "status", "pipelineId", "currentStep", "startedAt", "endedAt", "durationMs"]
 		.filter((key) => run[key] !== undefined).map((key) => [key, run[key]]));
-	if (allSteps.length > steps.length) record.omittedEarlierSteps = `${allSteps.length - steps.length} earlier steps omitted`;
+	if (recorded.length > steps.length) record.omittedEarlierSteps = `${recorded.length - steps.length} earlier steps omitted`;
 	record.steps = steps;
-	return boundedText(`Work session details\n${JSON.stringify(record, null, 2)}`);
+	return boundedText(`Work session ${String(run.id ?? "unknown")} · ${String(run.status ?? "status unavailable")}\n${formatInsights(allSteps as Record<string, unknown>[])}\n${JSON.stringify(record, null, 2)}`);
 }
 
 export async function manage(

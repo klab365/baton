@@ -3,6 +3,7 @@ import { invalidate, invalidateAll } from "$app/navigation";
 import { onMount } from "svelte";
 import { runFailure } from "$lib/run-failure";
 import { replaySteps } from "$lib/run-replay";
+import { runInsights } from "$lib/run-insights";
 import Button from "../../../components/Button.svelte";
 import DetailPanel from "../../../components/DetailPanel.svelte";
 import MultilineInput from "../../../components/MultilineInput.svelte";
@@ -76,6 +77,7 @@ const pipeline = $derived(
 );
 const humanActions = $derived(data.run.pendingActions ?? []);
 const attempts = $derived(replaySteps<any>(data.run.steps));
+const insights = $derived(runInsights(attempts));
 const legacyTraceMayContainSensitiveContent = $derived(
 	(data.run.trace ?? []).some(
 		(entry: { kind: string; content: string }) =>
@@ -188,7 +190,9 @@ async function cancel() {
 	</DetailPanel>
 	<DetailPanel title="Run details" id="diagnostics">
 		<dl class="task-facts"><div><dt>Task</dt><dd>{#if data.task}<a href={`/tasks/${encodeURIComponent(data.task.id)}`}>{data.task.title}</a>{:else if data.run.taskId}Unavailable task ({data.run.taskId}){:else}No linked task{/if}</dd></div><div><dt>Run ID</dt><dd><code>{data.run.id}</code></dd></div><div><dt>Pipeline</dt><dd>{data.run.pipelineId}</dd></div><div><dt>Started</dt><dd>{new Date(data.run.startedAt).toLocaleString()}</dd></div><div><dt>Ended</dt><dd>{data.run.endedAt ? new Date(data.run.endedAt).toLocaleString() : "Not ended"}</dd></div><div><dt>Duration</dt><dd>{["running", "waitingHuman"].includes(data.run.status) ? `${Math.floor(Math.max(0, clock - Date.parse(data.run.startedAt)) / 1000)} s elapsed` : data.run.durationMs == null ? "Not available" : `${data.run.durationMs} ms`}</dd></div></dl>
-		<p class="muted">Run-level token usage and cost: not available (provider telemetry is not collected).</p>
+		<p>Attempts: {insights.attempts} · retries: {insights.retries} · recorded step duration: {insights.durationMs === null ? "not available" : `${insights.durationMs} ms (${insights.durationCoverage})`}</p>
+		<p>Input tokens: {insights.inputTokens ?? "not available"} ({insights.inputTokenCoverage}) · output tokens: {insights.outputTokens ?? "not available"} ({insights.outputTokenCoverage}) · cache read/write: {insights.cacheReadTokens ?? "not available"}/{insights.cacheWriteTokens ?? "not available"} ({insights.cacheReadTokenCoverage}/{insights.cacheWriteTokenCoverage}).</p>
+		<p>Run cost: not available (currency/unit is not recorded, so attempt costs are not summed). Attempt costs: {insights.costObservations.length ? insights.costObservations.map((cost) => `${cost.value}${cost.priceSource ? ` · ${cost.priceSource}` : ""}${cost.priceCheckedAt ? ` · checked ${cost.priceCheckedAt}` : ""}`).join("; ") : "not available"}{#if insights.costCoverage === "partial"} (partial observations){/if}</p>
 		{#if ["running", "waitingHuman"].includes(data.run.status)}{@const latest = data.run.events.at(-1)}<p class="muted">Last persisted event: {latest ? `${new Date(latest.occurredAt).toLocaleString()} — ${latest.message ?? latest.status}` : "not available"}. This timestamp reports observation only; inactivity does not imply a stalled run.</p>{/if}
 		<details><summary>Execution trace ({data.run.trace?.length ?? 0})</summary><p class="muted">{legacyTraceMayContainSensitiveContent ? "This historical trace may contain prompts or transcript content; treat it as sensitive." : "Current traces show bounded model request/response and tool call/result status metadata only; prompts, arguments and result contents are omitted."} Rig session files may still contain sensitive content.</p>{#if data.run.trace?.length}<ol class="run-events">{#each data.run.trace as entry}<li><time datetime={entry.occurredAt}>{new Date(entry.occurredAt).toLocaleString()}</time> <strong>{entry.kind}</strong><details><summary>Show entry</summary><pre>{entry.content}</pre></details></li>{/each}</ol>{:else}<p>No persisted runtime trace is available for this run.</p>{/if}</details>
 		<details><summary>Run events ({data.run.events.length})</summary><ol class="run-events">{#each data.run.events as event}<li><time datetime={event.occurredAt}>{new Date(event.occurredAt).toLocaleString()}</time> — {event.message ?? event.status}</li>{/each}</ol></details>
