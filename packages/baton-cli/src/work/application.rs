@@ -32,6 +32,9 @@ pub enum WorkCommand {
     Execute {
         id: String,
     },
+    Resume {
+        id: String,
+    },
     Status {
         id: Option<String>,
     },
@@ -137,6 +140,9 @@ impl WorkApplication {
                     .await?,
             )),
             WorkCommand::Next { id } => {
+                if let Ok(_execution_lock) = WorkProcessLock::acquire_execution(&self.workspace) {
+                    self.mediator.send(RecoverWork { id: id.clone() }).await?;
+                }
                 serde_json::to_value(self.mediator.send(NextWork { id }).await?)
             }
             WorkCommand::Execute { id } => {
@@ -157,24 +163,57 @@ impl WorkApplication {
                     .iter()
                     .find(|p| p.id == run.pipeline_id)
                     .ok_or("Missing pipeline")?;
-                baton_core::features::pipeline_engine::validate_handoff(&run)?;
+                if baton_core::features::pipeline_engine::validate_handoff(&run).is_err() {
+                    self.mediator
+                        .send(FailWork {
+                            id: id.clone(),
+                            revision: item.revision,
+                            step_id: step.id.clone(),
+                            attempt,
+                            input: String::new(),
+                            trace: vec![],
+                            failure: WorkFailure::InvalidHandoff,
+                        })
+                        .await?;
+                    return Err(WorkFailure::InvalidHandoff.message().into());
+                }
                 let input = baton_core::features::pipeline_engine::with_step_prompt(
                     baton_core::features::pipeline_engine::step_input(&run, pipeline),
                     &step,
                 );
                 let recorded_input = input.clone();
-                let store =
-                    baton_adapters::credentials::FilesystemCredentialRepository::for_project(
-                        &self.workspace,
-                    )?;
-                let auth_root = store.root_path().to_path_buf();
-                let factory = baton_adapters::runtime::ConfiguredRuntimeFactory {
-                    project_dir: self.workspace.clone(),
-                    credentials: Arc::new(store),
-                    auth_root,
+                let setup = (|| {
+                    let store =
+                        baton_adapters::credentials::FilesystemCredentialRepository::for_project(
+                            &self.workspace,
+                        )?;
+                    let auth_root = store.root_path().to_path_buf();
+                    let factory = baton_adapters::runtime::ConfiguredRuntimeFactory {
+                        project_dir: self.workspace.clone(),
+                        credentials: Arc::new(store),
+                        auth_root,
+                    };
+                    let mut runtime = factory.create(config, &run.pipeline_id)?;
+                    runtime.set_run_id(&run.id)?;
+                    Ok::<_, String>(runtime)
+                })();
+                let mut runtime = match setup {
+                    Ok(runtime) => runtime,
+                    Err(_) => {
+                        self.mediator
+                            .send(FailWork {
+                                id: id.clone(),
+                                revision: item.revision,
+                                step_id: step.id.clone(),
+                                attempt,
+                                input: recorded_input,
+                                trace: vec![],
+                                failure: WorkFailure::Runtime,
+                            })
+                            .await?;
+                        return Err(WorkFailure::Runtime.message().into());
+                    }
                 };
-                let mut runtime = factory.create(config, &run.pipeline_id)?;
-                runtime.set_run_id(&run.id)?;
                 let history_unavailable = if let Some(agent) = &agent {
                     let required = run
                         .steps
@@ -194,6 +233,17 @@ impl WorkApplication {
                 let command = step.command().map(str::to_owned);
                 let timeout = step.timeout_seconds().unwrap_or(300);
                 let execution_lock = WorkProcessLock::acquire_execution(&self.workspace)?;
+                let recovered = self.mediator.send(RecoverWork { id: id.clone() }).await?;
+                if recovered.status != baton_core::domain::pipeline::Status::Running {
+                    return Err("Work execution was interrupted; inspect side effects and resume explicitly".into());
+                }
+                self.mediator
+                    .send(BeginWork {
+                        id: id.clone(),
+                        revision: item.revision,
+                        attempt,
+                    })
+                    .await?;
                 self.lock.lock().map_err(|e| e.to_string())?.take();
                 let repository = FilesystemWorkRepository(self.workspace.clone());
                 let cancellation_id = id.clone();
@@ -343,11 +393,53 @@ impl WorkApplication {
                                 attempt,
                                 input: recorded_input,
                                 trace,
+                                failure: WorkFailure::InvalidOutcome,
                             })
                             .await?;
                         return Err(message.into());
                     }
-                    Err(StepFailure::Runtime(error)) => return Err(error),
+                    Err(StepFailure::Runtime(error)) => {
+                        let failure = if error.contains("reconcile side effects")
+                            && error.contains("baton-inflight")
+                        {
+                            WorkFailure::Interrupted
+                        } else if error.contains("session is missing") {
+                            WorkFailure::MissingSession
+                        } else if error
+                            == "Pi CLI could not start after 2 retries; system resources are temporarily unavailable"
+                        {
+                            WorkFailure::ResourceUnavailable
+                        } else if error.starts_with("Pi provider is temporarily unavailable") {
+                            WorkFailure::ProviderTransient
+                        } else if error == WorkFailure::ProviderPolicy.message() {
+                            WorkFailure::ProviderPolicy
+                        } else if error == WorkFailure::ProviderAuthentication.message()
+                            || (error.starts_with("Pi CLI failed with status ")
+                                && (error.contains(": authentication failed")
+                                    || error.contains(": provider API key is not configured")))
+                        {
+                            WorkFailure::ProviderAuthentication
+                        } else if error.starts_with("Pi CLI failed with status ")
+                            && (error.contains(": unsupported CLI option")
+                                || error.contains(": configured model was not found"))
+                        {
+                            WorkFailure::ProviderConfiguration
+                        } else {
+                            WorkFailure::Runtime
+                        };
+                        self.mediator
+                            .send(FailWork {
+                                id: id.clone(),
+                                revision: item.revision,
+                                step_id: step.id.clone(),
+                                attempt,
+                                input: recorded_input,
+                                trace: vec![],
+                                failure,
+                            })
+                            .await?;
+                        return Err(failure.message().into());
+                    }
                 };
                 let result = serde_json::to_value(WorkProgress::from(
                     self.mediator
@@ -368,15 +460,28 @@ impl WorkApplication {
                 drop(execution_lock);
                 result
             }
-            WorkCommand::Status { id: None } => serde_json::to_value(
-                self.mediator
-                    .send(ListWork)
-                    .await?
-                    .into_iter()
-                    .map(WorkProgress::from)
-                    .collect::<Vec<_>>(),
-            ),
+            WorkCommand::Resume { id } => {
+                let _execution_lock = WorkProcessLock::acquire_execution(&self.workspace)?;
+                serde_json::to_value(WorkProgress::from(
+                    self.mediator.send(ResumeWork { id }).await?,
+                ))
+            }
+            WorkCommand::Status { id: None } => {
+                let mut runs = self.mediator.send(ListWork).await?;
+                if let Ok(_execution_lock) = WorkProcessLock::acquire_execution(&self.workspace) {
+                    for run in &mut runs {
+                        *run = self
+                            .mediator
+                            .send(RecoverWork { id: run.id.clone() })
+                            .await?;
+                    }
+                }
+                serde_json::to_value(runs.into_iter().map(WorkProgress::from).collect::<Vec<_>>())
+            }
             WorkCommand::Status { id: Some(id) } => {
+                if let Ok(_execution_lock) = WorkProcessLock::acquire_execution(&self.workspace) {
+                    self.mediator.send(RecoverWork { id: id.clone() }).await?;
+                }
                 serde_json::to_value(self.mediator.send(GetWork { id }).await?)
             }
             WorkCommand::Submit { id, result } => {

@@ -10,11 +10,12 @@ use std::{
 };
 
 const HELP: &str =
-    "Usage: baton work <start|next|execute|submit|status|respond|cancel|pipelines> [options]
+    "Usage: baton work <start|next|execute|resume|submit|status|respond|cancel|pipelines> [options]
   start --issue <task text> [--pipeline ID]
         [--check STEP=COMMAND ...]
   next --run ID
   execute --run ID
+  resume --run ID  (previous attempt may have made changes; inspect before executing again)
   submit --run ID --result FILE
   status [--run ID]
   respond --run ID --result FILE  (explicit human decision only)
@@ -46,6 +47,7 @@ impl Options {
             .subcommand(common(Command::new("pipelines")))
             .subcommand(common(Command::new("next")).arg(option("run")))
             .subcommand(common(Command::new("execute")).arg(option("run")))
+            .subcommand(common(Command::new("resume")).arg(option("run")))
             .subcommand(common(Command::new("status")).arg(option("run")))
             .subcommand(common(Command::new("cancel")).arg(option("run")))
             .subcommand(
@@ -170,6 +172,9 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
             id: options.required("--run")?,
         },
         "execute" => WorkCommand::Execute {
+            id: options.required("--run")?,
+        },
+        "resume" => WorkCommand::Resume {
             id: options.required("--run")?,
         },
         "status" => WorkCommand::Status {

@@ -128,6 +128,63 @@ printf 'FINAL ANSWER'
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pi_policy_failure_is_persisted_without_provider_diagnostics() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bin = f.path.join("fake-bin");
+    fs::create_dir(&bin).unwrap();
+    let pi = bin.join("pi");
+    fs::write(&pi, r##"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--session-dir' ]; then shift; session="$1"; fi
+  if [ "$1" = '--session-id' ]; then shift; id="$1"; fi
+  shift
+done
+cat >/dev/null
+printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user"}}\n{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"content_policy secret-provider-diagnostic"}}\n' "$id" "$PWD" > "$session/test_$id.jsonl"
+exit 1
+"##).unwrap();
+    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion":7,
+            "agents":[{"id":"worker","systemPrompt":"Implement","provider":"pi","skillIds":[],"allowedTools":[]}],
+            "pipelines":[{"id":"factory","steps":[{"id":"build","name":"Build","type":"agent","agentId":"worker"}]}]
+        }),
+    );
+    let run = f.value(&["start", "--issue", "Implement feature"]);
+    let id = run["id"].as_str().unwrap();
+    let output = f
+        .command()
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .args(["work", "execute", "--run", id])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("content policy"));
+    assert!(!error.contains("secret-provider-diagnostic"));
+    let status = f.value(&["status", "--run", id]);
+    assert_eq!(status["status"], "failed");
+    assert!(
+        status["steps"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("content policy")
+    );
+    assert!(!status.to_string().contains("secret-provider-diagnostic"));
+    assert_eq!(
+        fs::read_to_string(f.path.join("uncommitted")).unwrap(),
+        "preserve"
+    );
+}
+
 #[test]
 fn start_rejects_removed_max_attempts_flag_and_help_omits_it() {
     let f = Fixture::new();
@@ -427,12 +484,14 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     assert!(!interrupted.status.success());
     assert!(String::from_utf8_lossy(&interrupted.stderr).contains("reconcile side effects"));
     fs::remove_file(session.join("baton-inflight")).unwrap();
+    f.value(&["resume", "--run", id]);
     let backup = f.path.join("session-backup");
     fs::rename(&session, &backup).unwrap();
     let missing = f.work(&["execute", "--run", id]);
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("session is missing"));
     fs::rename(&backup, &session).unwrap();
+    f.value(&["resume", "--run", id]);
     let log = fs::read_dir(session.join("logs"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -446,10 +505,12 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         "corrupted session must not silently start fresh"
     );
     fs::write(&log, saved_log).unwrap();
+    f.value(&["resume", "--run", id]);
     let interrupted = f.work(&["execute", "--run", id]);
     assert!(!interrupted.status.success());
     assert!(String::from_utf8_lossy(&interrupted.stderr).contains("reconcile side effects"));
     fs::remove_file(session.join("baton-inflight")).unwrap();
+    f.value(&["resume", "--run", id]);
     assert_eq!(f.value(&["execute", "--run", id])["status"], "running");
     assert_eq!(f.value(&["execute", "--run", id])["status"], "succeeded");
     let second = f.value(&["start", "--issue", "Another task", "--pipeline", "factory"]);

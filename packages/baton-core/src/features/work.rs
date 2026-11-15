@@ -58,6 +58,50 @@ pub struct FailWork {
     pub attempt: u32,
     pub input: String,
     pub trace: Vec<crate::domain::pipeline::RunTraceEntry>,
+    pub failure: WorkFailure,
+}
+#[derive(Clone, Copy)]
+pub enum WorkFailure {
+    InvalidOutcome,
+    Runtime,
+    Interrupted,
+    MissingSession,
+    ResourceUnavailable,
+    ProviderTransient,
+    ProviderPolicy,
+    ProviderAuthentication,
+    ProviderConfiguration,
+    InvalidHandoff,
+}
+impl WorkFailure {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::InvalidOutcome => "Agent did not report a valid configured outcome",
+            Self::Runtime => {
+                "Agent runtime failed; inspect the runtime configuration and provider status before retrying"
+            }
+            Self::Interrupted => {
+                "Previous execution was interrupted; reconcile side effects and remove its baton-inflight marker before resuming"
+            }
+            Self::MissingSession => "Agent session is missing; manual recovery required",
+            Self::ResourceUnavailable => {
+                "Pi CLI could not start after 2 retries; system resources are temporarily unavailable"
+            }
+            Self::ProviderTransient => {
+                "Pi provider is temporarily unavailable; inspect retry status and reconcile side effects before retrying"
+            }
+            Self::ProviderPolicy => {
+                "Pi provider rejected the prompt under its content policy; revise the request or provider configuration"
+            }
+            Self::ProviderAuthentication => "Pi provider authentication failed; check credentials",
+            Self::ProviderConfiguration => {
+                "Pi configuration is invalid; check the configured model and CLI options"
+            }
+            Self::InvalidHandoff => {
+                "The previous handoff is invalid or too large; inspect the run before recovery"
+            }
+        }
+    }
 }
 #[derive(MediCommand)]
 #[medi_command(return_type = PipelineRun, error_type = String)]
@@ -77,6 +121,23 @@ pub struct GetWork {
 #[derive(MediCommand)]
 #[medi_command(return_type = PipelineRun, error_type = String)]
 pub struct CancelWork {
+    pub id: String,
+}
+#[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct ResumeWork {
+    pub id: String,
+}
+#[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct BeginWork {
+    pub id: String,
+    pub revision: u64,
+    pub attempt: u32,
+}
+#[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct RecoverWork {
     pub id: String,
 }
 
@@ -113,6 +174,124 @@ async fn cancel_work_handler(
     let run = resources.runs.load(&command.id)?;
     validate_workspace(&run, &resources.workspace)?;
     crate::features::runs::cancel_run(resources.runs.as_ref(), &command.id)
+}
+
+fn execution_marker(attempt: u32) -> String {
+    format!("External execution started for attempt {attempt}")
+}
+
+fn execution_started(run: &PipelineRun, attempt: u32) -> bool {
+    let marker = execution_marker(attempt);
+    run.events
+        .iter()
+        .any(|event| event.message.as_deref() == Some(&marker))
+}
+
+#[medi_handler]
+async fn begin_work_handler(
+    resources: WorkResources,
+    command: BeginWork,
+) -> Result<PipelineRun, String> {
+    let _lease = resources.runs.acquire_action_lease(&command.id)?;
+    let mut run = resources.runs.load(&command.id)?;
+    validate_workspace(&run, &resources.workspace)?;
+    if run.status != Status::Running
+        || run.session.as_ref().ok_or("Missing session")?.revision != command.revision
+        || run
+            .steps
+            .last()
+            .is_none_or(|step| step.status != Status::Running || step.attempt != command.attempt)
+    {
+        return Err("Work attempt changed before execution".into());
+    }
+    if execution_started(&run, command.attempt) {
+        return Err(
+            "Work execution was interrupted; inspect side effects and resume explicitly".into(),
+        );
+    }
+    publish(
+        resources.runs.as_ref(),
+        &mut run,
+        Some(execution_marker(command.attempt)),
+    )?;
+    Ok(run)
+}
+
+#[medi_handler]
+async fn recover_work_handler(
+    resources: WorkResources,
+    command: RecoverWork,
+) -> Result<PipelineRun, String> {
+    let _lease = resources.runs.acquire_action_lease(&command.id)?;
+    let mut run = resources.runs.load(&command.id)?;
+    validate_workspace(&run, &resources.workspace)?;
+    if run.status != Status::Running
+        || run.steps.last().is_none_or(|step| {
+            step.status != Status::Running || !execution_started(&run, step.attempt)
+        })
+    {
+        return Ok(run);
+    }
+    let ended_at = utc_now();
+    let step = run.steps.last_mut().ok_or("Missing attempt")?;
+    step.status = Status::Failed;
+    step.error = Some("Execution interrupted; inspect side effects and resume explicitly".into());
+    step.duration_ms = step
+        .started_at
+        .as_deref()
+        .and_then(|start| elapsed_ms(start, &ended_at));
+    step.ended_at = Some(ended_at.clone());
+    run.status = Status::Failed;
+    run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
+    run.ended_at = Some(ended_at);
+    run.session.as_mut().ok_or("Missing session")?.revision += 1;
+    publish(
+        resources.runs.as_ref(),
+        &mut run,
+        Some("Execution interrupted; inspect side effects and resume explicitly".into()),
+    )?;
+    Ok(run)
+}
+
+#[medi_handler]
+async fn resume_work_handler(
+    resources: WorkResources,
+    command: ResumeWork,
+) -> Result<PipelineRun, String> {
+    let _lease = resources.runs.acquire_action_lease(&command.id)?;
+    let mut run = resources.runs.load(&command.id)?;
+    validate_workspace(&run, &resources.workspace)?;
+    if !matches!(run.status, Status::Failed | Status::Running) {
+        return Err("Only failed or interrupted running work can be resumed".into());
+    }
+    let last = run.steps.last_mut().ok_or("Missing attempt")?;
+    if run.status == Status::Running {
+        if last.status != Status::Running {
+            return Err("No running attempt to resume".into());
+        }
+        let ended_at = utc_now();
+        last.duration_ms = last
+            .started_at
+            .as_deref()
+            .and_then(|start| elapsed_ms(start, &ended_at));
+        last.ended_at = Some(ended_at);
+        last.status = Status::Failed;
+        last.error = Some("Execution interrupted; side effects may have occurred".into());
+    } else if last.status != Status::Failed {
+        return Err("No failed attempt to resume".into());
+    }
+    run.status = Status::Running;
+    run.ended_at = None;
+    run.duration_ms = None;
+    run.session.as_mut().ok_or("Missing session")?.revision += 1;
+    prepare(&mut run)?;
+    let message = publication_message(
+        &run,
+        "Work resumed explicitly; previous attempt may have side effects",
+    )
+    .to_owned();
+    publish(resources.runs.as_ref(), &mut run, Some(message))?;
+    Ok(run)
 }
 
 #[derive(Debug, Serialize)]
@@ -665,17 +844,14 @@ async fn fail_work_handler(
         entry.attempt = Some(command.attempt);
     }
     append_bounded_trace(&mut run, trace);
-    run.steps[index].error = Some("Agent did not report a valid configured outcome".into());
+    let message = command.failure.message();
+    run.steps[index].error = Some(message.into());
     run.status = Status::Failed;
     let ended_at = utc_now();
     run.duration_ms = elapsed_ms(&run.started_at, &ended_at);
     run.ended_at = Some(ended_at);
     run.session.as_mut().ok_or("Missing session")?.revision += 1;
-    publish(
-        resources.runs.as_ref(),
-        &mut run,
-        Some("Agent did not report a valid configured outcome".into()),
-    )?;
+    publish(resources.runs.as_ref(), &mut run, Some(message.into()))?;
     Ok(run)
 }
 
@@ -811,6 +987,9 @@ medi_module! {
         crate::features::work::ListWork => crate::features::work::list_work_handler;
         crate::features::work::GetWork => crate::features::work::get_work_handler;
         crate::features::work::CancelWork => crate::features::work::cancel_work_handler;
+        crate::features::work::ResumeWork => crate::features::work::resume_work_handler;
+        crate::features::work::BeginWork => crate::features::work::begin_work_handler;
+        crate::features::work::RecoverWork => crate::features::work::recover_work_handler;
         crate::features::work::StartWork => crate::features::work::start_work_handler;
         crate::features::work::NextWork => crate::features::work::next_work_handler;
         crate::features::work::SubmitWork => crate::features::work::submit_work_handler;

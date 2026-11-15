@@ -13,6 +13,146 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn spawn_with_retry<T>(
+    mut spawn: impl FnMut() -> std::io::Result<T>,
+    cancelled: &dyn Fn() -> bool,
+    mut on_retry: impl FnMut(u32) -> Result<(), String>,
+) -> Result<T, String> {
+    for retry in 0..=2 {
+        if cancelled() {
+            return Err("Agent execution cancelled".into());
+        }
+        match spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && retry < 2 => {
+                on_retry(retry + 1)?;
+                for _ in 0..(10 << retry) {
+                    if cancelled() {
+                        return Err("Agent execution cancelled".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err("Pi CLI could not start after 2 retries; system resources are temporarily unavailable".into());
+            }
+            Err(_) => {
+                return Err(
+                    "Failed to start Pi CLI; check its installation and configuration".into(),
+                );
+            }
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::spawn_with_retry;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn retries_only_transient_spawn_failures() {
+        let mut attempts = 0;
+        let mut retries = vec![];
+        let result = spawn_with_retry(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err(Error::from(ErrorKind::WouldBlock))
+                } else {
+                    Ok(42)
+                }
+            },
+            &|| false,
+            |retry| {
+                retries.push(retry);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(retries, [1, 2]);
+        let mut attempts = 0;
+        let error = spawn_with_retry::<()>(
+            || {
+                attempts += 1;
+                Err(Error::from(ErrorKind::WouldBlock))
+            },
+            &|| false,
+            |_| Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 3);
+        assert!(error.contains("2 retries"));
+        attempts = 0;
+        let _ = spawn_with_retry::<()>(
+            || {
+                attempts += 1;
+                Err(Error::from(ErrorKind::PermissionDenied))
+            },
+            &|| false,
+            |_| Ok(()),
+        );
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn provider_classification_ignores_old_and_sensitive_messages() {
+        use super::{ProviderFailure, provider_failure};
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("test_id.jsonl");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            "{{\"type\":\"session\",\"id\":\"id\",\"cwd\":\"{}\"}}",
+            root.path().display()
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"user\"}}}}"
+        )
+        .unwrap();
+        writeln!(file, "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"stopReason\":\"error\",\"errorMessage\":\"rate_limit private prompt\"}}}}").unwrap();
+        let previous_len = file.metadata().unwrap().len();
+        assert_eq!(
+            provider_failure(root.path(), root.path(), 0),
+            Some(ProviderFailure::Transient)
+        );
+        assert_eq!(
+            provider_failure(root.path(), root.path(), previous_len),
+            None
+        );
+        writeln!(file, "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"stopReason\":\"error\",\"errorMessage\":\"content_policy private prompt\"}}}}").unwrap();
+        assert_eq!(
+            provider_failure(root.path(), root.path(), previous_len),
+            Some(ProviderFailure::Policy)
+        );
+    }
+
+    #[test]
+    fn cancellation_interrupts_retry_backoff() {
+        use std::cell::Cell;
+        let cancelled = Cell::new(false);
+        let mut attempts = 0;
+        let error = spawn_with_retry::<()>(
+            || {
+                attempts += 1;
+                Err(Error::from(ErrorKind::WouldBlock))
+            },
+            &|| cancelled.get(),
+            |_| {
+                cancelled.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error, "Agent execution cancelled");
+    }
+}
+
 fn read_capped(mut reader: impl Read, limit: usize) -> (Vec<u8>, bool) {
     let mut output = Vec::new();
     let mut truncated = false;
@@ -167,6 +307,62 @@ fn session_file(directory: &Path, worktree: &Path) -> Result<Option<std::path::P
     Ok(Some(path))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderFailure {
+    Transient,
+    Authentication,
+    Policy,
+}
+
+fn provider_failure(
+    session: &Path,
+    directory: &Path,
+    previous_len: u64,
+) -> Option<ProviderFailure> {
+    let path = session_file(session, directory).ok()??;
+    let (data, truncated) = read_capped(std::fs::File::open(path).ok()?, 16 * 1024 * 1024);
+    if truncated {
+        return None;
+    }
+    let appended = data.get(usize::try_from(previous_len).ok()?..)?;
+    let text = std::str::from_utf8(appended).ok()?;
+    let message = text
+        .lines()
+        .filter_map(|line| {
+            let entry: serde_json::Value = serde_json::from_str(line).ok()?;
+            let message = entry.get("message")?;
+            (entry.get("type")?.as_str()? == "message"
+                && message.get("role")?.as_str()? == "assistant")
+                .then(|| message.clone())
+        })
+        .next_back()?;
+    if message.get("stopReason")?.as_str()? != "error" {
+        return None;
+    }
+    let error = message.get("errorMessage")?.as_str()?.to_ascii_lowercase();
+    if error.contains("authentication")
+        || error.contains("unauthorized")
+        || error.contains("invalid api key")
+    {
+        Some(ProviderFailure::Authentication)
+    } else if error.contains("content policy")
+        || error.contains("content_policy")
+        || error.contains("prompt policy")
+        || error.contains("prompt_policy")
+        || error.contains("responsibleaipolicyviolation")
+    {
+        Some(ProviderFailure::Policy)
+    } else if error.contains("rate_limit")
+        || error.contains("rate limit")
+        || error.contains("too many requests")
+        || error.contains("overloaded_error")
+    {
+        Some(ProviderFailure::Transient)
+    } else {
+        None
+    }
+}
+
 pub(super) fn execute(
     runtime: &mut ConfiguredRuntime,
     directory: &Path,
@@ -219,19 +415,58 @@ pub(super) fn execute(
             .and_then(|()| file.sync_all())
             .map_err(|e| format!("Write Pi execution marker: {e}"))?;
         drop(file);
-        let output = execute_once(
-            runtime,
-            directory,
-            agent,
-            &prompt,
-            allowed_outcomes,
-            PiExecution {
-                cancelled,
-                observer,
-                session: &session,
-                existing: existing.as_deref(),
-            },
-        )?;
+        let mut resume = existing;
+        let mut retries = 0;
+        let output = loop {
+            let previous_len = resume
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map_or(0, |metadata| metadata.len());
+            match execute_once(
+                runtime,
+                directory,
+                agent,
+                &prompt,
+                allowed_outcomes,
+                PiExecution {
+                    cancelled,
+                    observer,
+                    session: &session,
+                    existing: resume.as_deref(),
+                },
+            ) {
+                Ok(output) => break output,
+                Err(error) => {
+                    if !error.starts_with("Pi CLI failed with status ") {
+                        return Err(error);
+                    }
+                    match provider_failure(&session, directory, previous_len) {
+                        Some(ProviderFailure::Authentication) => return Err("Pi provider authentication failed; check credentials".into()),
+                        Some(ProviderFailure::Policy) => return Err("Pi provider rejected the prompt under its content policy; revise the request or provider configuration".into()),
+                        Some(ProviderFailure::Transient) => {
+                            // Retrying with tools enabled could repeat external side effects.
+                            let safe = allowed_outcomes.is_empty() && agent.allowed_tools.as_ref().is_some_and(Vec::is_empty);
+                            if !safe { return Err("Pi provider is temporarily unavailable; reconcile side effects before retrying".into()); }
+                            if retries == 2 { return Err("Pi provider is temporarily unavailable after 2 retries".into()); }
+                            resume = session_file(&session, directory)?;
+                            if resume.is_none() { return Err("Pi agent session is missing; manual recovery required".into()); }
+                            retries += 1;
+                            observer(RunTraceEntry {
+                                attempt: None,
+                                occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                                kind: "runtimeRetry".into(),
+                                content: format!("Pi provider temporarily unavailable; retry {retries} of 2"),
+                            })?;
+                            for _ in 0..(10 << (retries - 1)) {
+                                if cancelled() { return Err("Agent execution cancelled".into()); }
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                        }
+                        None => return Err(error),
+                    }
+                }
+            }
+        };
         if session_file(&session, directory)?.is_none() {
             return Err("Pi did not persist its session; manual recovery required".into());
         }
@@ -371,13 +606,23 @@ fn execute_once(
                 };
     observer(setup_trace.clone())?;
     runtime.trace.push(setup_trace);
-    let mut child = command
+    command
         .arg("--")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Failed to run Pi CLI (is Pi installed?): {error}"))?;
+        .stderr(Stdio::piped());
+    let mut child = spawn_with_retry(
+        || command.spawn(),
+        cancelled,
+        |retry| {
+            observer(RunTraceEntry {
+                attempt: None,
+                occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                kind: "runtimeRetry".into(),
+                content: format!("Pi process could not start; retry {retry} of 2"),
+            })
+        },
+    )?;
     let (prompt_tx, prompt_rx) = mpsc::channel();
     let stdin = child.stdin.take().ok_or("Could not send Pi prompt")?;
     let input = input.to_owned();

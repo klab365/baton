@@ -28,11 +28,16 @@ baton work pipelines
 baton work status
 baton work next --run RUN_ID
 baton work execute --run RUN_ID
+baton work resume --run RUN_ID
 baton work respond --run RUN_ID --result human-response.json
 baton work cancel --run RUN_ID
 ```
 
 `baton work pipelines` lists configured pipeline IDs as JSON for interactive integrations such as Pi. If only one pipeline exists, `--pipeline` may be omitted. Start creates a new run; use its ID to resume. `next` returns the current step, attempt, revision, allowed outcomes, checks and latest handoff without replaying the full trace. `execute` runs one agent or shell step and submits its result through Baton. Repeat until completion, an error, or a human pause. Outputs are JSON; errors are JSON on stderr with a nonzero exit code. `status --run ID` returns the persisted run.
+
+After an execution error or interruption, inspect `status` and reconcile any worktree changes or external side effects before calling `resume`. Resume prepares a new attempt; it does not execute it. Failed and interrupted attempts count against the frozen pipeline and step attempt limits. `status` and `next` detect an interrupted execution once no execution process holds the workspace lock. Completed steps are not replayed. Cancelled and limit-exhausted runs cannot be resumed. A Pi or Rig `baton-inflight` marker may also require manual reconciliation and removal as described below.
+
+Pi retries transient provider rate-limit or overload errors at most twice with backoff only when tools are explicitly disabled and the step has no outcome tool; otherwise it fails for manual reconciliation. These retries stay within the same attempt and stop on cancellation. Pi also retries temporary process-start resource exhaustion twice. Authentication, policy and unknown failures are not automatically retried. Retry activity and sanitized failure categories appear in the run status; raw provider diagnostics are not stored there.
 
 Human steps require an explicit user decision via `respond`. Supply a JSON file containing the current `revision`, `stepId`, `attempt`, `outcome`, and `response`. This is a protocol distinction, not identity authentication: a process with shell access can invoke `respond`.
 

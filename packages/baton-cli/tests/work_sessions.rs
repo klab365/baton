@@ -160,6 +160,86 @@ async fn new_external_session_defaults_pipeline_and_session_limits_to_fifty() {
 }
 
 #[tokio::test]
+async fn status_recovers_an_interrupted_execution_after_restart() {
+    use baton_adapters::repositories::filesystem_work::FilesystemWorkRepository;
+    use baton_core::{
+        domain::pipeline::{RunEvent, Status},
+        ports::runs::RunRepository,
+    };
+    let f = Fixture::new();
+    let app = f.app();
+    let started = f.start(&app, 5, json!([])).await;
+    let id = started["id"].as_str().unwrap().to_owned();
+    drop(app);
+    let repository = FilesystemWorkRepository(f.path.clone());
+    let mut run = repository.load(&id).unwrap();
+    run.events.push(RunEvent {
+        run_id: id.clone(),
+        status: Status::Running,
+        occurred_at: "2026-01-01T00:00:00Z".into(),
+        message: Some("External execution started for attempt 1".into()),
+    });
+    repository.save(&run).unwrap();
+    let app = f.app();
+    let status = app
+        .execute(WorkCommand::Status {
+            id: Some(id.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "failed");
+    assert_eq!(status["steps"][0]["status"], "failed");
+    assert!(
+        status["steps"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("interrupted")
+    );
+    let status = app
+        .execute(WorkCommand::Status {
+            id: Some(id.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(status["session"]["revision"], 1);
+    let resumed = app.execute(WorkCommand::Resume { id }).await.unwrap();
+    assert_eq!(resumed["attempt"], 2);
+    assert_eq!(
+        std::fs::read_to_string(f.path.join("uncommitted.txt")).unwrap(),
+        "keep me"
+    );
+}
+
+#[tokio::test]
+async fn resume_interrupted_work_preserves_workspace_and_enforces_attempt_limit() {
+    let f = Fixture::new();
+    let app = f.app();
+    let run = f.start(&app, 2, json!([])).await;
+    let id = run["id"].as_str().unwrap().to_owned();
+    drop(app);
+    let app = f.app();
+    let resumed = f
+        .call(&app, json!({"command":"resume", "id":id}))
+        .await
+        .unwrap();
+    assert_eq!(resumed["status"], "running");
+    assert_eq!(resumed["steps"][0]["status"], "failed");
+    assert_eq!(resumed["steps"][1]["attempt"], 2);
+    assert_eq!(resumed["session"]["revision"], 1);
+    assert_eq!(
+        std::fs::read_to_string(f.path.join("uncommitted.txt")).unwrap(),
+        "keep me"
+    );
+    let exhausted = f
+        .call(&app, json!({"command":"resume", "id":id}))
+        .await
+        .unwrap();
+    assert_eq!(exhausted["status"], "limitExhausted");
+    assert_eq!(exhausted["steps"].as_array().unwrap().len(), 2);
+    assert!(app.execute(WorkCommand::Resume { id }).await.is_err());
+}
+
+#[tokio::test]
 async fn execute_runs_configured_agent_in_existing_workspace() {
     let f = Fixture::new();
     let mut config = common::read_config(&f.path);
@@ -233,6 +313,14 @@ async fn missing_agent_outcome_stops_the_run() {
             .unwrap()
             .contains("valid configured outcome")
     );
+    let resumed = app
+        .execute(WorkCommand::Resume {
+            id: status["id"].as_str().unwrap().into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(resumed["status"], "running");
+    assert_eq!(resumed["attempt"], 2);
 }
 
 #[tokio::test]

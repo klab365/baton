@@ -235,6 +235,101 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn pi_provider_failures_retry_only_without_tools() {
+        use std::os::unix::fs::PermissionsExt;
+        for (diagnostic, tools, failures, expected_calls, expected_error) in [
+            ("rate_limit_error", vec![], 1, 2, None),
+            ("rate_limit_error", vec![], 5, 3, Some("after 2 retries")),
+            (
+                "rate_limit_error",
+                vec!["shell"],
+                5,
+                1,
+                Some("reconcile side effects"),
+            ),
+            (
+                "content_policy_violation",
+                vec![],
+                5,
+                1,
+                Some("content policy"),
+            ),
+            (
+                "authentication failed",
+                vec![],
+                5,
+                1,
+                Some("authentication failed"),
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let script = root.path().join("pi");
+            let calls = root.path().join("calls");
+            std::fs::write(&script, format!(r##"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --session-dir) shift; dir="$1";;
+    --session-id) shift; id="$1";;
+    --session) shift; file="$1";;
+  esac
+  shift
+done
+cat >/dev/null
+if [ -z "$file" ]; then
+  file="$dir/test_$id.jsonl"
+  printf '{{"type":"session","id":"%s","cwd":"%s"}}\n{{"type":"message","message":{{"role":"user"}}}}\n' "$id" "$PWD" > "$file"
+fi
+printf x >> '{}'
+n=$(wc -c < '{}')
+if [ "$n" -le {} ]; then
+  printf '{{"type":"message","message":{{"role":"assistant","stopReason":"error","errorMessage":"{} private-secret"}}}}\n' >> "$file"
+  exit 1
+fi
+printf '{{"type":"message","message":{{"role":"assistant","stopReason":"stop"}}}}\n' >> "$file"
+printf done
+"##, calls.display(), calls.display(), failures, diagnostic)).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let vault = root.path().join("vault");
+            let repository = Arc::new(FilesystemCredentialRepository::new(vault.clone()));
+            let mut runtime = ConfiguredRuntime::new(repository, vault, vec![]);
+            runtime.pi_command = script.into();
+            let agent: Agent = serde_json::from_value(serde_json::json!({"id":"pi", "instructions":"role", "provider":"pi", "skillIds":[], "allowedTools":tools})).unwrap();
+            let mut trace = vec![];
+            let result = runtime.execute_pipeline_step_observed(
+                root.path(),
+                &agent,
+                "private prompt",
+                &[],
+                &|| false,
+                &mut |entry| {
+                    trace.push(entry);
+                    Ok(())
+                },
+            );
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|entry| entry.kind == "runtimeRetry")
+                    .count(),
+                expected_calls - 1
+            );
+            match expected_error {
+                Some(expected) => {
+                    let error = result.unwrap_err();
+                    assert!(error.contains(expected), "{error}");
+                    assert!(!error.contains("private"));
+                }
+                None => assert_eq!(result.unwrap(), "done"),
+            }
+            assert_eq!(
+                std::fs::read_to_string(calls).unwrap().len(),
+                expected_calls
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn pi_detached_pipe_holder() {
         let Ok(pid_file) = std::env::var("BATON_PI_DESCENDANT_FILE") else {
             return;
