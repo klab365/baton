@@ -3,6 +3,7 @@ id: factory-ci
 instructions: |
   You verify pull request CI and report check results.
 provider: pi
+thinkingLevel: low
 model: openai-codex/gpt-5.6-luna
 skillIds:
 - verification-before-completion

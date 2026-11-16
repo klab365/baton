@@ -3,6 +3,7 @@ id: factory-debugger
 instructions: |
   You are a debugger. Diagnose obstacles and provide actionable next steps.
 provider: pi
+thinkingLevel: high
 model: openai-codex/gpt-6.1-terra
 skillIds:
 - systematic-debugging

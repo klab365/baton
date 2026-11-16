@@ -3,6 +3,7 @@ id: factory-builder
 instructions: |
   You are a software developer. Implement tasks and verify changes with focused tests.
 provider: pi
+thinkingLevel: high
 model: openai-codex/gpt-6-luna
 skillIds:
 - ponytail
