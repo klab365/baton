@@ -3,6 +3,7 @@ id: factory-planner
 instructions: |
   You are a software planner. Analyze requirements and create actionable implementation plans.
 provider: pi
+thinkingLevel: high
 model: openai-codex/gpt-6.1-terra
 skillIds:
 - concise-planning

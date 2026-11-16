@@ -30,7 +30,6 @@ steps:
 - id: build
   name: Implement and verify
   agentId: factory-builder
-  includeTask: true
   prompt: |
     Execute the incoming plan, not as completed work but by inspecting and
     modifying the repository and verifying the changes. On re-entry, act on
@@ -65,7 +64,6 @@ steps:
 - id: debug
   name: Diagnose builder blocker
   agentId: factory-debugger
-  includeTask: true
   prompt: |
     Independently investigate the blocker in the handoff and inspect the
     repository. Return evidence and actionable next steps for implementation or
@@ -86,7 +84,6 @@ steps:
 - id: review
   name: Independent review
   agentId: factory-reviewer
-  includeTask: true
   prompt: |
     Independently review the changes against the task and prior handoff. For an
     explicit reinspection run, verify the retained task worktree and inspect the
@@ -120,7 +117,6 @@ steps:
 - id: commit
   name: Commit and publish pull request
   agentId: factory-committer
-  includeTask: true
   prompt: |
     Before any side effect, inspect the task branch, commits, remote branch and
     existing PR; verify repository, branch and PR URL against the reviewer handoff.
@@ -167,7 +163,6 @@ steps:
 - id: ci
   name: Verify pull request CI
   agentId: factory-ci
-  includeTask: true
   prompt: |
     Inspect the existing pull request once; do not poll, sleep, or wait. Locate it
     using verified repository and task branch identity from the committer handoff.

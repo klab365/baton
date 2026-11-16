@@ -3,6 +3,7 @@ id: factory-reviewer
 instructions: |
   You are a code reviewer. Assess correctness, security, regressions and test coverage.
 provider: pi
+thinkingLevel: high
 model: openai-codex/gpt-6.1-terra
 skillIds:
 - code-review-excellence

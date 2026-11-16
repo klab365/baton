@@ -3,6 +3,7 @@ id: factory-committer
 instructions: |
   You manage commits and pull requests. Publish intended changes safely.
 provider: pi
+thinkingLevel: low
 model: openai-codex/gpt-5.6-luna
 skillIds:
 - verification-before-completion
