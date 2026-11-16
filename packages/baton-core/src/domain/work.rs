@@ -44,6 +44,8 @@ pub struct WorkSubmission {
     pub attempt: u32,
     pub outcome: Outcome,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_handoff: Option<crate::domain::pipeline::StructuredHandoff>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -719,6 +719,7 @@ fn complete(
     index: usize,
     outcome: Outcome,
     summary: String,
+    structured_handoff: Option<crate::domain::pipeline::StructuredHandoff>,
 ) -> Result<(), String> {
     let (_, pipeline) = graph(run)?;
     let pipeline = pipeline.clone();
@@ -731,6 +732,7 @@ fn complete(
         .and_then(|started| elapsed_ms(started, &ended_at));
     run.steps[index].ended_at = Some(ended_at);
     run.steps[index].output = Some(summary.clone());
+    run.steps[index].structured_handoff = structured_handoff;
     run.handoff = Some(if human {
         human_handoff(run.handoff.as_deref(), &summary)?
     } else {
@@ -769,6 +771,9 @@ async fn submit_work_handler(
             &result.outcome,
         )?;
         bounded("Summary", &result.summary)?;
+        if let Some(handoff) = &result.structured_handoff {
+            handoff.validate()?;
+        }
         let mut routed = run.clone();
         let (_, pipeline) = graph(&run)?;
         route(&mut routed, pipeline, index, result.outcome.clone())?;
@@ -811,7 +816,13 @@ async fn submit_work_handler(
                 checks,
             });
         let step_id = result.step_id.clone();
-        complete(&mut run, index, result.outcome, result.summary)?;
+        complete(
+            &mut run,
+            index,
+            result.outcome,
+            result.summary,
+            result.structured_handoff,
+        )?;
         if repeated {
             publish(
                 resources.runs.as_ref(),
@@ -897,7 +908,7 @@ async fn respond_work_handler(
     if action.response.len() > MAX_HANDOFF_BYTES {
         return Err("Response exceeds 16384 bytes".into());
     }
-    complete(&mut run, index, action.outcome, action.response)?;
+    complete(&mut run, index, action.outcome, action.response, None)?;
     let message = publication_message(&run, "Explicit human response received").to_owned();
     publish(resources.runs.as_ref(), &mut run, Some(message))?;
     Ok(run)
@@ -906,6 +917,61 @@ async fn respond_work_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_submission_preserves_structured_handoff_for_next_step_and_recovery() {
+        use crate::domain::pipeline::{Finding, FindingStatus, StructuredHandoff};
+
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"external", "pipelineId":"p", "task":"task", "startedAt":"now",
+            "status":"running", "currentStep":"review",
+            "steps":[{"stepId":"review","agentId":"reviewer","status":"running","attempt":1}],
+            "configSnapshot":{"schemaVersion":7,"agents":[{"id":"reviewer","systemPrompt":"prompt","credentialId":"credential","skillIds":[]}],"pipelines":[{"id":"p","steps":[
+                {"id":"review","name":"Review","type":"agent","agentId":"reviewer","transitions":[{"outcome":"approved","to":"build"}]},
+                {"id":"build","name":"Build","type":"human"}
+            ]}]},
+            "session":{"workspace":"/tmp/work","revision":0,"maxAttempts":10,"checks":[],"submissions":[]}
+        })).unwrap();
+        let handoff = StructuredHandoff {
+            version: 1,
+            summary: "Fix the reported issue".into(),
+            findings: vec![Finding {
+                id: "F-1".into(),
+                status: FindingStatus::Open,
+                description: "Validate the response".into(),
+            }],
+            verification: vec![],
+            next_action: Some("Add the validation".into()),
+        };
+        complete(
+            &mut run,
+            0,
+            Outcome::Approved,
+            "One issue found".into(),
+            Some(handoff.clone()),
+        )
+        .unwrap();
+
+        let input = crate::features::pipeline_engine::step_input(
+            &run,
+            &run.config_snapshot.as_ref().unwrap().pipelines[0],
+        )
+        .unwrap();
+        assert!(input.contains("One issue found"));
+        assert!(input.contains("Validate the response"));
+        let recovered: PipelineRun =
+            serde_json::from_slice(&serde_json::to_vec(&run).unwrap()).unwrap();
+        assert_eq!(recovered.steps[0].structured_handoff, Some(handoff));
+    }
+
+    #[test]
+    fn legacy_submission_without_structured_handoff_deserializes() {
+        let submission: WorkSubmission = serde_json::from_value(serde_json::json!({
+            "revision":0,"stepId":"review","attempt":1,"outcome":"approved","summary":"ok"
+        }))
+        .unwrap();
+        assert!(submission.structured_handoff.is_none());
+    }
 
     #[test]
     fn external_human_completion_keeps_prior_handoff_and_response() {
@@ -924,6 +990,7 @@ mod tests {
             0,
             Outcome::Responded,
             "use approved mirror".into(),
+            None,
         )
         .unwrap();
         assert_eq!(run.status, Status::WaitingHuman);

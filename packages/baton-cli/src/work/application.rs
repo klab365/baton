@@ -278,7 +278,7 @@ impl WorkApplication {
                                 "Shell handoff exceeds 16384 bytes".into(),
                             ));
                         }
-                        return Ok((outcome, summary, vec![]));
+                        return Ok((outcome, summary, None, vec![]));
                     }
                     let agent = agent.ok_or("Current step has no configured agent")?;
                     if history_unavailable {
@@ -338,9 +338,21 @@ impl WorkApplication {
                         });
                     }
                     if allowed.is_empty() {
+                        let structured_handoff = runtime
+                            .take_decision()
+                            .and_then(|decision| decision.structured_handoff);
+                        if let Some(handoff) = &structured_handoff {
+                            handoff
+                                .validate()
+                                .map_err(|_| StepFailure::InvalidOutcome {
+                                    message: "Agent reported an invalid structured handoff",
+                                    trace: trace.clone(),
+                                })?;
+                        }
                         Ok((
                             baton_core::domain::project::Outcome::Completed,
                             output,
+                            structured_handoff,
                             trace,
                         ))
                     } else {
@@ -365,7 +377,20 @@ impl WorkApplication {
                                 trace,
                             });
                         }
-                        Ok((decision.outcome, decision.summary, trace))
+                        if let Some(handoff) = &decision.structured_handoff {
+                            handoff
+                                .validate()
+                                .map_err(|_| StepFailure::InvalidOutcome {
+                                    message: "Agent reported an invalid structured handoff",
+                                    trace: trace.clone(),
+                                })?;
+                        }
+                        Ok((
+                            decision.outcome,
+                            decision.summary,
+                            decision.structured_handoff,
+                            trace,
+                        ))
                     }
                 })
                 .await
@@ -382,7 +407,9 @@ impl WorkApplication {
                     return serde_json::to_value(WorkProgress::from(current))
                         .map_err(|e| e.to_string());
                 }
-                let (outcome, summary, trace) = match execution.and_then(|result| result) {
+                let (outcome, summary, structured_handoff, trace) = match execution
+                    .and_then(|result| result)
+                {
                     Ok(result) => result,
                     Err(StepFailure::InvalidOutcome { message, trace }) => {
                         self.mediator
@@ -451,6 +478,7 @@ impl WorkApplication {
                                 attempt,
                                 outcome,
                                 summary,
+                                structured_handoff,
                             },
                             input: Some(recorded_input),
                             trace,
