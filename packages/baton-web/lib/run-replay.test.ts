@@ -13,6 +13,18 @@ describe("replaySteps", () => {
 		expect(steps[0].attempt).toBe(3);
 	});
 
+	test("keeps repeated visits grouped by step in saved replay order", () => {
+		const steps = [
+			{ stepId: "review", attempt: 1, status: "succeeded" },
+			{ stepId: "build", attempt: 2, status: "succeeded" },
+			{ stepId: "review", attempt: 3, status: "running" },
+		];
+		const visits = replaySteps(steps).filter(
+			(step) => step.stepId === "review",
+		);
+		expect(visits.map((step) => step.attempt)).toEqual([1, 3]);
+	});
+
 	test("preserves saved order when older attempts lack numbers", () => {
 		const steps = [
 			{ attempt: 0, status: "succeeded" },
