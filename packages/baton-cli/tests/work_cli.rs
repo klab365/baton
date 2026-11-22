@@ -130,6 +130,159 @@ printf 'FINAL ANSWER'
 
 #[cfg(unix)]
 #[test]
+fn refine_reuses_pi_conversation_in_the_same_worktree_and_rejects_missing_history() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bin = f.path.join("fake-bin");
+    fs::create_dir(&bin).unwrap();
+    let pi = bin.join("pi");
+    fs::write(
+        &pi,
+        r##"#!/bin/sh
+session_dir=""
+existing=""
+session_id=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --session-dir) shift; session_dir="$1" ;;
+    --session) shift; existing="$1" ;;
+    --session-id) shift; session_id="$1" ;;
+  esac
+  shift
+done
+prompt=$(cat)
+printf '%s\t%s\n' "$session_dir" "$existing" >> "$PI_CALL_LOG"
+printf '%s\n---END---\n' "$prompt" >> "$PI_PROMPT_LOG"
+mkdir -p "$session_dir"
+if [ -z "$existing" ]; then
+  printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$session_id" "$PWD" > "$session_dir/session_$session_id.jsonl"
+fi
+printf '{"outcome":"completed","summary":"agent summary"}' > "$BATON_PI_OUTCOME_FILE"
+printf 'completed'
+"##,
+    )
+    .unwrap();
+    fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7,
+            "agents": [{"id":"worker", "systemPrompt":"Implement", "provider":"pi", "skillIds":[], "allowedTools":["report_outcome"]}],
+            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "transitions":[{"outcome":"completed", "to":null}]}]}]
+        }),
+    );
+    let call_log = f.path.join("pi-calls.log");
+    let prompt_log = f.path.join("pi-prompts.log");
+    let env_path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+
+    let original = f.value(&["start", "--issue", "Implement feature"]);
+    let original_id = original["id"].as_str().unwrap();
+    let execute = |id: &str| {
+        f.command()
+            .env("PATH", &env_path)
+            .env("PI_CALL_LOG", &call_log)
+            .env("PI_PROMPT_LOG", &prompt_log)
+            .args(["work", "execute", "--run", id])
+            .output()
+            .unwrap()
+    };
+    let completed = execute(original_id);
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    assert_eq!(
+        f.value(&["status", "--run", original_id])["status"],
+        "succeeded"
+    );
+    common::write_config(
+        &f.path,
+        &json!({
+            "schemaVersion": 7,
+            "agents": [{"id":"worker", "systemPrompt":"Updated instructions", "provider":"pi", "skillIds":[], "allowedTools":["report_outcome"]}],
+            "pipelines": [{"id":"factory", "steps":[{"id":"build", "name":"Build", "type":"agent", "agentId":"worker", "transitions":[{"outcome":"completed", "to":null}]}]}]
+        }),
+    );
+
+    let refined = f.value(&[
+        "refine",
+        "--run",
+        original_id,
+        "--instruction",
+        "Fix the remaining edge case",
+    ]);
+    let refined_id = refined["id"].as_str().unwrap();
+    assert_ne!(refined_id, original_id);
+    let old_status = f.value(&["status", "--run", original_id]);
+    let new_status = f.value(&["status", "--run", refined_id]);
+    assert_eq!(old_status["status"], "succeeded");
+    assert_eq!(new_status["status"], "running");
+    assert_eq!(new_status["session"]["workspace"], f.path.to_str().unwrap());
+    assert_eq!(new_status["session"]["conversationId"], original_id);
+    assert_eq!(
+        new_status["session"]["conversationAgents"],
+        json!(["worker"])
+    );
+    assert_eq!(
+        new_status["configSnapshot"]["agents"][0]["instructions"],
+        "Updated instructions"
+    );
+    assert!(
+        new_status["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("agent summary"),
+        "{new_status}"
+    );
+    assert!(
+        new_status["handoff"]
+            .as_str()
+            .unwrap()
+            .contains("Fix the remaining edge case")
+    );
+
+    let completed_refinement = execute(refined_id);
+    assert!(
+        completed_refinement.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed_refinement.stderr)
+    );
+    assert_eq!(
+        f.value(&["status", "--run", refined_id])["status"],
+        "succeeded"
+    );
+    let calls = fs::read_to_string(&call_log).unwrap();
+    let calls: Vec<_> = calls.lines().collect();
+    assert_eq!(calls.len(), 2);
+    let (first_dir, first_session) = calls[0].split_once('\t').unwrap();
+    let (second_dir, second_session) = calls[1].split_once('\t').unwrap();
+    assert_eq!(first_dir, second_dir);
+    assert!(first_session.is_empty());
+    assert!(second_session.starts_with(first_dir));
+    let prompts = fs::read_to_string(&prompt_log).unwrap();
+    let refined_prompt = prompts.split("---END---").nth(1).unwrap();
+    assert!(refined_prompt.contains("agent summary"));
+    assert!(refined_prompt.contains("Fix the remaining edge case"));
+
+    let final_refinement = f.value(&[
+        "refine",
+        "--run",
+        refined_id,
+        "--instruction",
+        "Check missing conversation recovery",
+    ]);
+    let final_id = final_refinement["id"].as_str().unwrap();
+    let conversation = PathBuf::from(first_dir);
+    fs::remove_dir_all(&conversation).unwrap();
+    let missing = execute(final_id);
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("session is missing"));
+    assert_eq!(f.value(&["status", "--run", final_id])["status"], "failed");
+}
+
+#[cfg(unix)]
+#[test]
 fn pi_policy_failure_is_persisted_without_provider_diagnostics() {
     use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new();

@@ -13,6 +13,7 @@ const HELP: &str =
     "Usage: baton work <start|next|execute|resume|submit|status|respond|cancel|pipelines> [options]
   start --issue <task text> [--pipeline ID]
         [--check STEP=COMMAND ...]
+  refine --run ID --instruction <follow-up request>
   next --run ID
   execute --run ID
   resume --run ID  (previous attempt may have made changes; inspect before executing again)
@@ -44,6 +45,11 @@ impl Options {
                     .arg(option("pipeline"))
                     .arg(option("check").action(ArgAction::Append)),
             )
+            .subcommand(
+                common(Command::new("refine"))
+                    .arg(option("run"))
+                    .arg(option("instruction")),
+            )
             .subcommand(common(Command::new("pipelines")))
             .subcommand(common(Command::new("next")).arg(option("run")))
             .subcommand(common(Command::new("execute")).arg(option("run")))
@@ -63,7 +69,14 @@ impl Options {
             .try_get_matches_from(std::iter::once("work".to_string()).chain(args))?;
         let (action, matches) = matches.subcommand().context(HELP)?;
         let mut values = HashMap::new();
-        for name in ["workspace", "run", "issue", "pipeline", "result"] {
+        for name in [
+            "workspace",
+            "run",
+            "issue",
+            "pipeline",
+            "result",
+            "instruction",
+        ] {
             if let Ok(Some(value)) = matches.try_get_one::<String>(name) {
                 values.insert(format!("--{name}"), value.clone());
             }
@@ -168,6 +181,10 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
                 checks,
             }
         }
+        "refine" => WorkCommand::Refine {
+            id: options.required("--run")?,
+            instruction: options.required("--instruction")?,
+        },
         "next" => WorkCommand::Next {
             id: options.required("--run")?,
         },
@@ -213,6 +230,37 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refine_requires_run_and_follow_up_instruction() {
+        let parsed = Options::parse(
+            [
+                "refine",
+                "--run",
+                "old",
+                "--instruction",
+                "fix the edge case",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        )
+        .unwrap();
+        assert_eq!(parsed.action, "refine");
+        assert_eq!(parsed.required("--run").unwrap(), "old");
+        assert_eq!(
+            parsed.required("--instruction").unwrap(),
+            "fix the edge case"
+        );
+        let missing_instruction = Options::parse(
+            vec!["refine", "--run", "old"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap();
+        assert!(missing_instruction.required("--instruction").is_err());
+    }
+
     #[test]
     fn options_reject_mistakes_instead_of_silently_changing_behavior() {
         for args in [

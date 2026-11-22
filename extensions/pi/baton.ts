@@ -113,6 +113,41 @@ function inspectRecord(value: unknown): string {
 	return boundedText(`Work session ${String(run.id ?? "unknown")} · ${String(run.status ?? "status unavailable")}\n${formatInsights(allSteps as Record<string, unknown>[])}\n${JSON.stringify(record, null, 2)}`);
 }
 
+async function chooseRefinementRun(
+	exec: Exec,
+	id: string | undefined,
+	ui: UI,
+): Promise<string | undefined> {
+	const value = await exec(["status"]);
+	if (!Array.isArray(value)) throw new Error("Invalid work session list");
+	const candidates = value
+		.filter(
+			(run): run is Record<string, unknown> =>
+				!!run && typeof run === "object" &&
+				typeof run.id === "string" && run.status === "succeeded",
+		)
+		.sort((a, b) => {
+			const startedAt = (run: Record<string, unknown>) => {
+				if (typeof run.startedAt !== "string") return 0;
+				const timestamp = Date.parse(run.startedAt);
+				return Number.isFinite(timestamp) ? timestamp : 0;
+			};
+			return startedAt(b) - startedAt(a);
+		});
+	if (id) {
+		const run = candidates.find((candidate) => candidate.id === id);
+		if (!run) throw new Error(`No completed work session with ID '${id}'`);
+		return run.id as string;
+	}
+	if (!candidates.length) throw new Error("No completed work sessions to refine");
+	const labels = candidates.map(
+		(run, index) => `${index === 0 ? "★ " : ""}${String(run.id)} · ${typeof run.pipelineId === "string" ? run.pipelineId : "pipeline"}`,
+	);
+	const selected = await ui.select("Baton: choose a completed run to refine", labels);
+	const run = candidates[labels.indexOf(selected ?? "")];
+	return run?.id as string | undefined;
+}
+
 export async function manage(
 	args: string,
 	exec: Exec,
@@ -122,7 +157,7 @@ export async function manage(
 	const [command, id, ...extra] = args.trim().split(/\s+/);
 	if (!command) return false;
 	if (command === "help" && !id) {
-		show("/baton — start a task; /baton RUN_ID — resume. Commands: list [PAGE], inspect RUN_ID, resume RUN_ID, help. List pages contain up to 50 sessions, adapt to an output-size budget, and show previous/next commands. List and inspect read local work-session records; resume may execute configured steps and asks before human decisions. Live Pi subagent activity is not captured.");
+		show("/baton — start a task; /baton RUN_ID — resume. Commands: list [PAGE], inspect RUN_ID, resume RUN_ID, refine [RUN_ID], help. Refine starts a new run in this worktree and reuses the prior run's agent conversations. List and inspect are read-only; resume and refine may execute configured steps and ask for human decisions. Live Pi subagent activity is not captured.");
 		return true;
 	}
 	if (command === "list" && (!id || (!extra.length && /^\d+$/.test(id)))) {
@@ -131,12 +166,25 @@ export async function manage(
 		show(listRecords(await exec(["status"]), page));
 		return true;
 	}
+	if (command === "refine" && extra.length === 0) {
+		const runId = await chooseRefinementRun(exec, id, ui);
+		if (!runId) return true;
+		const instruction = await ui.editor("Baton refinement: what should change or be done next?", "");
+		if (!instruction?.trim()) return true;
+		const started = (await exec(["refine", "--run", runId, "--instruction", instruction])) as {
+			id?: string;
+		};
+		if (typeof started.id !== "string" || !started.id) throw new Error("Invalid refined work session");
+		show(`Baton refinement started: ${started.id} (from ${runId})`);
+		await drive(started.id, exec, ui, show);
+		return true;
+	}
 	if ((command === "inspect" || command === "resume") && id && !extra.length) {
 		if (command === "inspect") show(inspectRecord(await exec(["status", "--run", id])));
 		else await drive(id, exec, ui, show);
 		return true;
 	}
-	throw new Error("Usage: /baton [help|list [PAGE]|inspect RUN_ID|resume RUN_ID]");
+	throw new Error("Usage: /baton [help|list [PAGE]|inspect RUN_ID|resume RUN_ID|refine [RUN_ID]]");
 }
 
 /** Run the CLI state machine; the UI never chooses a human outcome on its own. */
@@ -237,7 +285,7 @@ export async function drive(
 
 export default function baton(pi: ExtensionAPI) {
 	pi.registerCommand("baton", {
-		description: "Start or resume a Baton run in this workspace",
+		description: "Start, resume or refine a Baton run in this worktree",
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) return;
 			const exec: Exec = async (workArgs) => {
@@ -259,7 +307,7 @@ export default function baton(pi: ExtensionAPI) {
 				pi.sendMessage({ customType: "baton", content: text, display: true });
 			let runId = args.trim();
 			try {
-				if (/^(help|list|inspect|resume)(?:\s|$)/.test(runId)) {
+				if (/^(help|list|inspect|resume|refine)(?:\s|$)/.test(runId)) {
 					await manage(runId, exec, ctx.ui, show);
 					return;
 				}
