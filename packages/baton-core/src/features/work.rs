@@ -40,6 +40,13 @@ pub struct StartWork {
     pub checks: Vec<WorkCheck>,
 }
 #[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct RefineWork {
+    pub id: String,
+    pub new_id: String,
+    pub instruction: String,
+}
+#[derive(MediCommand)]
 #[medi_command(return_type = WorkItem, error_type = String)]
 pub struct NextWork {
     pub id: String,
@@ -369,6 +376,106 @@ fn outcomes(step: &PipelineStep) -> Vec<Outcome> {
         step.transitions.iter().map(|t| t.outcome.clone()).collect()
     }
 }
+fn refinement_handoff(previous: Option<&str>, instruction: &str) -> Result<String, String> {
+    let instruction = instruction.trim();
+    bounded("Refinement request", instruction)?;
+    let suffix = format!("\n\nRefinement request:\n{instruction}");
+    let Some(previous) = previous.filter(|value| !value.trim().is_empty()) else {
+        let handoff = suffix.trim_start().to_owned();
+        bounded("Refinement handoff", &handoff)?;
+        return Ok(handoff);
+    };
+    let prefix = "Previous run handoff:\n";
+    let marker = "[Earlier handoff truncated]\n";
+    if prefix.len() + marker.len() + suffix.len() > MAX_HANDOFF_BYTES {
+        return Err("Refinement request leaves no room for its handoff labels".into());
+    }
+    let available = MAX_HANDOFF_BYTES - prefix.len() - marker.len() - suffix.len();
+    let mut start = previous.len().saturating_sub(available);
+    while !previous.is_char_boundary(start) {
+        start += 1;
+    }
+    let omitted = start > 0;
+    let prefix = if omitted {
+        format!("{prefix}{marker}")
+    } else {
+        prefix.to_owned()
+    };
+    let handoff = format!("{prefix}{}{suffix}", &previous[start..]);
+    bounded("Refinement handoff", &handoff)?;
+    Ok(handoff)
+}
+
+fn refined_run(
+    previous: &PipelineRun,
+    new_id: String,
+    instruction: &str,
+    config: ProjectConfig,
+) -> Result<PipelineRun, String> {
+    if previous.status != Status::Succeeded {
+        return Err("Only a completed work session can be refined".into());
+    }
+    if new_id == previous.id {
+        return Err("A refinement must create a distinct work run".into());
+    }
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == previous.pipeline_id)
+        .ok_or("The completed run's pipeline is no longer configured")?;
+    let first_step = pipeline.steps.first().ok_or("Pipeline has no steps")?;
+    let session = previous.session.as_ref().ok_or("Missing session")?;
+    Ok(PipelineRun {
+        id: new_id,
+        task_id: previous.task_id.clone(),
+        worktree: previous.worktree.clone(),
+        setup_error: None,
+        pipeline_id: previous.pipeline_id.clone(),
+        task: previous.task.clone(),
+        started_at: utc_now(),
+        ended_at: None,
+        duration_ms: None,
+        events: vec![],
+        trace: vec![],
+        status: Status::Running,
+        steps: vec![],
+        current_step: Some(first_step.id.clone()),
+        handoff: Some(refinement_handoff(
+            previous.handoff.as_deref(),
+            instruction,
+        )?),
+        pending_actions: vec![],
+        config_snapshot: Some(config),
+        session: Some(WorkSession {
+            workspace: session.workspace.clone(),
+            conversation_id: Some(
+                session
+                    .conversation_id
+                    .clone()
+                    .unwrap_or_else(|| previous.id.clone()),
+            ),
+            conversation_agents: {
+                let mut agents = session.conversation_agents.clone();
+                for step in previous
+                    .steps
+                    .iter()
+                    .filter(|step| step.status == Status::Succeeded && !step.agent_id.is_empty())
+                {
+                    if !agents.contains(&step.agent_id) {
+                        agents.push(step.agent_id.clone());
+                    }
+                }
+                agents
+            },
+            source: session.source.clone(),
+            revision: 0,
+            max_attempts: session.max_attempts,
+            checks: session.checks.clone(),
+            submissions: vec![],
+        }),
+    })
+}
+
 fn publication_message<'a>(run: &'a PipelineRun, fallback: &'a str) -> &'a str {
     run.events
         .iter()
@@ -544,7 +651,7 @@ async fn start_work_handler(
         }
     }
     let mut run = PipelineRun {
-        id: command.id,
+        id: command.id.clone(),
         task_id: None,
         worktree: None,
         setup_error: None,
@@ -563,6 +670,8 @@ async fn start_work_handler(
         config_snapshot: Some(config),
         session: Some(WorkSession {
             workspace: resources.workspace,
+            conversation_id: Some(command.id.clone()),
+            conversation_agents: vec![],
             source: command.source,
             revision: 0,
             max_attempts,
@@ -576,6 +685,56 @@ async fn start_work_handler(
         resources.runs.as_ref(),
         &mut run,
         Some("External work session started; workspace remains externally owned".into()),
+    )?;
+    Ok(run)
+}
+
+#[medi_handler]
+async fn refine_work_handler(
+    resources: WorkResources,
+    command: RefineWork,
+) -> Result<PipelineRun, String> {
+    let _lease = resources.runs.acquire_action_lease(&command.id)?;
+    let previous = resources.runs.load(&command.id)?;
+    validate_workspace(&previous, &resources.workspace)?;
+    let config = match resources.config.load().await? {
+        ConfigState::Ready(snapshot) => snapshot.config,
+        ConfigState::Missing => return Err("Project configuration is missing".into()),
+        ConfigState::Invalid(error) => return Err(error),
+    };
+    config.validate()?;
+    let pipeline = config
+        .pipelines
+        .iter()
+        .find(|pipeline| pipeline.id == previous.pipeline_id)
+        .ok_or("The completed run's pipeline is no longer configured")?;
+    let skills = resources.skills.list()?;
+    for step in pipeline
+        .steps
+        .iter()
+        .filter(|step| !step.is_human() && step.command().is_none())
+    {
+        let agent = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == step.agent_id())
+            .ok_or("Pipeline references an unknown agent")?;
+        for skill_id in &agent.skill_ids {
+            if !skills.iter().any(|skill| &skill.id == skill_id) {
+                return Err(format!("Assigned skill {skill_id:?} is missing"));
+            }
+        }
+    }
+    let mut run = refined_run(&previous, command.new_id, &command.instruction, config)?;
+    prepare(&mut run)?;
+    resources.runs.create(&run)?;
+    publish(
+        resources.runs.as_ref(),
+        &mut run,
+        Some(format!(
+            "Refinement of work session {}; reusing its agent conversations and workspace",
+            previous.id
+        )),
     )?;
     Ok(run)
 }
@@ -733,6 +892,13 @@ fn complete(
     run.steps[index].ended_at = Some(ended_at);
     run.steps[index].output = Some(summary.clone());
     run.steps[index].structured_handoff = structured_handoff;
+    let agent_id = run.steps[index].agent_id.clone();
+    if !agent_id.is_empty() {
+        let session = run.session.as_mut().ok_or("Missing session")?;
+        if !session.conversation_agents.contains(&agent_id) {
+            session.conversation_agents.push(agent_id);
+        }
+    }
     run.handoff = Some(if human {
         human_handoff(run.handoff.as_deref(), &summary)?
     } else {
@@ -919,6 +1085,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn refine_starts_a_fresh_run_in_the_same_workspace_and_conversations() {
+        let previous: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"old-run", "pipelineId":"p", "task":"original task", "startedAt":"then",
+            "status":"succeeded", "handoff":"previous result",
+            "steps":[{"stepId":"build","agentId":"builder","status":"succeeded","output":"done","attempt":1}],
+            "configSnapshot":{"schemaVersion":7,"agents":[{"id":"builder","instructions":"role","provider":"rig","skillIds":[]}],"pipelines":[{"id":"p","steps":[{"id":"build","name":"Build","type":"agent","agentId":"builder"}]}]},
+            "session":{"workspace":"/tmp/work","revision":3,"maxAttempts":50,"checks":[],"submissions":[]}
+        })).unwrap();
+
+        let refined = refined_run(
+            &previous,
+            "new-run".into(),
+            "Please fix the edge case",
+            previous.config_snapshot.clone().unwrap(),
+        )
+        .unwrap();
+        let session = refined.session.unwrap();
+        assert_eq!(refined.id, "new-run");
+        assert_eq!(refined.status, Status::Running);
+        assert_eq!(refined.current_step.as_deref(), Some("build"));
+        assert_eq!(refined.task, "original task");
+        assert_eq!(refined.steps.len(), 0);
+        assert_eq!(session.workspace, PathBuf::from("/tmp/work"));
+        assert_eq!(session.conversation_id.as_deref(), Some("old-run"));
+        assert_eq!(session.conversation_agents, vec!["builder"]);
+        assert!(
+            refined
+                .handoff
+                .as_deref()
+                .unwrap()
+                .contains("previous result")
+        );
+        assert!(
+            refined
+                .handoff
+                .as_deref()
+                .unwrap()
+                .contains("Please fix the edge case")
+        );
+    }
+
+    #[test]
+    fn refine_rejects_nonterminal_runs_and_preserves_latest_request_when_bounding_handoff() {
+        let running: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"run", "pipelineId":"p", "task":"task", "startedAt":"now", "status":"running", "steps":[],
+            "configSnapshot":{"schemaVersion":7,"agents":[],"pipelines":[{"id":"p","steps":[{"id":"build","name":"Build","type":"human"}]}]},
+            "session":{"workspace":"/tmp/work","revision":0,"maxAttempts":50,"checks":[],"submissions":[]}
+        })).unwrap();
+        assert!(
+            refined_run(
+                &running,
+                "next".into(),
+                "more",
+                running.config_snapshot.clone().unwrap(),
+            )
+            .unwrap_err()
+            .contains("completed")
+        );
+        let handoff =
+            refinement_handoff(Some(&"prior context ".repeat(2000)), "keep this request").unwrap();
+        assert!(handoff.len() <= MAX_HANDOFF_BYTES);
+        assert!(handoff.contains("[Earlier handoff truncated]"));
+        assert!(handoff.contains("keep this request"));
+    }
+
+    #[test]
     fn external_submission_preserves_structured_handoff_for_next_step_and_recovery() {
         use crate::domain::pipeline::{Finding, FindingStatus, StructuredHandoff};
 
@@ -1080,6 +1312,7 @@ medi_module! {
         crate::features::work::BeginWork => crate::features::work::begin_work_handler;
         crate::features::work::RecoverWork => crate::features::work::recover_work_handler;
         crate::features::work::StartWork => crate::features::work::start_work_handler;
+        crate::features::work::RefineWork => crate::features::work::refine_work_handler;
         crate::features::work::NextWork => crate::features::work::next_work_handler;
         crate::features::work::SubmitWork => crate::features::work::submit_work_handler;
         crate::features::work::FailWork => crate::features::work::fail_work_handler;

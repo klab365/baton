@@ -14,6 +14,10 @@ pub struct WorkCheck {
 #[serde(rename_all = "camelCase")]
 pub struct WorkSession {
     pub workspace: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub conversation_agents: Vec<String>,
     pub source: Option<String>,
     pub revision: u64,
     pub max_attempts: u32,

@@ -26,6 +26,10 @@ pub enum WorkCommand {
         pipeline: Option<String>,
         checks: Vec<WorkCheck>,
     },
+    Refine {
+        id: String,
+        instruction: String,
+    },
     Next {
         id: String,
     },
@@ -139,6 +143,18 @@ impl WorkApplication {
                     })
                     .await?,
             )),
+            WorkCommand::Refine { id, instruction } => {
+                let new_id = uuid::Uuid::now_v7().to_string();
+                serde_json::to_value(WorkProgress::from(
+                    self.mediator
+                        .send(RefineWork {
+                            id,
+                            new_id,
+                            instruction,
+                        })
+                        .await?,
+                ))
+            }
             WorkCommand::Next { id } => {
                 if let Ok(_execution_lock) = WorkProcessLock::acquire_execution(&self.workspace) {
                     self.mediator.send(RecoverWork { id: id.clone() }).await?;
@@ -194,7 +210,12 @@ impl WorkApplication {
                         auth_root,
                     };
                     let mut runtime = factory.create(config, &run.pipeline_id)?;
-                    runtime.set_run_id(&run.id)?;
+                    let conversation_id = run
+                        .session
+                        .as_ref()
+                        .and_then(|session| session.conversation_id.as_deref())
+                        .unwrap_or(&run.id);
+                    runtime.set_run_id(conversation_id)?;
                     Ok::<_, String>(runtime)
                 })();
                 let mut runtime = match setup {
@@ -216,9 +237,12 @@ impl WorkApplication {
                 };
                 let history_unavailable = if let Some(agent) = &agent {
                     let required = run
-                        .steps
-                        .iter()
-                        .any(|attempt| attempt.agent_id == agent.id && attempt.output.is_some());
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.conversation_agents.contains(&agent.id))
+                        || run.steps.iter().any(|attempt| {
+                            attempt.agent_id == agent.id && attempt.output.is_some()
+                        });
                     runtime.set_history_required(required);
                     required && !runtime.supports_session_resumption(agent)
                 } else {

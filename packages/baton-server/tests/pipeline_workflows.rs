@@ -1571,7 +1571,6 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
         r#"{"outcome":"completed","output":"No new implementation changes; retain branch and PR identity"}"#,
         r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
         r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
-        r#"{"outcome":"completed","output":"PENDING: required checks queued for HEAD"}"#,
     ];
     let initial_outputs: Vec<String> = initial_outputs
         .iter()
@@ -1600,10 +1599,9 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
             .filter(|s| s.attempt > 0)
             .map(|s| s.step_id.as_str())
             .collect::<Vec<_>>(),
-        ["plan", "build", "review", "commit", "ci"]
+        ["plan", "build", "review", "commit"]
     );
     let first_commit = first.steps.iter().find(|s| s.step_id == "commit").unwrap();
-    let first_ci = first.steps.iter().find(|s| s.step_id == "ci").unwrap();
     assert!(
         first_commit
             .output
@@ -1611,8 +1609,6 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
             .unwrap()
             .contains("no commit or push")
     );
-    assert!(first_ci.output.as_deref().unwrap().contains("PENDING"));
-    assert!(first_ci.input.as_deref().unwrap().contains(&head));
     let head_before = head.clone();
 
     let rerun_task = format!(
@@ -1624,7 +1620,6 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
         r#"{"outcome":"completed","output":"No new implementation changes"}"#,
         r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
         r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
-        r#"{"outcome":"completed","output":"PASSED: required checks for HEAD"}"#,
     ];
     let reinspection_outputs: Vec<String> = reinspection_outputs
         .iter()
@@ -1649,7 +1644,6 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
     assert_eq!(rerun.worktree.as_ref().unwrap().path, worktree.path);
     assert!(rerun.steps[0].input.as_deref().unwrap().contains("PENDING"));
     let rerun_commit = rerun.steps.iter().find(|s| s.step_id == "commit").unwrap();
-    let rerun_ci = rerun.steps.iter().find(|s| s.step_id == "ci").unwrap();
     assert!(rerun_commit.input.as_deref().unwrap().contains(&head));
     assert!(
         rerun_commit
@@ -1658,8 +1652,6 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
             .unwrap()
             .contains("no commit or push")
     );
-    assert!(rerun_ci.output.as_deref().unwrap().contains("PASSED"));
-    assert!(rerun_ci.input.as_deref().unwrap().contains(&head));
     let head_after = Command::new("git")
         .arg("-C")
         .arg(&worktree.path)
@@ -1883,7 +1875,6 @@ fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
     let retry_outputs = [
         r#"{"outcome":"completed","output":"Verified existing commit; no new commit; repository example/repo branch task-reinspect PR https://github.com/example/repo/pull/42 head COMMIT_SHA"}"#
             .replace("COMMIT_SHA", &commit_sha),
-        r#"{"outcome":"completed","output":"PENDING: required check queued for reviewed commit"}"#.to_owned(),
     ];
     let retry_refs: Vec<&str> = retry_outputs.iter().map(String::as_str).collect();
     let mut retry_runtime = Script::new(&retry_refs);
@@ -1930,16 +1921,6 @@ fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
             .unwrap()
             .contains("no new commit")
     );
-    let ci_input = completed
-        .steps
-        .iter()
-        .find(|s| s.step_id == "ci")
-        .unwrap()
-        .input
-        .as_deref()
-        .unwrap();
-    assert!(ci_input.contains(&commit_sha));
-    assert!(ci_input.contains("https://github.com/example/repo/pull/42"));
     assert_eq!(git(&["rev-parse", "HEAD"]), commit_sha);
     assert_eq!(git(&["rev-parse", "HEAD^"]), precommit_head);
     assert_eq!(
@@ -1966,114 +1947,21 @@ fn configured_factory_recovers_partial_publish_for_existing_and_absent_remote_br
 }
 
 #[test]
-fn configured_factory_ci_outcome_scenarios_route_through_real_graph() {
-    // Scripted outcomes verify configured transitions, not GitHub classification.
-    for (name, ci_outcome, ci_detail) in [
-        ("pending", "completed", "PENDING: check queued; head abc123"),
-        (
-            "failure",
-            "revise_build",
-            "required check failed; head abc123",
-        ),
-        (
-            "passed",
-            "completed",
-            "PASSED: all required checks; head abc123",
-        ),
-        (
-            "api",
-            "blocked",
-            "GitHub API unauthorized; head/details unavailable",
-        ),
-    ] {
-        let fixture = Fixture::new();
-        let config = software_factory_config();
-        let mut outputs = vec![
-            r#"{"outcome":"completed","output":"plan existing PR repo/branch head abc123"}"#.to_owned(),
-            r#"{"outcome":"completed","output":"No unnecessary edits"}"#.to_owned(),
-            r#"{"outcome":"approved","output":"Reviewed existing diff against base for head abc123"}"#.to_owned(),
-            r#"{"outcome":"completed","output":"Existing PR https://github.com/example/repo/pull/42; no commit or push; head abc123"}"#.to_owned(),
-            serde_json::json!({"outcome":ci_outcome,"output":ci_detail,"blocker_reason":"API inspection unavailable"}).to_string(),
-        ];
-        if name == "failure" {
-            outputs.extend([
-                r#"{"outcome":"completed","output":"Fixed actionable failure"}"#.into(),
-                r#"{"outcome":"approved","output":"Reviewed fix against base; head abc123"}"#
-                    .into(),
-                r#"{"outcome":"completed","output":"Updated existing PR; head def456"}"#.into(),
-                r#"{"outcome":"completed","output":"PENDING: other check queued for head def456"}"#
-                    .into(),
-            ]);
-        }
-        let output_refs: Vec<&str> = outputs.iter().map(String::as_str).collect();
-        let mut runtime = Script::new(&output_refs);
-        let run = start_pipeline(
-            &config,
-            "draft",
-            "Reinspect existing PR https://github.com/example/repo/pull/42",
-            name,
-            &mut runtime,
-            &fixture.repo(),
-        )
+fn configured_factory_keeps_ci_out_of_the_default_pipeline() {
+    let config = software_factory_config();
+    let pipeline = &config.pipelines[0];
+    assert!(!pipeline.steps.iter().any(|step| step.id == "ci"));
+    assert!(config.agents.iter().all(|agent| agent.id != "factory-ci"));
+    let commit = pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == "commit")
         .unwrap();
-        assert_eq!(
-            run.status,
-            if name == "api" {
-                Status::WaitingHuman
-            } else {
-                Status::Succeeded
-            },
-            "{name}"
-        );
-        assert!(runtime.outputs.is_empty(), "{name}");
-        let ci_attempts: Vec<_> = run
-            .steps
-            .iter()
-            .filter(|s| s.step_id == "ci" && s.attempt > 0)
-            .collect();
-        assert!(
-            ci_attempts[0]
-                .output
-                .as_deref()
-                .unwrap()
-                .contains(ci_detail),
-            "{name}"
-        );
-        assert!(ci_attempts[0].input.as_deref().unwrap().contains("abc123"));
-        if name == "failure" {
-            assert_eq!(ci_attempts.len(), 2);
-            assert_eq!(
-                ci_attempts[0]
-                    .selected_transition
-                    .as_ref()
-                    .unwrap()
-                    .to
-                    .as_deref(),
-                Some("build")
-            );
-            assert_eq!(ci_attempts[1].outcome, Some(Outcome::Completed));
-            assert!(
-                run.steps
-                    .iter()
-                    .any(|s| s.step_id == "build" && s.attempt == 2)
-            );
-        } else if name == "api" {
-            assert_eq!(run.current_step.as_deref(), Some("ci-help"));
-            assert!(
-                ci_attempts[0]
-                    .output
-                    .as_deref()
-                    .unwrap()
-                    .contains("details unavailable")
-            );
-        } else {
-            assert_eq!(ci_attempts.len(), 1);
-            assert_eq!(
-                ci_attempts[0].selected_transition.as_ref().unwrap().to,
-                None
-            );
-        }
-    }
+    assert!(
+        commit.transitions.iter().any(|transition| {
+            transition.outcome == Outcome::Completed && transition.to.is_none()
+        })
+    );
 }
 
 #[test]

@@ -113,26 +113,8 @@ async fn successful_task_reinspection_reuses_worktree_and_prior_handoff() {
         .await;
     let directory = fixture();
     configure_fake(&directory);
-    // The fake runtime echoes task text; PENDING here tests lifecycle/handoff,
-    // not actual GitHub CI classification.
-    let mut config = common::read_config(&directory);
-    let factory: serde_json::Value = serde_yaml_ng::from_str(include_str!(
-        "../../../.baton/pipelines/software-factory.yml"
-    ))
-    .unwrap();
-    let mut ci_step = factory["steps"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|step| step["id"] == "ci")
-        .unwrap()
-        .clone();
-    // Exercise the real CI prompt; this fake runtime models a successful pending
-    // report as its final response, not a structured outcome-tool call.
-    ci_step["transitions"] = serde_json::json!([]);
-    config["agents"][0]["id"] = "factory-ci".into();
-    config["pipelines"][0]["steps"] = serde_json::json!([ci_step]);
-    common::write_config(&directory, &config);
+    // PENDING is literal task context, not an automated CI step. The follow-up
+    // verifies that task reinspection retains the existing worktree and handoff.
     let app = router(AppState::new(directory.clone()));
     let response = app
         .clone()
@@ -166,12 +148,7 @@ async fn successful_task_reinspection_reuses_worktree_and_prior_handoff() {
     let first = json(response).await;
     assert_eq!(first["status"], "succeeded");
     let worktree = first["worktree"]["path"].as_str().unwrap();
-    assert!(
-        first["steps"][0]["output"]
-            .as_str()
-            .unwrap()
-            .contains("PENDING")
-    );
+    assert!(first["task"].as_str().unwrap().contains("PENDING"));
     let response = app
         .clone()
         .oneshot(

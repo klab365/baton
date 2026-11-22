@@ -125,12 +125,70 @@ test("resumes a selected work session through the existing driver", async () => 
 	expect(calls).toEqual([["next", "--run", "run-1"]]);
 });
 
+test("refines a completed session through a new run in the same worktree", async () => {
+	const calls: string[][] = [];
+	const messages: string[] = [];
+	const result = await manage(
+		"refine",
+		async (args) => {
+			calls.push(args);
+			if (args.length === 1) return [
+				{ id: "older-run", status: "succeeded", pipelineId: "software-factory", startedAt: "2026-01-01T00:00:00Z" },
+				{ id: "latest-run", status: "succeeded", pipelineId: "software-factory", startedAt: "2026-02-01T00:00:00Z" },
+			];
+			if (args[0] === "refine") return { id: "new-run", status: "running" };
+			return { id: "new-run", status: "succeeded" };
+		},
+		ui({
+			select: async (_prompt, options) => {
+				expect(options[0]).toContain("latest-run");
+				expect(options[0]).toContain("★");
+				return options[0];
+			},
+			editor: async () => "Fix the remaining edge case",
+		}),
+		(text) => messages.push(text),
+	);
+	expect(result).toBe(true);
+	expect(calls).toEqual([
+		["status"],
+		["refine", "--run", "latest-run", "--instruction", "Fix the remaining edge case"],
+		["next", "--run", "new-run"],
+	]);
+	expect(messages.join("\n")).toContain("Baton refinement started: new-run (from latest-run)");
+});
+
 test("documents command side effects in help and rejects malformed commands", async () => {
 	const messages: string[] = [];
 	expect(await manage("help", async () => [], ui(), (text) => messages.push(text))).toBe(true);
 	expect(messages[0]).toContain("list [PAGE]");
-	expect(messages[0]).toContain("asks before human decisions");
+	expect(messages[0]).toContain("ask for human decisions");
 	await expect(manage("inspect", async () => [], ui(), () => {})).rejects.toThrow("Usage:");
+});
+
+test("cancelling the run picker or refinement editor never starts a run", async () => {
+	const pickerCalls: string[][] = [];
+	await manage("refine", async (args) => {
+		pickerCalls.push(args);
+		return args.length === 1 ? [{ id: "done", status: "succeeded" }] : { id: "new-run" };
+	}, ui({ select: async () => undefined }), () => {});
+	expect(pickerCalls).toEqual([["status"]]);
+
+	const editorCalls: string[][] = [];
+	await manage("refine done", async (args) => {
+		editorCalls.push(args);
+		return args.length === 1 ? [{ id: "done", status: "succeeded" }] : { id: "new-run" };
+	}, ui({ editor: async () => undefined }), () => {});
+	expect(editorCalls).toEqual([["status"]]);
+});
+
+test("refine rejects explicitly selected runs that are not completed", async () => {
+	const calls: string[][] = [];
+	await expect(manage("refine failed", async (args) => {
+		calls.push(args);
+		return [{ id: "failed", status: "failed" }];
+	}, ui(), () => {})).rejects.toThrow("No completed work session with ID 'failed'");
+	expect(calls).toEqual([["status"]]);
 });
 
 test("registered inspect command routes to work status", async () => {
@@ -154,6 +212,40 @@ test("registered inspect command routes to work status", async () => {
 	expect(output.join(" ")).not.toContain("do not expose");
 	expect(output.join(" ")).not.toContain("hidden");
 	expect(output.join(" ").length).toBeLessThan(8000);
+});
+
+test("registered refine command starts the follow-up from the current Pi worktree", async () => {
+	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
+	const calls: string[][] = [];
+	const pi = {
+		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
+		exec: async (_command: string, args: string[]) => {
+			calls.push(args);
+			const value = args[1] === "status"
+				? [{ id: "old-run", status: "succeeded" }]
+				: args[1] === "refine"
+					? { id: "new-run", status: "running" }
+					: { id: "new-run", status: "succeeded" };
+			return { code: 0, killed: false, truncated: false, stderr: "", stdout: JSON.stringify(value) };
+		},
+		sendMessage: () => {},
+	} as unknown as ExtensionAPI;
+	baton(pi);
+	await handler("refine old-run", {
+		hasUI: true,
+		cwd: "/tmp/worktree",
+		ui: {
+			select: async (_prompt: string, options: string[]) => options[0],
+			editor: async () => "Check the CI failure and fix it",
+			setStatus() {},
+			notify() {},
+		},
+	} as any);
+	expect(calls).toEqual([
+		["work", "status"],
+		["work", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
+		["work", "next", "--run", "new-run"],
+	]);
 });
 
 test("chooses a pipeline from the keyboard-selectable list", async () => {
