@@ -454,21 +454,23 @@ async fn cli_executes_rig_against_local_ollama_provider() {
     listener.set_nonblocking(true).unwrap();
     let (request_seen_tx, request_seen_rx) = std::sync::mpsc::channel();
     let (continue_provider_tx, continue_provider_rx) = std::sync::mpsc::channel();
+    let (stop_server_tx, stop_server_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for _ in 0..7 {
-            let deadline = Instant::now() + Duration::from_secs(30);
-            let mut stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::WouldBlock
-                            && Instant::now() < deadline =>
-                    {
-                        std::thread::sleep(Duration::from_millis(10))
-                    }
-                    Err(e) => panic!("provider accept failed: {e}"),
+        loop {
+            if stop_server_rx.try_recv().is_ok() {
+                break;
+            }
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
+                Err(e) => panic!(
+                    "provider accept failed after {} requests: {e}",
+                    requests.len()
+                ),
             };
             stream.set_nonblocking(false).unwrap();
             stream
@@ -503,9 +505,20 @@ async fn cli_executes_rig_against_local_ollama_provider() {
                     .recv_timeout(Duration::from_secs(30))
                     .expect("test should release provider response");
             }
-            let body = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            let request = String::from_utf8(request).unwrap();
+            let request_body = request.split_once("\r\n\r\n").unwrap().1;
+            let request_json: Value = serde_json::from_str(request_body).unwrap();
+            let last_role = request_json["messages"]
+                .as_array()
+                .and_then(|messages| messages.last())
+                .and_then(|message| message["role"].as_str());
+            let body = if request.contains("Missing outcome") || last_role == Some("tool") {
+                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            } else {
+                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_report\",\"type\":\"function\",\"function\":{\"name\":\"report_outcome\",\"arguments\":\"{\\\"outcome\\\":\\\"completed\\\",\\\"summary\\\":\\\"done\\\",\\\"structured_handoff\\\":{\\\"version\\\":1,\\\"summary\\\":\\\"done\\\"}}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+            };
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
-            requests.push(String::from_utf8(request).unwrap());
+            requests.push(request);
         }
         requests
     });
@@ -689,10 +702,16 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             .unwrap()
             .contains("Missing outcome")
     );
+    stop_server_tx.send(()).unwrap();
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 7);
-    assert!(requests[5].contains("You did not call report_outcome"));
-    assert!(requests[6].contains("You did not call report_outcome"));
+    assert_eq!(requests.len(), 11);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.contains("Baton rejected your previous report"))
+            .count(),
+        2
+    );
     assert!(requests[0].contains("Implement feature"));
     let assistant_messages = |request: &str| {
         let body = request.split_once("\r\n\r\n").unwrap().1;
@@ -704,18 +723,29 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             .filter(|message| message["role"] == "assistant")
             .count()
     };
+    let continued_agent = requests
+        .iter()
+        .find(|request| request.contains("Include the human feedback"))
+        .unwrap();
     assert!(
-        assistant_messages(&requests[1]) > 0,
+        assistant_messages(continued_agent) > 0,
         "agent must receive its own earlier response"
     );
-    assert!(requests[1].contains("Include the human feedback"));
+    let reviewer = requests
+        .iter()
+        .find(|request| request.contains("Review\\n\\nUse get_structured_handoff"))
+        .unwrap();
     assert_eq!(
-        assistant_messages(&requests[2]),
+        assistant_messages(reviewer),
         0,
         "other agent must not inherit conversation"
     );
+    let new_run = requests
+        .iter()
+        .find(|request| request.contains("Another task"))
+        .unwrap();
     assert_eq!(
-        assistant_messages(&requests[3]),
+        assistant_messages(new_run),
         0,
         "new run must not inherit conversation"
     );

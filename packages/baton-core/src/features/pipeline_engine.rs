@@ -570,7 +570,7 @@ pub fn with_step_prompt(input: String, step: &PipelineStep) -> String {
     }
 }
 
-fn validate_agent_response(
+pub fn validate_agent_response(
     step: &PipelineStep,
     allowed_outcomes: &[Outcome],
     output: String,
@@ -625,7 +625,7 @@ fn validate_agent_response(
     Ok((outcome, summary, structured_handoff))
 }
 
-fn report_repair_prompt(error: &str, allowed_outcomes: &[Outcome]) -> String {
+pub fn report_repair_prompt(error: &str, allowed_outcomes: &[Outcome]) -> String {
     let allowed = if allowed_outcomes.is_empty() {
         "completed".to_owned()
     } else {
