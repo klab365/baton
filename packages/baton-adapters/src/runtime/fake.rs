@@ -5,12 +5,17 @@ pub struct FakeRuntime {
     pub calls: Vec<(String, String)>,
     pub directories: Vec<std::path::PathBuf>,
     pub fail_agent: Option<String>,
+    pub decision: Option<baton_core::ports::runtime::AgentDecision>,
+    pub structured_handoff_required: bool,
 }
 impl AgentRuntime for FakeRuntime {
     fn set_run_id(&mut self, _: &str) -> Result<(), String> {
         Ok(())
     }
     fn set_history_required(&mut self, _: bool) {}
+    fn set_structured_handoff_required(&mut self, required: bool) {
+        self.structured_handoff_required = required;
+    }
     fn execute_shell(
         &mut self,
         _: &std::path::Path,
@@ -57,7 +62,7 @@ impl AgentRuntime for FakeRuntime {
         self.execute_pipeline_step(directory, agent, input, outcomes, cancelled)
     }
     fn take_decision(&mut self) -> Option<baton_core::ports::runtime::AgentDecision> {
-        None
+        self.decision.take()
     }
     fn take_events(&mut self) -> Vec<String> {
         Vec::new()
@@ -80,6 +85,22 @@ impl AgentRuntime for FakeRuntime {
         if self.fail_agent.as_deref() == Some(&agent.id) {
             return Err("Simulated agent failure".into());
         }
-        Ok(format!("{}: {input}", agent.id))
+        let output = format!("{}: {input}", agent.id);
+        self.decision = if self.structured_handoff_required {
+            Some(baton_core::ports::runtime::AgentDecision {
+                outcome: baton_core::domain::project::Outcome::Completed,
+                summary: output.clone(),
+                structured_handoff: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "version": 1,
+                        "summary": output,
+                    }))
+                    .map_err(|error| error.to_string())?,
+                ),
+            })
+        } else {
+            None
+        };
+        Ok(output)
     }
 }

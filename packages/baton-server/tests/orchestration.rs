@@ -169,7 +169,12 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
             Some(AgentDecision {
                 outcome: Outcome::Completed,
                 summary: "short summary".into(),
-                structured_handoff: None,
+                structured_handoff: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "version":1,"summary":"short summary"
+                    }))
+                    .unwrap(),
+                ),
             })
         }
     }
@@ -348,7 +353,14 @@ fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
             self.execute_pipeline_step(d, a, i, o, c)
         }
         fn take_decision(&mut self) -> Option<AgentDecision> {
-            None
+            Some(AgentDecision {
+                outcome: Outcome::Completed,
+                summary: "done".into(),
+                structured_handoff: Some(
+                    serde_json::from_value(serde_json::json!({"version":1,"summary":"done"}))
+                        .unwrap(),
+                ),
+            })
         }
         fn take_events(&mut self) -> Vec<String> {
             Vec::new()
@@ -462,7 +474,14 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
             self.execute_pipeline_step(d, a, i, o, c)
         }
         fn take_decision(&mut self) -> Option<AgentDecision> {
-            None
+            Some(AgentDecision {
+                outcome: Outcome::Completed,
+                summary: "done".into(),
+                structured_handoff: Some(
+                    serde_json::from_value(serde_json::json!({"version":1,"summary":"done"}))
+                        .unwrap(),
+                ),
+            })
         }
         fn take_events(&mut self) -> Vec<String> {
             Vec::new()
@@ -496,8 +515,8 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
     .unwrap();
     assert_eq!(runtime.inputs.len(), 2);
     assert_eq!(runtime.agents, ["Write clearly", "Write clearly"]);
-    assert!(runtime.inputs[0].starts_with("Step instructions:\nDraft the change"));
-    assert!(runtime.inputs[1].starts_with("Step instructions:\nReview the change"));
+    assert!(runtime.inputs[0].contains("Step instructions:\nDraft the change"));
+    assert!(runtime.inputs[1].contains("Step instructions:\nReview the change"));
     assert_eq!(
         run.steps[0].input.as_deref(),
         Some(runtime.inputs[0].as_str())
@@ -526,15 +545,19 @@ fn ordered_handoff_and_restart_safe_records() {
         &fixture.repo(),
     )
     .unwrap();
+    let input_prefix =
+        "Required: call report_outcome with a valid structured_handoff.\n\nStep context:\n";
     assert_eq!(
-        runtime.calls,
-        vec![
-            ("writer".into(), "task".into()),
-            (
-                "reviewer".into(),
-                "Original task:\ntask\n\nPrevious handoff:\nwriter: task".into()
-            )
-        ]
+        runtime.calls[0],
+        ("writer".into(), format!("{input_prefix}task"))
+    );
+    assert_eq!(runtime.calls[1].0, "reviewer");
+    assert!(runtime.calls[1].1.contains("Original task:\ntask"));
+    assert!(runtime.calls[1].1.contains("Previous handoff:\nwriter: "));
+    assert!(
+        runtime.calls[1]
+            .1
+            .contains("Agent-reported structured handoff")
     );
     assert_eq!(run.status, Status::Succeeded);
     let workspace = run.worktree.as_ref().unwrap();
@@ -548,7 +571,7 @@ fn ordered_handoff_and_restart_safe_records() {
             .output
             .as_deref()
             .unwrap()
-            .contains("writer: task")
+            .contains("writer: Required:")
     );
     assert_eq!(fixture.repo().load("success").unwrap(), run);
     // Reopen and deserialize from a fresh OS process with no runtime memory.
@@ -682,34 +705,38 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
             input: &str,
         ) -> Result<String, String> {
             self.calls += 1;
-            let (outcome, summary) =
-                match self.calls {
-                    1 => {
-                        assert!(input.starts_with(
-                            "Step instructions:\nResume with the saved writer prompt"
-                        ));
-                        (Outcome::Blocked, "Which backends?")
-                    }
-                    2 => {
-                        assert!(input.starts_with(
-                            "Step instructions:\nResume with the saved writer prompt"
-                        ));
-                        assert!(input.contains("Tokio, WASM and Embassy"));
-                        (Outcome::Completed, "Plan ready")
-                    }
-                    3 => {
-                        assert!(input.contains("Plan ready"));
-                        assert!(input.contains("Original task:\ntimers"));
-                        assert!(input.contains("Explicit human decisions"));
-                        assert!(input.contains("Tokio, WASM and Embassy"));
-                        (Outcome::Completed, "Built")
-                    }
-                    _ => panic!("unexpected call"),
-                };
+            let (outcome, summary) = match self.calls {
+                1 => {
+                    assert!(
+                        input.contains("Step instructions:\nResume with the saved writer prompt")
+                    );
+                    (Outcome::Blocked, "Which backends?")
+                }
+                2 => {
+                    assert!(
+                        input.contains("Step instructions:\nResume with the saved writer prompt")
+                    );
+                    assert!(input.contains("Tokio, WASM and Embassy"));
+                    (Outcome::Completed, "Plan ready")
+                }
+                3 => {
+                    assert!(input.contains("Plan ready"));
+                    assert!(input.contains("Original task:\ntimers"));
+                    assert!(input.contains("Explicit human decisions"));
+                    assert!(input.contains("Tokio, WASM and Embassy"));
+                    (Outcome::Completed, "Built")
+                }
+                _ => panic!("unexpected call"),
+            };
             self.decision = Some(AgentDecision {
                 outcome,
                 summary: summary.into(),
-                structured_handoff: None,
+                structured_handoff: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "version":1,"summary":summary
+                    }))
+                    .unwrap(),
+                ),
             });
             Ok(summary.into())
         }
@@ -753,7 +780,20 @@ fn restart_reader() {
         .unwrap();
     assert_eq!(run.status, Status::Succeeded);
     assert_eq!(run.task, "task");
-    assert_eq!(run.steps[0].output.as_deref(), Some("writer: task"));
+    assert!(
+        run.steps[0]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("writer: Required:")
+    );
+    assert!(
+        run.steps[0]
+            .output
+            .as_deref()
+            .unwrap()
+            .contains("Step context:\ntask")
+    );
     assert!(
         run.steps[1]
             .input
@@ -766,7 +806,7 @@ fn restart_reader() {
             .output
             .as_deref()
             .unwrap()
-            .contains("writer: task")
+            .contains("writer: Required:")
     );
 }
 
@@ -829,9 +869,19 @@ fn bounds_are_enforced() {
         &fixture.repo(),
     )
     .unwrap();
-    assert_eq!(run.status, Status::Failed);
-    assert!(run.steps[0].output.is_none());
-    assert_eq!(runtime.calls.len(), 1);
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(run.steps[0].status, Status::Succeeded);
+    assert!(
+        run.steps[0]
+            .output
+            .as_ref()
+            .is_some_and(|output| output.len() <= MAX_HANDOFF_BYTES)
+    );
+    assert!(
+        runtime.calls[1]
+            .1
+            .contains("Baton rejected your previous report")
+    );
 }
 
 #[test]
@@ -1037,7 +1087,13 @@ fn interrupted_execution_leaves_durable_running_state_without_retry() {
     assert!(run.ended_at.is_none());
     assert!(run.duration_ms.is_none());
     assert_eq!(run.steps[0].status, Status::Running);
-    assert_eq!(run.steps[0].input.as_deref(), Some("task"));
+    assert!(
+        run.steps[0]
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Step context:\ntask")
+    );
     assert_eq!(run.steps[1].status, Status::Pending);
 }
 

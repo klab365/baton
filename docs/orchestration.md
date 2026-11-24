@@ -12,7 +12,7 @@ Schema-v6 runtime profiles are migrated to direct agent settings on read. A prof
 
 ## Project instructions
 
-For each Rig agent step, Baton reads `AGENTS.md` from the root of the task worktree, if present, and adds it to the system prompt after the agent prompt and before assigned skills. The file is read again on each attempt, so it is not frozen in the run configuration snapshot. It must be a regular UTF-8 file of at most 64 KiB; symlinks, unreadable files and invalid or oversized content fail the step. Nested and parent-directory instruction files are not loaded automatically. The fake runtime does not load instructions. Only use this feature with trusted project repositories: project instructions are supplied to the model, and a worktree is not a security sandbox.
+Baton does not automatically read or inject a worktree `AGENTS.md`. An agent may inspect it only when the task or an explicit prompt asks it to do so. Files in the worktree are not a security boundary.
 
 ## Execution boundaries
 

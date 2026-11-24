@@ -39,7 +39,7 @@ In **Agents → Create agent**, set an ID, system prompt, runtime and any assign
 - **Fake** is a deterministic offline runtime for tests; it does not contact a model and is not a substitute for real agent behavior.
 - Provider/model and credential configuration belong to the **agent**, not the pipeline step. Avoid embedding secrets in prompts.
 
-For Rig steps, Baton automatically reads `AGENTS.md` from the **task worktree root**, if present, and supplies it after the agent's system prompt and before skills. It is read again on each attempt; only a regular UTF-8 file up to 64 KiB is accepted. Missing is fine; symlinks, unreadable, invalid or oversized files fail the step. Parent and nested `AGENTS.md` files are not automatically loaded, and the fake runtime does not load it. Project instructions are not frozen in the run configuration snapshot. See [runtime orchestration](orchestration.md).
+Baton does not automatically read or inject `AGENTS.md` from the task worktree. An agent may inspect it only when the task or an explicit prompt asks. See [runtime orchestration](orchestration.md).
 
 ## Skills
 
@@ -71,7 +71,7 @@ A planner can route `blocked` to a human step with its question in its final res
 
 In **Tasks**, create a task with a nonempty title and description, including acceptance criteria, and select a pipeline. Saving creates a draft; it does not start execution. Open the task and choose **Start task** to create a run. Task details also allow editing, deletion and inspection of run history.
 
-Each task has a separate Git worktree and task branch; subsequent runs for the same task reuse its worktree. Different tasks may run concurrently. Each run snapshots the current project configuration at start; later configuration changes affect future runs, not that graph. Files read from the worktree, including `AGENTS.md`, can nevertheless change.
+Each task has a separate Git worktree and task branch; subsequent runs for the same task reuse its worktree. Different tasks may run concurrently. Each run snapshots the current project configuration at start; later configuration changes affect future runs, not that graph. Files an agent explicitly reads from the worktree can nevertheless change.
 
 **Marking a task done or deleting it force-removes its worktree**, including uncommitted changes and task-local Rig session data. Review and preserve anything needed beforehand. Task modification, deletion and duplicate execution are blocked while a run is waiting for a human. See [tasks](tasks.md).
 
@@ -93,7 +93,7 @@ After a backend restart, a previously waiting run remains available for a human 
 | `.baton/tasks/`        | Task data, including descriptions                                                        |
 | `.baton/runs/`         | Run state, snapshots, handoffs, events and available traces                              |
 | `.agents/skills/`      | Project-owned skill instructions and supporting files                                    |
-| `AGENTS.md`            | Optional root-level Rig project instructions in the worktree                             |
+| `AGENTS.md`            | Not loaded automatically; agents may inspect it when explicitly asked                    |
 | Local credential vault | Secret material, outside project configuration                                           |
 
 Baton creates `.baton/.gitignore` for task and run directories if missing; it does not replace an existing one. Ensure your own ignore rules protect private task and run data. Project configuration is validated and uses revision checks to reject stale edits. See [project configuration](project-configuration.md) for migrations and storage details.

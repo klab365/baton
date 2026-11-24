@@ -22,6 +22,7 @@ pub struct ConfiguredRuntime {
     skills: Vec<baton_core::domain::project::Skill>,
     pub(super) run_id: String,
     pub(super) history_required: bool,
+    structured_handoff_required: bool,
     pub(super) structured_history: Vec<baton_core::domain::pipeline::StructuredHandoffAttempt>,
     fake: super::FakeRuntime,
     pub(super) decision: Option<AgentDecision>,
@@ -41,6 +42,7 @@ impl ConfiguredRuntime {
             skills,
             run_id: uuid::Uuid::now_v7().to_string(),
             history_required: false,
+            structured_handoff_required: false,
             structured_history: Vec::new(),
             fake: super::FakeRuntime::default(),
             decision: None,
@@ -122,6 +124,9 @@ impl AgentRuntime for ConfiguredRuntime {
 
     fn set_history_required(&mut self, required: bool) {
         self.history_required = required;
+    }
+    fn set_structured_handoff_required(&mut self, required: bool) {
+        self.structured_handoff_required = required;
     }
     fn set_structured_handoff_history(
         &mut self,
@@ -221,9 +226,15 @@ impl AgentRuntime for ConfiguredRuntime {
                 self.trace = trace;
                 Ok(output)
             }
-            RuntimeKind::Fake => self
-                .fake
-                .execute_cancellable(directory, agent, input, cancelled),
+            RuntimeKind::Fake => {
+                self.fake
+                    .set_structured_handoff_required(self.structured_handoff_required);
+                let output = self
+                    .fake
+                    .execute_cancellable(directory, agent, input, cancelled)?;
+                self.decision = self.fake.take_decision();
+                Ok(output)
+            }
             RuntimeKind::Pi => super::pi::execute(
                 self,
                 directory,
@@ -536,13 +547,13 @@ printf 'done'
             "no tool call"
         );
         assert!(runtime.take_decision().is_none());
-        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xxx");
+        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "x");
         std::fs::write(&pi, format!("#!/bin/sh\ncat > /dev/null\nprintf x >> '{}'\nprintf '{{\"outcome\":\"approved\",\"summary\":\"wrong\"}}' > \"$BATON_PI_OUTCOME_FILE\"\n", calls.display())).unwrap();
         runtime
             .execute_pipeline_step(root.path(), &agent, "task", &allowed, &|| false)
             .unwrap();
         assert!(runtime.take_decision().is_none());
-        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xxxxxx");
+        assert_eq!(std::fs::read_to_string(&calls).unwrap(), "xx");
         std::fs::write(
             &pi,
             "#!/bin/sh\necho 'Error: Unknown option: secret-token' >&2\nexit 7\n",
@@ -767,7 +778,7 @@ printf 'legacy final answer'
 
     #[cfg(unix)]
     #[test]
-    fn pi_resumes_per_agent_and_run_and_retries_missing_outcomes() {
+    fn pi_resumes_per_agent_and_run_for_engine_report_retries() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let pi = root.path().join("pi");
@@ -796,8 +807,8 @@ else
   printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"prior-conversation"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" > "$file"
 fi
 case "$prompt" in
-  *'You did not call report_outcome'*)
-    printf '{"outcome":"completed","summary":"handoff"}' > "$BATON_PI_OUTCOME_FILE" ;;
+  *'Baton rejected your previous report'*)
+    printf '{"outcome":"completed","summary":"handoff","structured_handoff":{"version":1,"summary":"handoff"}}' > "$BATON_PI_OUTCOME_FILE" ;;
 esac
 printf '%s\n' "$prompt" >> "$session/prompts"
 printf 'handoff'
@@ -827,18 +838,18 @@ printf 'handoff'
             },
         ];
         runtime.set_run_id("run-one").unwrap();
+        let allowed = [Outcome::Completed];
         assert_eq!(
             runtime
-                .execute_pipeline_step(
-                    root.path(),
-                    &agent,
-                    "original task",
-                    &[Outcome::Completed],
-                    &|| false
-                )
+                .execute_pipeline_step(root.path(), &agent, "original task", &allowed, &|| false)
                 .unwrap(),
             "handoff"
         );
+        assert!(runtime.take_decision().is_none());
+        let repair = "Baton rejected your previous report: missing structured_handoff";
+        runtime
+            .execute_pipeline_step(root.path(), &agent, repair, &allowed, &|| false)
+            .unwrap();
         assert_eq!(runtime.take_decision().unwrap().outcome, Outcome::Completed);
         let first = vault.join("runtime-sessions/run-one/agent-first/pi");
         let prompts = std::fs::read_to_string(first.join("prompts")).unwrap();
@@ -854,9 +865,9 @@ printf 'handoff'
                 .trim(),
             "yes"
         );
-        assert!(prompts.contains("You did not call report_outcome"));
+        assert!(prompts.contains("original task"));
         let retry_prompt = std::fs::read_to_string(first.join("invocation-prompt-1")).unwrap();
-        assert!(retry_prompt.contains("You did not call report_outcome"));
+        assert!(retry_prompt.contains("Baton rejected your previous report"));
         let retry_system_prompt = std::fs::read_to_string(first.join("system-prompt-1")).unwrap();
         assert!(retry_system_prompt.contains("assigned-only-instruction"));
         assert!(!retry_system_prompt.contains("unassigned-must-not-appear"));

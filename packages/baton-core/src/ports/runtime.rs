@@ -29,6 +29,9 @@ pub trait AgentRuntime: Send {
     /// Whether this agent previously completed an attempt in this run.
     fn set_history_required(&mut self, required: bool);
 
+    /// Whether the active pipeline step must return a structured handoff.
+    fn set_structured_handoff_required(&mut self, _required: bool) {}
+
     /// Supplies persisted handoff reports for bounded, on-demand retrieval by managed tools.
     fn set_structured_handoff_history(
         &mut self,

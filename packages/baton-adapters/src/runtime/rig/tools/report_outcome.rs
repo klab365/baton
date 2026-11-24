@@ -57,10 +57,10 @@ impl Tool for ReportOutcome {
             .collect::<Vec<_>>()
             .join(", ");
         if self.allowed.is_empty() {
-            "Optional report_outcome tool for this sequential step; call it only when providing structured_handoff, and keep the final response as the legacy text handoff. Use outcome `completed`. Structured schema: {version: 1, summary: nonblank string, findings?: [{id: stable unique string, status: open|resolved|accepted, description: nonblank string}], verification?: [{description: nonblank string, result: nonblank string}], nextAction?: nonblank string}. Example: {\"version\":1,\"summary\":\"Ready\",\"findings\":[{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}]}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification.".into()
+            "Sequential pipeline agent steps must use this tool to attach the required structured_handoff; non-pipeline agent runs may omit it. Keep the final response as the legacy text handoff. Use outcome `completed`. Structured schema: {version: 1, summary: nonblank string, findings?: [{id: stable unique string, status: open|resolved|accepted, description: nonblank string}], verification?: [{description: nonblank string, result: nonblank string}], nextAction?: nonblank string}. Example: {\"version\":1,\"summary\":\"Ready\",\"findings\":[{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}]}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification.".into()
         } else {
             format!(
-                "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in summary. Optional structured_handoff schema: {{version: 1, summary: nonblank string, findings?: [{{id: stable unique string, status: open|resolved|accepted, description: nonblank string}}], verification?: [{{description: nonblank string, result: nonblank string}}], nextAction?: nonblank string}}. Example: {{\"version\":1,\"summary\":\"Ready\",\"findings\":[{{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}}]}}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification."
+                "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in summary. Structured_handoff schema (required for every pipeline agent step): {{version: 1, summary: nonblank string, findings?: [{{id: stable unique string, status: open|resolved|accepted, description: nonblank string}}], verification?: [{{description: nonblank string, result: nonblank string}}], nextAction?: nonblank string}}. Example: {{\"version\":1,\"summary\":\"Ready\",\"findings\":[{{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}}]}}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification."
             )
         }
     }
@@ -270,7 +270,7 @@ mod tests {
     async fn sequential_report_outcome_is_optional_and_accepts_only_completed() {
         let decision = Arc::new(Mutex::new(None));
         let tool = ReportOutcome::new(vec![], decision.clone());
-        assert!(tool.description().contains("Optional report_outcome"));
+        assert!(tool.description().contains("must use this tool"));
         assert_eq!(
             tool.parameters()["properties"]["outcome"]["enum"],
             serde_json::json!(["completed"])

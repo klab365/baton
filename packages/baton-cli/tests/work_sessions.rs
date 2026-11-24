@@ -351,7 +351,7 @@ async fn execute_runs_configured_agent_in_existing_workspace() {
 }
 
 #[tokio::test]
-async fn missing_agent_outcome_stops_the_run() {
+async fn fake_agent_returns_required_structured_handoff() {
     let f = Fixture::new();
     let mut config = common::read_config(&f.path);
     config["agents"][0]["provider"] = json!("fake");
@@ -359,34 +359,17 @@ async fn missing_agent_outcome_stops_the_run() {
     let app = f.app();
     let run = f.start(&app, 50, json!([])).await;
     let id = run["id"].as_str().unwrap().to_owned();
-    let error = app
+    let progress = app
         .execute(WorkCommand::Execute { id: id.clone() })
         .await
-        .unwrap_err();
-    assert!(error.contains("without reporting"));
+        .unwrap();
+    assert_eq!(progress["currentStep"], "review");
     let status = app
         .execute(WorkCommand::Status { id: Some(id) })
         .await
         .unwrap();
-    assert_eq!(status["status"], "failed");
-    assert!(status["steps"][0]["startedAt"].is_string());
-    assert!(status["steps"][0]["endedAt"].is_string());
-    assert!(status["steps"][0]["durationMs"].is_number());
-    assert_eq!(status["steps"].as_array().unwrap().len(), 1);
-    assert!(
-        status["steps"][0]["error"]
-            .as_str()
-            .unwrap()
-            .contains("valid configured outcome")
-    );
-    let resumed = app
-        .execute(WorkCommand::Resume {
-            id: status["id"].as_str().unwrap().into(),
-        })
-        .await
-        .unwrap();
-    assert_eq!(resumed["status"], "running");
-    assert_eq!(resumed["attempt"], 2);
+    assert_eq!(status["status"], "running");
+    assert!(status["steps"][0]["structuredHandoff"].is_object());
 }
 
 #[tokio::test]

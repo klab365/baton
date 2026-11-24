@@ -3,12 +3,11 @@ id: software-factory
 steps:
 - id: plan
   name: Analyze and plan
+  maxAttempts: 2
   agentId: factory-planner
   includeTask: true
   prompt: |
-    Plan the requested task and pass an actionable plan to the builder. For an
-    explicit PR/CI reinspection, follow the planner's protocol and preserve the
-    verified repository, branch, PR URL and head SHA in your handoff.
+    Produce an actionable plan that preserves the task's acceptance criteria.
   transitions:
   - outcome: completed
     to: build
@@ -18,59 +17,44 @@ steps:
 
 - id: build
   name: Implement and verify
+  maxAttempts: 2
   agentId: factory-builder
+  includeTask: true
   prompt: |
-    Implement the plan and satisfy the task's acceptance criteria. On re-entry,
-    address the latest review/debugging or human feedback. Follow the builder's
-    verification and PR/CI reinspection protocol; do not publish changes.
+    Implement the plan, satisfy acceptance criteria, and address the latest
+    feedback. Do not publish changes.
   transitions:
   - outcome: completed
     to: review
-  - outcome: blocked
-    to: debug
-  type: agent
-
-- id: debug
-  name: Diagnose builder blocker
-  agentId: factory-debugger
-  prompt: |
-    Independently diagnose the builder's blocker and return evidence plus the
-    smallest actionable next step. Follow the debugger's outcome guidance; do not
-    modify files.
-  transitions:
-  - outcome: revise_build
-    to: build
-  - outcome: revise_plan
-    to: plan
   - outcome: blocked
     to: build-help
   type: agent
 
 - id: review
   name: Independent review
+  maxAttempts: 2
   agentId: factory-reviewer
+  includeTask: true
   prompt: |
-    Independently review the implementation against the task and prior handoff.
-    Follow the reviewer's diff, reinspection and verification protocol. Return
-    actionable findings and required review metadata; do not modify files.
+    Review the implementation against the task and report actionable findings.
+    Do not modify files.
   transitions:
   - outcome: approved
     to: commit
   - outcome: revise_build
     to: build
-  - outcome: revise_plan
-    to: plan
   - outcome: blocked
     to: review-help
   type: agent
 
 - id: commit
   name: Commit and publish pull request
+  maxAttempts: 2
   agentId: factory-committer
+  includeTask: true
   prompt: |
-    Publish only changes approved by the reviewer. Follow the committer's
-    publication and recovery protocol exactly. Return the verified repository,
-    branch, PR URL and head SHA in the final handoff.
+    Publish only reviewer-approved changes; return the verified repository,
+    branch, PR URL and head SHA.
   transitions:
   - outcome: completed
     to: null
@@ -110,15 +94,6 @@ steps:
   transitions:
   - outcome: responded
     to: commit
-  - outcome: rejected
-    to: null
-  type: human
-
-- id: help
-  name: Resolve workflow blocker
-  transitions:
-  - outcome: responded
-    to: plan
   - outcome: rejected
     to: null
   type: human

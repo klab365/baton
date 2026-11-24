@@ -88,7 +88,7 @@ impl From<baton_core::domain::pipeline::PipelineRun> for WorkProgress {
 enum StepFailure {
     Runtime(String),
     InvalidOutcome {
-        message: &'static str,
+        message: String,
         trace: Vec<baton_core::domain::pipeline::RunTraceEntry>,
     },
 }
@@ -273,6 +273,7 @@ impl WorkApplication {
                 let cancellation_id = id.clone();
                 let observation_repository = FilesystemWorkRepository(self.workspace.clone());
                 let observation_step = step.id.clone();
+                let execution_step = step.clone();
                 let execution = tokio::task::spawn_blocking(move || -> Result<_, StepFailure> {
                     let cancelled = || {
                         repository
@@ -343,78 +344,43 @@ impl WorkApplication {
                         observation_repository.save(&run)?;
                         observation_repository.publish(&event)
                     };
-                    let output = runtime.execute_pipeline_step_observed(
-                        &workspace,
-                        &agent,
-                        &input,
-                        &allowed,
-                        &cancelled,
-                        &mut observer,
-                    )?;
-                    let trace = runtime.take_trace();
-                    if allowed.is_empty()
-                        && (output.trim().is_empty()
-                            || output.len() > baton_core::ports::runtime::MAX_HANDOFF_BYTES)
-                    {
-                        return Err(StepFailure::InvalidOutcome {
-                            message: "Agent handoff is empty or exceeds 16384 bytes",
-                            trace,
-                        });
-                    }
-                    if allowed.is_empty() {
-                        let structured_handoff = runtime
-                            .take_decision()
-                            .and_then(|decision| decision.structured_handoff);
-                        if let Some(handoff) = &structured_handoff {
-                            handoff
-                                .validate()
-                                .map_err(|_| StepFailure::InvalidOutcome {
-                                    message: "Agent reported an invalid structured handoff",
-                                    trace: trace.clone(),
-                                })?;
-                        }
-                        Ok((
-                            baton_core::domain::project::Outcome::Completed,
+                    runtime.set_structured_handoff_required(true);
+                    let mut runtime_input = input.clone();
+                    let mut report_retries = 0;
+                    let mut trace = Vec::new();
+                    loop {
+                        let output = runtime.execute_pipeline_step_observed(
+                            &workspace,
+                            &agent,
+                            &runtime_input,
+                            &allowed,
+                            &cancelled,
+                            &mut observer,
+                        )?;
+                        trace.extend(runtime.take_trace());
+                        match baton_core::features::pipeline_engine::validate_agent_response(
+                            &execution_step,
+                            &allowed,
                             output,
-                            structured_handoff,
-                            trace,
-                        ))
-                    } else {
-                        let Some(decision) = runtime.take_decision() else {
-                            return Err(StepFailure::InvalidOutcome {
-                                message: "Agent completed without reporting a pipeline outcome",
-                                trace,
-                            });
-                        };
-                        if !allowed.contains(&decision.outcome) {
-                            return Err(StepFailure::InvalidOutcome {
-                                message: "Agent reported an invalid outcome",
-                                trace,
-                            });
+                            runtime.take_decision(),
+                        ) {
+                            Ok((outcome, summary, structured_handoff)) => {
+                                break Ok((outcome, summary, structured_handoff, trace));
+                            }
+                            Err(error) if report_retries < 2 => {
+                                report_retries += 1;
+                                runtime_input =
+                                    baton_core::features::pipeline_engine::report_repair_prompt(
+                                        &error, &allowed,
+                                    );
+                            }
+                            Err(error) => {
+                                break Err(StepFailure::InvalidOutcome {
+                                    message: error,
+                                    trace,
+                                });
+                            }
                         }
-                        if decision.summary.trim().is_empty()
-                            || decision.summary.len()
-                                > baton_core::ports::runtime::MAX_HANDOFF_BYTES
-                        {
-                            return Err(StepFailure::InvalidOutcome {
-                                message: "Agent outcome handoff is empty or exceeds 16384 bytes",
-                                trace,
-                            });
-                        }
-                        if let Some(handoff) = &decision.structured_handoff {
-                            handoff
-                                .validate()
-                                .map_err(|_| StepFailure::InvalidOutcome {
-                                    message: "Agent reported an invalid structured handoff",
-                                    trace: trace.clone(),
-                                })?;
-                        }
-                        Ok((
-                            decision.outcome,
-                            decision.summary,
-                            decision.structured_handoff,
-                            trace,
-                        ))
                     }
                 })
                 .await
@@ -447,7 +413,7 @@ impl WorkApplication {
                                 failure: WorkFailure::InvalidOutcome,
                             })
                             .await?;
-                        return Err(message.into());
+                        return Err(message);
                     }
                     Err(StepFailure::Runtime(error)) => {
                         let failure = if error.contains("reconcile side effects")
