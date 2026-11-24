@@ -76,6 +76,7 @@ struct Script {
     structured_history: Vec<StructuredHandoffAttempt>,
     retrieved_attempts: Vec<u32>,
     decision: Option<AgentDecision>,
+    omit_structured_handoff_on_call: Option<usize>,
     emit_observed_activity: bool,
     no_session: bool,
 }
@@ -191,7 +192,34 @@ impl AgentRuntime for Script {
         _cancelled: &dyn Fn() -> bool,
     ) -> Result<String, String> {
         self.allowed.push(allowed_outcomes.to_vec());
-        self.execute(directory, agent, input)
+        let call = self.inputs.len();
+        let output = self.execute(directory, agent, input)?;
+        if self.omit_structured_handoff_on_call != Some(call) {
+            if let Some(decision) = self.decision.as_mut() {
+                if decision.structured_handoff.is_none() {
+                    decision.structured_handoff = Some(
+                        serde_json::from_value(serde_json::json!({
+                            "version": 1,
+                            "summary": decision.summary.clone(),
+                        }))
+                        .map_err(|error| error.to_string())?,
+                    );
+                }
+            } else if allowed_outcomes.is_empty() {
+                self.decision = Some(AgentDecision {
+                    outcome: Outcome::Completed,
+                    summary: output.clone(),
+                    structured_handoff: Some(
+                        serde_json::from_value(serde_json::json!({
+                            "version": 1,
+                            "summary": output.clone(),
+                        }))
+                        .map_err(|error| error.to_string())?,
+                    ),
+                });
+            }
+        }
+        Ok(output)
     }
     fn execute_pipeline_step_observed(
         &mut self,
@@ -248,6 +276,15 @@ fn config() -> ProjectConfig {
     parse_config(&json.to_string()).unwrap()
 }
 
+fn structured_decision(outcome: &str, output: String) -> String {
+    serde_json::json!({
+        "outcome": outcome,
+        "output": output.clone(),
+        "structured_handoff": {"version": 1, "summary": output}
+    })
+    .to_string()
+}
+
 fn software_factory_config() -> ProjectConfig {
     let mut value: serde_json::Value =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
@@ -275,7 +312,191 @@ fn software_factory_config() -> ProjectConfig {
 }
 
 #[test]
-fn sequential_agent_can_opt_into_structured_handoff_without_changing_text_flow() {
+fn agent_gets_a_bounded_repair_request_when_structured_handoff_is_missing() {
+    let fixture = Fixture::new();
+    let graph = config();
+    let repaired_build = structured_decision("completed", "Build repaired".into());
+    let mut runtime = Script::new(&[
+        "Plan",
+        "Build without a structured report",
+        &repaired_build,
+        APPROVED,
+    ]);
+    runtime.omit_structured_handoff_on_call = Some(1);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "required-handoff",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::WaitingHuman);
+    assert_eq!(runtime.inputs.len(), 4);
+    assert!(runtime.inputs[2].contains("Baton rejected your previous report"));
+    assert!(runtime.inputs[2].contains("do not repeat or modify it"));
+    let build = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "build")
+        .unwrap();
+    assert_eq!(build.status, Status::Succeeded);
+    assert!(build.structured_handoff.is_some());
+    assert!(
+        build
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("Baton report-repair request")
+    );
+}
+
+#[test]
+fn branching_agent_gets_a_repair_request_for_a_missing_handoff() {
+    let fixture = Fixture::new();
+    let graph = config();
+    let mut runtime = Script::new(&["Plan", "Build", APPROVED, APPROVED]);
+    runtime.omit_structured_handoff_on_call = Some(2);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "required-review-handoff",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::WaitingHuman);
+    assert!(runtime.inputs[3].contains("Baton rejected your previous report"));
+    let review = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "review")
+        .unwrap();
+    assert_eq!(review.status, Status::Succeeded);
+    assert!(review.structured_handoff.is_some());
+}
+
+#[test]
+fn invalid_structured_handoff_gets_a_repair_request() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"write","name":"Write","type":"agent","agentId":"writer",
+            "transitions":[{"outcome":"completed","to":null}]
+        }))
+        .unwrap(),
+    ];
+    let mut runtime = Script::new(&[
+        r#"{"outcome":"completed","output":"First","structured_handoff":{"version":1,"summary":" "}}"#,
+        r#"{"outcome":"completed","output":"Corrected","structured_handoff":{"version":1,"summary":"Valid report"}}"#,
+    ]);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "invalid-structured-handoff",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::Succeeded);
+    assert_eq!(runtime.inputs.len(), 2);
+    assert!(runtime.inputs[1].contains("Baton rejected your previous report"));
+    assert!(runtime.inputs[1].contains("summary must not be blank"));
+    assert_eq!(
+        run.steps[0].structured_handoff.as_ref().unwrap().summary,
+        "Valid report"
+    );
+}
+
+#[test]
+fn invalid_handoff_retries_are_bounded_and_fail_closed() {
+    let fixture = Fixture::new();
+    let mut graph = config();
+    graph.pipelines[0].steps = vec![
+        serde_json::from_value(serde_json::json!({
+            "id":"write","name":"Write","type":"agent","agentId":"writer",
+            "transitions":[{"outcome":"completed","to":null}]
+        }))
+        .unwrap(),
+    ];
+    let mut runtime = Script::new(&["not a report", "still not a report", "no report again"]);
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "invalid-handoff",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::Failed);
+    assert_eq!(runtime.inputs.len(), 3);
+    assert!(runtime.inputs[1].contains("Baton rejected your previous report"));
+    assert!(runtime.inputs[2].contains("Baton rejected your previous report"));
+    assert!(
+        run.steps[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("without reporting")
+    );
+}
+
+#[test]
+fn approval_with_open_structured_finding_is_routed_back_to_build() {
+    let fixture = Fixture::new();
+    let graph = config();
+    let mut runtime = Script::new(&[
+        "Plan",
+        r#"{"outcome":"completed","output":"Build","structured_handoff":{"version":1,"summary":"Build","findings":[{"id":"F-1","status":"open","description":"Add regression test"}]}}"#,
+        r#"{"outcome":"approved","output":"Looks good","structured_handoff":{"version":1,"summary":"Review","findings":[{"id":"F-1","status":"open","description":"Add regression test"}]}}"#,
+        r#"{"outcome":"completed","output":"Fixed","structured_handoff":{"version":1,"summary":"Fixed","findings":[{"id":"F-1","status":"resolved","description":"Added regression test"}]}}"#,
+        r#"{"outcome":"approved","output":"Approved","structured_handoff":{"version":1,"summary":"Verified","findings":[{"id":"F-1","status":"resolved","description":"Added regression test"}]}}"#,
+    ]);
+
+    let run = start_pipeline(
+        &graph,
+        "draft",
+        "task",
+        "approval-gate",
+        &mut runtime,
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::WaitingHuman);
+    let gated_review = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "review" && step.attempt == 3)
+        .unwrap();
+    assert_eq!(gated_review.outcome, Some(Outcome::ReviseBuild));
+    assert!(gated_review.output.as_deref().unwrap().contains("F-1"));
+    assert_eq!(
+        run.steps
+            .iter()
+            .filter(|step| step.step_id == "build")
+            .count(),
+        2
+    );
+    let final_review = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == "review" && step.attempt == 5)
+        .unwrap();
+    assert_eq!(final_review.outcome, Some(Outcome::Approved));
+}
+
+#[test]
+fn sequential_agent_steps_require_structured_handoffs_without_changing_text_flow() {
     let fixture = Fixture::new();
     let mut graph = config();
     graph.pipelines[0].steps = serde_json::from_value(serde_json::json!([
@@ -766,19 +987,19 @@ fn managed_repeated_blocker_warns_and_preserves_transition_after_reload() {
 }
 
 #[test]
-fn implementation_blocker_debug_human_response_returns_to_build() {
+fn implementation_blocker_can_reach_human_after_assistance() {
     let fixture = Fixture::new();
     let mut graph = config();
     graph.pipelines[0].steps = vec![
         serde_json::from_value(serde_json::json!({"id":"plan","name":"Plan","type":"agent","agentId":"writer","transitions":[{"outcome":"completed","to":"build"}]})).unwrap(),
-        serde_json::from_value(serde_json::json!({"id":"build","name":"Build","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"debug"},{"outcome":"completed","to":null}]})).unwrap(),
-        serde_json::from_value(serde_json::json!({"id":"debug","name":"Diagnose","type":"agent","agentId":"reviewer","transitions":[{"outcome":"blocked","to":"build-help"}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"build","name":"Build","type":"agent","agentId":"writer","transitions":[{"outcome":"blocked","to":"assist"},{"outcome":"completed","to":null}]})).unwrap(),
+        serde_json::from_value(serde_json::json!({"id":"assist","name":"Assist","type":"agent","agentId":"reviewer","transitions":[{"outcome":"blocked","to":"build-help"}]})).unwrap(),
         serde_json::from_value(serde_json::json!({"id":"build-help","name":"Resolve blocker","type":"human","transitions":[{"outcome":"responded","to":"build"}]})).unwrap(),
     ];
     let repository = fixture.repo();
     let waiting = start_pipeline(
         &graph, "draft", "task", "build-blocked",
-        &mut Script::new(&[r#"{"outcome":"completed","output":"Plan"}"#, r#"{"outcome":"blocked","output":"Compilation fails","blocker_reason":"missing dependency"}"#, r#"{"outcome":"blocked","output":"Diagnosis needs credentials","blocker_reason":"private registry access"}"#]),
+        &mut Script::new(&[r#"{"outcome":"completed","output":"Plan"}"#, r#"{"outcome":"blocked","output":"Compilation fails","blocker_reason":"missing dependency"}"#, r#"{"outcome":"blocked","output":"Assistance needs credentials","blocker_reason":"private registry access"}"#]),
         &repository,
     ).unwrap();
     assert_eq!(waiting.status, Status::WaitingHuman);
@@ -1253,7 +1474,8 @@ fn linear_steps_reject_oversized_final_handoffs() {
     let mut config = config();
     config.pipelines[0].steps = vec![config.pipelines[0].steps[2].clone()];
     config.pipelines[0].steps[0].transitions.clear();
-    let mut runtime = Script::new(&[&"x".repeat(16 * 1024 + 1)]);
+    let oversized = "x".repeat(16 * 1024 + 1);
+    let mut runtime = Script::new(&[&oversized, &oversized, &oversized]);
     let run = start_pipeline(
         &config,
         "draft",
@@ -1285,7 +1507,8 @@ fn branching_steps_reject_empty_and_oversized_reported_handoffs() {
         }];
         config.pipelines[0].steps = vec![step];
         let decision = serde_json::json!({"outcome":"approved", "output":reported_handoff});
-        let mut runtime = Script::new(&[&decision.to_string()]);
+        let response = decision.to_string();
+        let mut runtime = Script::new(&[&response, &response, &response]);
         let run = start_pipeline(
             &config,
             "draft",
@@ -1384,7 +1607,7 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
 }
 
 #[test]
-fn unconfigured_progress_fails_without_automatic_retry() {
+fn unconfigured_progress_fails_after_bounded_report_retries() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[2].clone();
@@ -1393,7 +1616,8 @@ fn unconfigured_progress_fails_without_automatic_retry() {
         to: None,
     }];
     config.pipelines[0].steps = vec![step];
-    let mut runtime = Script::new(&[r#"{"outcome":"progress","output":"next"}"#]);
+    let progress = r#"{"outcome":"progress","output":"next"}"#;
+    let mut runtime = Script::new(&[progress, progress, progress]);
     let run = start_pipeline(
         &config,
         "draft",
@@ -1404,8 +1628,13 @@ fn unconfigured_progress_fails_without_automatic_retry() {
     )
     .unwrap();
     assert_eq!(run.status, Status::Failed);
-    assert_eq!(runtime.directories.len(), 1);
-    assert!(!runtime.allowed[0].contains(&Outcome::Progress));
+    assert_eq!(runtime.directories.len(), 3);
+    assert!(
+        runtime
+            .allowed
+            .iter()
+            .all(|allowed| !allowed.contains(&Outcome::Progress))
+    );
     assert!(
         run.steps[0]
             .error
@@ -1416,7 +1645,7 @@ fn unconfigured_progress_fails_without_automatic_retry() {
 }
 
 #[test]
-fn missing_configured_outcome_fails_without_automatic_retry() {
+fn missing_configured_outcome_fails_after_bounded_report_retries() {
     let fixture = Fixture::new();
     let mut config = config();
     let mut step = config.pipelines[0].steps[2].clone();
@@ -1425,7 +1654,7 @@ fn missing_configured_outcome_fails_without_automatic_retry() {
         to: None,
     }];
     config.pipelines[0].steps = vec![step];
-    let mut runtime = Script::new(&["No structured outcome"]);
+    let mut runtime = Script::new(&["No structured outcome"; 3]);
     let run = start_pipeline(
         &config,
         "draft",
@@ -1436,7 +1665,7 @@ fn missing_configured_outcome_fails_without_automatic_retry() {
     )
     .unwrap();
     assert_eq!(run.status, Status::Failed);
-    assert_eq!(runtime.directories.len(), 1);
+    assert_eq!(runtime.directories.len(), 3);
     assert!(
         run.steps[0]
             .error
@@ -1567,10 +1796,10 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
     let head = git(&["rev-parse", "HEAD"]);
     let branch = git(&["branch", "--show-current"]);
     let initial_outputs = [
-        r#"{"outcome":"completed","output":"Inspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD"}"#,
-        r#"{"outcome":"completed","output":"No new implementation changes; retain branch and PR identity"}"#,
-        r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
-        r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
+        structured_decision("completed", "Inspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD".into()),
+        structured_decision("completed", "No new implementation changes; retain branch and PR identity".into()),
+        structured_decision("approved", "Reviewed committed diff against base HEAD; head HEAD".into()),
+        structured_decision("completed", "No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD".into()),
     ];
     let initial_outputs: Vec<String> = initial_outputs
         .iter()
@@ -1616,10 +1845,10 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
         first.id
     );
     let reinspection_outputs = [
-        r#"{"outcome":"completed","output":"Reinspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD"}"#,
-        r#"{"outcome":"completed","output":"No new implementation changes"}"#,
-        r#"{"outcome":"approved","output":"Reviewed committed diff against base HEAD; head HEAD"}"#,
-        r#"{"outcome":"completed","output":"No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD"}"#,
+        structured_decision("completed", "Reinspect existing PR https://github.com/example/repo/pull/42; branch BRANCH; repo example/repo; head HEAD".into()),
+        structured_decision("completed", "No new implementation changes".into()),
+        structured_decision("approved", "Reviewed committed diff against base HEAD; head HEAD".into()),
+        structured_decision("completed", "No changes to publish; no commit or push; example/repo BRANCH PR URL HEAD".into()),
     ];
     let reinspection_outputs: Vec<String> = reinspection_outputs
         .iter()
@@ -1783,13 +2012,20 @@ fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
         "repository example/repo; branch task-reinspect; PR URL {pr_url}; target branch base SHA {target_base}; pre-commit task HEAD SHA {precommit_head}; reviewed paths prior-1.txt, prior-2.txt, reviewed.txt; incremental reviewed patch fingerprint {patch_fingerprint}; expected remote task-branch SHA {remote_expected}"
     );
     let first_outputs = [
-        r#"{"outcome":"completed","output":"Reinspect repository example/repo branch task-reinspect"}"#.to_owned(),
-        r#"{"outcome":"completed","output":"No new changes; existing reviewed commit present"}"#.to_owned(),
-        serde_json::json!({"outcome":"approved","output":review_facts}).to_string(),
+        structured_decision(
+            "completed",
+            "Reinspect repository example/repo branch task-reinspect".into(),
+        ),
+        structured_decision(
+            "completed",
+            "No new changes; existing reviewed commit present".into(),
+        ),
+        structured_decision("approved", review_facts.clone()),
         serde_json::json!({
             "outcome":"blocked",
             "output":format!("Publication failed after local commit {commit_sha} with parent {precommit_head}; remote remains {remote_expected}; push failed; {review_facts}"),
-            "blocker_reason":"Retry publishing the exact reviewed commit"
+            "blocker_reason":"Retry publishing the exact reviewed commit",
+            "structured_handoff":{"version":1,"summary":"Publication blocked"}
         }).to_string(),
     ];
     let first_refs: Vec<&str> = first_outputs.iter().map(String::as_str).collect();
@@ -1873,8 +2109,11 @@ fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
     // reviewed change and must not be recreated during the committer retry.
     git(&["push", "origin", "HEAD:refs/heads/task-reinspect"]);
     let retry_outputs = [
-        r#"{"outcome":"completed","output":"Verified existing commit; no new commit; repository example/repo branch task-reinspect PR https://github.com/example/repo/pull/42 head COMMIT_SHA"}"#
-            .replace("COMMIT_SHA", &commit_sha),
+        structured_decision(
+            "completed",
+            "Verified existing commit; no new commit; repository example/repo branch task-reinspect PR https://github.com/example/repo/pull/42 head COMMIT_SHA"
+                .replace("COMMIT_SHA", &commit_sha),
+        ),
     ];
     let retry_refs: Vec<&str> = retry_outputs.iter().map(String::as_str).collect();
     let mut retry_runtime = Script::new(&retry_refs);
@@ -1947,11 +2186,93 @@ fn configured_factory_recovers_partial_publish_for_existing_and_absent_remote_br
 }
 
 #[test]
-fn configured_factory_keeps_ci_out_of_the_default_pipeline() {
+fn configured_factory_allows_only_one_automatic_review_rework_round() {
+    let fixture = Fixture::new();
+    let config = software_factory_config();
+    let outputs = [
+        structured_decision("completed", "Plan".into()),
+        structured_decision("completed", "Build".into()),
+        structured_decision("revise_build", "Fix one".into()),
+        structured_decision("completed", "Fixed once".into()),
+        structured_decision("revise_build", "Still needs work".into()),
+    ];
+    let output_refs = outputs.iter().map(String::as_str).collect::<Vec<_>>();
+    let run = start_pipeline(
+        &config,
+        "draft",
+        "task",
+        "bounded-review-loop",
+        &mut Script::new(&output_refs),
+        &fixture.repo(),
+    )
+    .unwrap();
+
+    assert_eq!(run.status, Status::LimitExhausted);
+    assert_eq!(
+        run.steps
+            .iter()
+            .filter(|step| step.step_id == "build" && step.status == Status::Succeeded)
+            .count(),
+        2
+    );
+    assert_eq!(
+        run.steps
+            .iter()
+            .filter(|step| step.step_id == "review" && step.status == Status::Succeeded)
+            .count(),
+        2
+    );
+    assert!(
+        run.steps
+            .iter()
+            .any(|step| { step.step_id == "build" && step.status == Status::Pending })
+    );
+    assert!(
+        !run.steps
+            .iter()
+            .any(|step| { step.step_id == "commit" && step.status != Status::Pending })
+    );
+}
+
+#[test]
+fn configured_factory_has_a_bounded_review_loop_without_extra_diagnostic_or_ci_steps() {
     let config = software_factory_config();
     let pipeline = &config.pipelines[0];
-    assert!(!pipeline.steps.iter().any(|step| step.id == "ci"));
-    assert!(config.agents.iter().all(|agent| agent.id != "factory-ci"));
+    assert!(
+        !pipeline
+            .steps
+            .iter()
+            .any(|step| matches!(step.id.as_str(), "ci" | "debug"))
+    );
+    for step_id in ["plan", "build", "review", "commit"] {
+        let step = pipeline
+            .steps
+            .iter()
+            .find(|step| step.id == step_id)
+            .unwrap();
+        assert!(
+            matches!(
+                &step.kind,
+                baton_core::domain::project::PipelineStepKind::Agent {
+                    include_task: Some(true),
+                    ..
+                }
+            ),
+            "factory step {step_id} must pass the original task"
+        );
+        assert_eq!(step.max_attempts, Some(2), "{step_id} permits one re-entry");
+    }
+    let review = pipeline
+        .steps
+        .iter()
+        .find(|step| step.id == "review")
+        .unwrap();
+    assert!(
+        !review
+            .transitions
+            .iter()
+            .any(|transition| transition.outcome == Outcome::RevisePlan)
+    );
     let commit = pipeline
         .steps
         .iter()
@@ -2028,15 +2349,15 @@ fn blocked_handoffs_route_to_agent_and_human_and_are_persisted() {
 }
 
 #[test]
-fn debugger_receives_blocker_and_returns_diagnosis_to_builder() {
+fn blocked_step_can_route_to_an_assisting_agent() {
     let fixture = Fixture::new();
     let mut json: serde_json::Value =
         serde_json::from_str(include_str!("../../baton-core/tests/fixture_config.json")).unwrap();
     json["pipelines"][0]["steps"] = serde_json::json!([
         {"id":"build", "name":"Build", "type":"agent", "agentId":"writer", "includeTask":false, "transitions":[
-            {"outcome":"blocked", "to":"debug"}, {"outcome":"completed", "to":null}
+            {"outcome":"blocked", "to":"assist"}, {"outcome":"completed", "to":null}
         ]},
-        {"id":"debug", "name":"Debug", "type":"agent", "agentId":"reviewer", "transitions":[
+        {"id":"assist", "name":"Assist", "type":"agent", "agentId":"reviewer", "transitions":[
             {"outcome":"revise_build", "to":"build"}
         ]}
     ]);
@@ -2050,18 +2371,24 @@ fn debugger_receives_blocker_and_returns_diagnosis_to_builder() {
         &config,
         "draft",
         "original task",
-        "debugger",
+        "agent-assist",
         &mut runtime,
         &fixture.repo(),
     )
     .unwrap();
     assert_eq!(run.status, Status::Succeeded);
-    let debug = run
+    let assist = run
         .steps
         .iter()
-        .find(|step| step.step_id == "debug")
+        .find(|step| step.step_id == "assist")
         .unwrap();
-    assert!(debug.input.as_deref().unwrap().contains("specific blocker"));
+    assert!(
+        assist
+            .input
+            .as_deref()
+            .unwrap()
+            .contains("specific blocker")
+    );
     let build = run
         .steps
         .iter()
@@ -2071,7 +2398,7 @@ fn debugger_receives_blocker_and_returns_diagnosis_to_builder() {
     assert!(input.contains("specific diagnosis"));
     assert!(!input.contains("specific blocker"));
     assert!(!input.contains("original task"));
-    assert_eq!(fixture.repo().load("debugger").unwrap(), run);
+    assert_eq!(fixture.repo().load("agent-assist").unwrap(), run);
 }
 
 const APPROVED: &str = r#"{"outcome":"approved","output":"Ready for a human"}"#;
@@ -2541,7 +2868,7 @@ fn unknown_outcomes_and_unconfigured_routes_fail_without_advancing() {
         ),
     ] {
         let fixture = Fixture::new();
-        let mut runtime = Script::new(&["plan", "build", output]);
+        let mut runtime = Script::new(&["plan", "build", output, output, output]);
         let run = start_pipeline(
             &config(),
             "draft",
@@ -2552,7 +2879,7 @@ fn unknown_outcomes_and_unconfigured_routes_fail_without_advancing() {
         )
         .unwrap();
         assert_eq!(run.status, Status::Failed);
-        assert_eq!(runtime.directories.len(), 3);
+        assert_eq!(runtime.directories.len(), 5);
         assert_eq!(run.steps[2].status, Status::Failed);
         assert!(run.steps[2].error.is_some());
         assert_eq!(fixture.repo().load(id).unwrap(), run);

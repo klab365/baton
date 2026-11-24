@@ -14,7 +14,7 @@ baton /path/to/project
 
 On first launch, accept the terminal initialization prompt, or open <http://127.0.0.1:5173> and choose **Set up project**. This initializes an empty configuration; Baton does not automatically create the example pipeline or download skills. Set `BATON_PORT` if needed.
 
-In **Settings**, add credentials for the providers you intend to use. Secrets stay in the local credential vault. Create any project-specific instructions in `AGENTS.md` at the project root: Rig loads this file from the task worktree at each step. See [runtime orchestration](orchestration.md) for limits and trust considerations.
+In **Settings**, add credentials for the providers you intend to use. Secrets stay in the local credential vault. Baton does not automatically read or inject a worktree `AGENTS.md`; put required instructions in the agent prompt, pipeline prompt or an assigned skill. See [runtime orchestration](orchestration.md).
 
 ## 2. Import skills
 

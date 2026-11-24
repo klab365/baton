@@ -41,13 +41,12 @@ use rig_harness::{
     },
 };
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
-const MAX_PROJECT_INSTRUCTIONS_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_CONTEXT_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) fn push_activity(entries: &mut Vec<String>, content: String) {
@@ -122,24 +121,6 @@ fn validate_context_size(conversation: &Conversation) -> Result<(), String> {
     Ok(())
 }
 
-fn outcome_followup(
-    allowed_outcomes: &[Outcome],
-    has_decision: bool,
-    attempts: usize,
-) -> Option<String> {
-    if allowed_outcomes.is_empty() || has_decision || attempts >= 2 {
-        return None;
-    }
-    let allowed = allowed_outcomes
-        .iter()
-        .map(outcome_name)
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!(
-        "You did not call report_outcome with an allowed outcome. Call report_outcome now with one of: {allowed}, and include the complete authoritative handoff in its summary. Do not repeat the task."
-    ))
-}
-
 fn append_outcome_instruction(preamble: &mut String, allowed_outcomes: &[Outcome]) {
     if allowed_outcomes.is_empty() {
         return;
@@ -150,34 +131,8 @@ fn append_outcome_instruction(preamble: &mut String, allowed_outcomes: &[Outcome
         .collect::<Vec<_>>()
         .join(", ");
     preamble.push_str(&format!(
-        "\n\nThis pipeline step requires a control decision. Call the report_outcome tool exactly once with one of these configured outcomes: {allowed}. The report_outcome summary is the authoritative complete handoff for downstream steps; do not put essential handoff content only in your final answer. Do not encode the decision as JSON in your final answer."
+        "\n\nCall report_outcome with one configured outcome: {allowed}."
     ));
-}
-
-fn project_instructions(root: &Path) -> Result<Option<String>, String> {
-    let path = root.join("AGENTS.md");
-    let metadata = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("Inspect worktree AGENTS.md: {error}")),
-    };
-    if !metadata.file_type().is_file() {
-        return Err("Worktree AGENTS.md must be a regular file, not a symlink".into());
-    }
-    let file =
-        std::fs::File::open(&path).map_err(|error| format!("Open worktree AGENTS.md: {error}"))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_PROJECT_INSTRUCTIONS_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("Read worktree AGENTS.md: {error}"))?;
-    if bytes.len() as u64 > MAX_PROJECT_INSTRUCTIONS_BYTES {
-        return Err(format!(
-            "Worktree AGENTS.md exceeds {MAX_PROJECT_INSTRUCTIONS_BYTES} bytes"
-        ));
-    }
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|error| format!("Worktree AGENTS.md must be UTF-8: {error}"))
 }
 
 fn copilot_session_directory<'a>(
@@ -377,8 +332,9 @@ mod injected_execution_tests {
     }
 
     #[test]
-    fn configured_high_reaches_requests_after_fresh_and_resumed_runtime_setup() {
+    fn configured_high_reaches_requests_without_auto_loading_agents_md() {
         let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("AGENTS.md"), [0xff]).unwrap();
         let sessions = tempfile::tempdir().unwrap();
         let mock = MockCompletionModel::from_stream_turns((1..=9).map(|turn| {
             vec![
@@ -399,9 +355,9 @@ mod injected_execution_tests {
         .unwrap();
         let outcomes = [Outcome::Completed];
         for (history_required, input, current_agent, expected_output, request_floor) in [
-            (false, "first", &agent, "response 3", 3),
-            (true, "second", &agent, "response 6", 6),
-            (true, "legacy", &legacy_agent, "response 9", 9),
+            (false, "first", &agent, "response 1", 1),
+            (true, "second", &agent, "response 2", 2),
+            (true, "legacy", &legacy_agent, "response 3", 3),
         ] {
             let mut observer = |_entry: RunTraceEntry| Ok(());
             let result = RigRuntime::execute(
@@ -472,7 +428,6 @@ impl RigRuntime {
         let root = directory
             .canonicalize()
             .map_err(|e| format!("Resolve worktree: {e}"))?;
-        let instructions = project_instructions(&root)?;
         let provider_name = if is_copilot_provider(&model_config.provider) {
             "copilot"
         } else {
@@ -800,10 +755,6 @@ impl RigRuntime {
         app.world_mut().resource_mut::<Completed>().0.take();
 
         let mut preamble = baton_agent.instructions.clone();
-        if let Some(instructions) = instructions {
-            preamble.push_str("\n\nProject instructions from worktree AGENTS.md (follow when consistent with higher-priority instructions):\n");
-            preamble.push_str(&instructions);
-        }
         for skill_id in &baton_agent.skill_ids {
             let skill = skills
                 .iter()
@@ -813,9 +764,6 @@ impl RigRuntime {
         }
         preamble.push_str("\n\nUse get_structured_handoff(attempt) to retrieve the complete report when the structured-context notice says details were omitted; the attempt number identifies its producer.");
         append_outcome_instruction(&mut preamble, allowed_outcomes);
-        if allowed_outcomes.is_empty() && baton_agent.allows_tool("report_outcome") {
-            preamble.push_str("\n\nOptional: call report_outcome with outcome `completed` and a version-1 structured_handoff when you have structured findings or verification to pass on. This does not replace your final text response.");
-        }
         let setup_trace = RunTraceEntry {
             attempt: None,
             occurred_at: baton_core::features::pipeline_engine::utc_now(),
@@ -861,7 +809,6 @@ impl RigRuntime {
         app.world_mut()
             .trigger(Deliver::new(entity, input.to_owned(), DeliveryMode::Queue));
 
-        let mut followups = 0;
         let mut observed_requests = 0;
         let mut observed_wire = 0;
         let mut observed_activities = 0;
@@ -922,19 +869,6 @@ impl RigRuntime {
                         return Err(format!("Rig agent stopped: {reason:?}"));
                     }
                 };
-                let missing_decision = !allowed_outcomes.is_empty()
-                    && decision
-                        .lock()
-                        .map_err(|_| "Pipeline outcome state is unavailable".to_owned())?
-                        .is_none();
-                if let Some(prompt) =
-                    outcome_followup(allowed_outcomes, !missing_decision, followups)
-                {
-                    followups += 1;
-                    app.world_mut()
-                        .trigger(Deliver::new(entity, prompt, DeliveryMode::Queue));
-                    continue;
-                }
                 let trace = Vec::new();
                 app.world_mut().trigger(Exit(ExitReason::Quit));
                 app.update();
@@ -966,19 +900,8 @@ impl RigRuntime {
 
 #[cfg(test)]
 mod outcome_prompt_tests {
-    use super::{append_outcome_instruction, outcome_followup, push_activity, sort_trace_entries};
+    use super::{append_outcome_instruction, push_activity, sort_trace_entries};
     use baton_core::domain::{pipeline::RunTraceEntry, project::Outcome};
-
-    #[test]
-    fn missing_outcome_followup_is_bounded_and_lists_allowed_choices() {
-        let allowed = [Outcome::Completed, Outcome::Blocked];
-        let prompt = outcome_followup(&allowed, false, 0).unwrap();
-        assert!(prompt.contains("completed, blocked"));
-        assert!(outcome_followup(&allowed, false, 1).is_some());
-        assert!(outcome_followup(&allowed, false, 2).is_none());
-        assert!(outcome_followup(&allowed, true, 0).is_none());
-        assert!(outcome_followup(&[], false, 0).is_none());
-    }
 
     #[test]
     fn outcome_prompt_uses_only_configured_choices_without_global_blocked_policy() {
@@ -1165,67 +1088,5 @@ mod copilot_credential_tests {
         credential.status = CredentialStatus::Available;
         credential.credential_type = CredentialType::new("openai_api_key").unwrap();
         assert!(copilot_session_directory(Some(&(credential, None)), Some(dir.path())).is_err());
-    }
-}
-
-#[cfg(test)]
-mod project_instruction_tests {
-    use super::{MAX_PROJECT_INSTRUCTIONS_BYTES, project_instructions};
-
-    #[test]
-    fn reads_optional_worktree_instructions_each_time() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(project_instructions(dir.path()).unwrap(), None);
-        std::fs::write(dir.path().join("AGENTS.md"), "Run tests").unwrap();
-        assert_eq!(
-            project_instructions(dir.path()).unwrap().as_deref(),
-            Some("Run tests")
-        );
-        std::fs::write(dir.path().join("AGENTS.md"), "Run lint").unwrap();
-        assert_eq!(
-            project_instructions(dir.path()).unwrap().as_deref(),
-            Some("Run lint")
-        );
-    }
-
-    #[test]
-    fn rejects_oversized_and_invalid_instructions() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("AGENTS.md");
-        std::fs::write(
-            &path,
-            vec![b'x'; MAX_PROJECT_INSTRUCTIONS_BYTES as usize + 1],
-        )
-        .unwrap();
-        assert!(
-            project_instructions(dir.path())
-                .unwrap_err()
-                .contains("exceeds")
-        );
-        std::fs::write(&path, [0xff]).unwrap();
-        assert!(
-            project_instructions(dir.path())
-                .unwrap_err()
-                .contains("UTF-8")
-        );
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
-        assert!(
-            project_instructions(dir.path())
-                .unwrap_err()
-                .contains("regular file")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_symlinked_instructions() {
-        let dir = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("missing", dir.path().join("AGENTS.md")).unwrap();
-        assert!(
-            project_instructions(dir.path())
-                .unwrap_err()
-                .contains("regular file")
-        );
     }
 }

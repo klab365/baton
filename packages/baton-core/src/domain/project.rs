@@ -224,6 +224,10 @@ impl<'de> Deserialize<'de> for PipelineStep {
 }
 
 impl PipelineStep {
+    pub fn requires_structured_handoff(&self) -> bool {
+        matches!(self.kind, PipelineStepKind::Agent { .. })
+    }
+
     pub fn is_human(&self) -> bool {
         matches!(self.kind, PipelineStepKind::Human)
     }
@@ -375,15 +379,14 @@ impl ProjectConfig {
                     PipelineStepKind::Human => {}
                     PipelineStepKind::Agent { agent_id, .. } => {
                         reference(&format!("{step_path}.agentId"), agent_id, &agents)?;
-                        if !step.transitions.is_empty()
-                            && self
-                                .agents
-                                .iter()
-                                .find(|agent| agent.id == *agent_id)
-                                .is_some_and(|agent| !agent.allows_tool("report_outcome"))
+                        if self
+                            .agents
+                            .iter()
+                            .find(|agent| agent.id == *agent_id)
+                            .is_some_and(|agent| !agent.allows_tool("report_outcome"))
                         {
                             return Err(format!(
-                                "{step_path}: agent {agent_id:?} must allow report_outcome for steps with transitions"
+                                "{step_path}: agent {agent_id:?} must allow report_outcome to provide its required structured handoff"
                             ));
                         }
                     }

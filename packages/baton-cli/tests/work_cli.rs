@@ -88,7 +88,7 @@ mkdir -p "$session"
 prompt=$(cat)
 printf '%s\\n' "$prompt" >> "$session/inputs"
 printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"prior-conversation"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" > "$session/test_$id.jsonl"
-printf '{"outcome":"completed","summary":"TOOL HANDOFF"}' > "$BATON_PI_OUTCOME_FILE"
+printf '{"outcome":"completed","summary":"TOOL HANDOFF","structured_handoff":{"version":1,"summary":"TOOL HANDOFF"}}' > "$BATON_PI_OUTCOME_FILE"
 printf 'FINAL ANSWER'
 "##).unwrap();
     fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
@@ -157,7 +157,7 @@ mkdir -p "$session_dir"
 if [ -z "$existing" ]; then
   printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$session_id" "$PWD" > "$session_dir/session_$session_id.jsonl"
 fi
-printf '{"outcome":"completed","summary":"agent summary"}' > "$BATON_PI_OUTCOME_FILE"
+printf '{"outcome":"completed","summary":"agent summary","structured_handoff":{"version":1,"summary":"agent summary"}}' > "$BATON_PI_OUTCOME_FILE"
 printf 'completed'
 "##,
     )
@@ -304,7 +304,7 @@ exit 1
         &f.path,
         &json!({
             "schemaVersion":7,
-            "agents":[{"id":"worker","systemPrompt":"Implement","provider":"pi","skillIds":[],"allowedTools":[]}],
+            "agents":[{"id":"worker","systemPrompt":"Implement","provider":"pi","skillIds":[],"allowedTools":["report_outcome"]}],
             "pipelines":[{"id":"factory","steps":[{"id":"build","name":"Build","type":"agent","agentId":"worker"}]}]
         }),
     );
@@ -536,8 +536,8 @@ async fn cli_executes_rig_against_local_ollama_provider() {
         &json!({
             "schemaVersion": 7,
             "agents": [
-                {"id":"worker", "systemPrompt":"Implement", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":[]},
-                {"id":"reviewer", "systemPrompt":"Review", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":[]},
+                {"id":"worker", "systemPrompt":"Implement", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]},
+                {"id":"reviewer", "systemPrompt":"Review", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]},
                 {"id":"missing", "systemPrompt":"Work", "provider":"rig", "model":"ollama/test", "credentialId":"local", "skillIds":[], "allowedTools":["report_outcome"]}
             ],
             "pipelines": [

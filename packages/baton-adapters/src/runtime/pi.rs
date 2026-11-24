@@ -409,10 +409,10 @@ pub(super) fn execute(
     builder
         .create(&session)
         .map_err(|e| format!("Create Pi session directory: {e}"))?;
-    let mut prompt = input.to_owned();
-    for attempt in 0..=2 {
+    let prompt = input.to_owned();
+    {
         let existing = session_file(&session, directory)?;
-        if (runtime.history_required || attempt > 0) && existing.is_none() {
+        if runtime.history_required && existing.is_none() {
             return Err("Pi agent session is missing; manual recovery required".into());
         }
         let marker = session.join("baton-inflight");
@@ -484,24 +484,8 @@ pub(super) fn execute(
             return Err("Pi did not persist its session; manual recovery required".into());
         }
         std::fs::remove_file(marker).map_err(|e| format!("Clear Pi execution marker: {e}"))?;
-        if allowed_outcomes.is_empty() || runtime.decision.is_some() || attempt == 2 {
-            return Ok(output);
-        }
-        let allowed = allowed_outcomes
-            .iter()
-            .map(|o| {
-                serde_json::to_value(o)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_owned))
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        prompt = format!(
-            "You did not call report_outcome with an allowed outcome. Call report_outcome now with one of: {allowed}, and include the complete authoritative handoff in its summary. Do not repeat the task."
-        );
+        Ok(output)
     }
-    unreachable!()
 }
 
 fn parse_structured_handoff(
@@ -606,11 +590,6 @@ fn execute_once(
         );
         if !runtime.structured_history.is_empty() {
             system_prompt.push_str("\n\nUse get_structured_handoff(attempt) to retrieve the complete persisted report when a bounded-context notice says details were omitted.");
-        }
-        if allowed_outcomes.is_empty() && report_outcome_enabled {
-            system_prompt.push_str("\n\nOptional: call report_outcome with outcome `completed` and a version-1 structured_handoff if you have structured findings or verification to pass on. This does not replace your final text response.");
-        } else if !allowed_outcomes.is_empty() {
-            system_prompt.push_str("\n\nCall report_outcome exactly once with your pipeline decision and the complete authoritative handoff for downstream steps. The final answer may be brief.");
         }
         Some(dir)
     };

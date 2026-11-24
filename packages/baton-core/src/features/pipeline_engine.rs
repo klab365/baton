@@ -11,6 +11,8 @@ use crate::{
 };
 use std::time::Instant;
 
+const MAX_REPORT_RETRIES: usize = 2;
+
 struct CancellableRuntime<'a, R: ?Sized> {
     runtime: &'a mut R,
     cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -21,6 +23,9 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
     }
     fn set_history_required(&mut self, required: bool) {
         self.runtime.set_history_required(required);
+    }
+    fn set_structured_handoff_required(&mut self, required: bool) {
+        self.runtime.set_structured_handoff_required(required);
     }
     fn execute_shell(
         &mut self,
@@ -549,12 +554,95 @@ fn pending(step: &PipelineStep) -> StepRun {
 }
 
 pub fn with_step_prompt(input: String, step: &PipelineStep) -> String {
+    let contract = if step.requires_structured_handoff() {
+        "Required: call report_outcome with a valid structured_handoff.\n\n"
+    } else {
+        ""
+    };
     match &step.kind {
         crate::domain::project::PipelineStepKind::Agent { prompt, .. } if !prompt.is_empty() => {
-            format!("Step instructions:\n{prompt}\n\nStep context:\n{input}")
+            format!("{contract}Step instructions:\n{prompt}\n\nStep context:\n{input}")
+        }
+        crate::domain::project::PipelineStepKind::Agent { .. } if !contract.is_empty() => {
+            format!("{contract}Step context:\n{input}")
         }
         _ => input,
     }
+}
+
+fn validate_agent_response(
+    step: &PipelineStep,
+    allowed_outcomes: &[Outcome],
+    output: String,
+    decision: Option<AgentDecision>,
+) -> Result<
+    (
+        Outcome,
+        String,
+        Option<crate::domain::pipeline::StructuredHandoff>,
+    ),
+    String,
+> {
+    let (outcome, summary, structured_handoff) = if allowed_outcomes.is_empty() {
+        if output.trim().is_empty() {
+            return Err("Agent returned an empty handoff".into());
+        }
+        if output.len() > MAX_HANDOFF_BYTES {
+            return Err("Agent output exceeds 16384 bytes".into());
+        }
+        (
+            Outcome::Completed,
+            output,
+            decision.and_then(|decision| decision.structured_handoff),
+        )
+    } else {
+        let decision = decision
+            .ok_or_else(|| "Agent completed without reporting a pipeline outcome".to_owned())?;
+        if !allowed_outcomes.contains(&decision.outcome) {
+            return Err("Agent reported an outcome not allowed by this pipeline step".into());
+        }
+        if decision.summary.trim().is_empty() {
+            return Err("Pipeline outcome summary must not be empty".into());
+        }
+        if decision.summary.len() > MAX_HANDOFF_BYTES {
+            return Err("Pipeline outcome summary exceeds 16384 bytes".into());
+        }
+        (
+            decision.outcome,
+            decision.summary,
+            decision.structured_handoff,
+        )
+    };
+    if let Some(handoff) = &structured_handoff {
+        handoff.validate()?;
+    }
+    if step.requires_structured_handoff() && structured_handoff.is_none() {
+        return Err(format!(
+            "Pipeline step {} requires a structured handoff",
+            step.id
+        ));
+    }
+    Ok((outcome, summary, structured_handoff))
+}
+
+fn report_repair_prompt(error: &str, allowed_outcomes: &[Outcome]) -> String {
+    let allowed = if allowed_outcomes.is_empty() {
+        "completed".to_owned()
+    } else {
+        allowed_outcomes
+            .iter()
+            .map(|outcome| {
+                serde_json::to_value(outcome)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "Baton rejected your previous report: {error}. The task work is complete; do not repeat or modify it. Call report_outcome again with an allowed outcome ({allowed}) and a valid structured_handoff. Correct only the report."
+    )
 }
 
 pub fn validate_handoff(run: &PipelineRun) -> Result<(), String> {
@@ -689,6 +777,49 @@ fn carried_structured_handoff(
         source_attempts,
         report: carried,
     }))
+}
+
+fn gate_approved_outcome(
+    run: &PipelineRun,
+    step: &PipelineStep,
+    outcome: Outcome,
+    mut output: String,
+) -> Result<(Outcome, String), String> {
+    if outcome != Outcome::Approved {
+        return Ok((outcome, output));
+    }
+    let open_findings = carried_structured_handoff(run)?
+        .map(|handoff| {
+            handoff
+                .report
+                .findings
+                .into_iter()
+                .filter(|finding| finding.status == crate::domain::pipeline::FindingStatus::Open)
+                .map(|finding| finding.id)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if open_findings.is_empty() {
+        return Ok((outcome, output));
+    }
+
+    let message = format!(
+        "Baton approval gate: unresolved structured finding(s): {}",
+        open_findings.join(", ")
+    );
+    if step
+        .transitions
+        .iter()
+        .any(|transition| transition.outcome == Outcome::ReviseBuild)
+    {
+        output.push_str("\n\n");
+        output.push_str(&message);
+        return Ok((Outcome::ReviseBuild, output));
+    }
+    Err(format!(
+        "{message}; no revise_build transition is configured for step {}",
+        step.id
+    ))
 }
 
 pub fn step_input(
@@ -1124,69 +1255,79 @@ pub fn execute_graph(
             runtime,
             cancelled: &cancelled,
         };
-        let mut observer = |mut entry: RunTraceEntry| {
-            let _lease = acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
-            entry.attempt = Some(run.steps[index].attempt);
-            let kind = entry.kind.clone();
-            append_bounded_trace(&mut run, [entry]);
-            publish(
-                repository,
-                &mut run,
-                Some(format!("Observed runtime activity: {kind}")),
-            )
-        };
         let result = if history_unavailable {
             Err("Runtime does not support resuming this agent's session".to_owned())
         } else {
-            guarded.execute_pipeline_step_observed(
-                &worktree_path,
-                &assigned,
-                &input,
-                &allowed_outcomes,
-                &cancelled,
-                &mut observer,
-            )
-        }
-        .and_then(|output| {
-            if allowed_outcomes.is_empty() {
-                if output.trim().is_empty() {
-                    return Err("Agent returned an empty handoff".into());
+            guarded.set_structured_handoff_required(true);
+            let mut runtime_input = input.clone();
+            let mut retries = 0;
+            loop {
+                if cancelled() {
+                    break Err("Run cancelled".into());
                 }
-                if output.len() > MAX_HANDOFF_BYTES {
-                    return Err("Agent output exceeds 16384 bytes".into());
+                let output = {
+                    let mut observer = |mut entry: RunTraceEntry| {
+                        let _lease =
+                            acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
+                        entry.attempt = Some(run.steps[index].attempt);
+                        let kind = entry.kind.clone();
+                        append_bounded_trace(&mut run, [entry]);
+                        publish(
+                            repository,
+                            &mut run,
+                            Some(format!("Observed runtime activity: {kind}")),
+                        )
+                    };
+                    match guarded.execute_pipeline_step_observed(
+                        &worktree_path,
+                        &assigned,
+                        &runtime_input,
+                        &allowed_outcomes,
+                        &cancelled,
+                        &mut observer,
+                    ) {
+                        Ok(output) => output,
+                        Err(error) => break Err(error),
+                    }
+                };
+                match validate_agent_response(
+                    step,
+                    &allowed_outcomes,
+                    output,
+                    guarded.take_decision(),
+                ) {
+                    Ok(response) => break Ok(response),
+                    Err(error) if retries < MAX_REPORT_RETRIES => {
+                        retries += 1;
+                        let repair = report_repair_prompt(&error, &allowed_outcomes);
+                        let _lease = match acquire_current_attempt_lease(
+                            repository, &run, index, &cancelled,
+                        ) {
+                            Ok(lease) => lease,
+                            Err(error) => {
+                                if let Some(cancelled) = cancelled_run(repository, &run)? {
+                                    return Ok(cancelled);
+                                }
+                                break Err(error);
+                            }
+                        };
+                        if let Some(recorded_input) = run.steps[index].input.as_mut() {
+                            recorded_input.push_str("\n\nBaton report-repair request:\n");
+                            recorded_input.push_str(&repair);
+                        }
+                        publish(
+                            repository,
+                            &mut run,
+                            Some(format!(
+                                "Baton rejected the report and requested correction ({retries}/{MAX_REPORT_RETRIES})"
+                            )),
+                        )?;
+                        runtime_input = repair;
+                    }
+                    Err(error) => break Err(error),
                 }
-                let structured_handoff = guarded
-                    .take_decision()
-                    .and_then(|decision| decision.structured_handoff);
-                if let Some(handoff) = &structured_handoff {
-                    handoff.validate()?;
-                }
-                Ok((Outcome::Completed, output, structured_handoff))
-            } else {
-                let decision = guarded.take_decision().ok_or_else(|| {
-                    "Agent completed without reporting a pipeline outcome".to_owned()
-                })?;
-                if !allowed_outcomes.contains(&decision.outcome) {
-                    return Err(
-                        "Agent reported an outcome not allowed by this pipeline step".into(),
-                    );
-                }
-                if decision.summary.trim().is_empty() {
-                    return Err("Pipeline outcome summary must not be empty".into());
-                }
-                if decision.summary.len() > MAX_HANDOFF_BYTES {
-                    return Err("Pipeline outcome summary exceeds 16384 bytes".into());
-                }
-                if let Some(handoff) = &decision.structured_handoff {
-                    handoff.validate()?;
-                }
-                Ok((
-                    decision.outcome,
-                    decision.summary,
-                    decision.structured_handoff,
-                ))
             }
-        });
+        };
         let mut trace = runtime.take_trace();
         for entry in &mut trace {
             entry.attempt = Some(run.steps[index].attempt);
@@ -1215,13 +1356,24 @@ pub fn execute_graph(
         let mut loop_message = None;
         match result {
             Ok((outcome, output, structured_handoff)) => {
-                let repeated =
-                    outcome == Outcome::Blocked && repeated_blocker(&run, pipeline, index, &output);
-                run.handoff = Some(output.clone());
-                run.steps[index].output = Some(output);
-                run.steps[index].outcome = Some(outcome.clone());
                 run.steps[index].structured_handoff = structured_handoff;
                 run.steps[index].status = Status::Succeeded;
+                let (outcome, output) = match gate_approved_outcome(&run, step, outcome, output) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        run.steps[index].status = Status::Failed;
+                        run.steps[index].error = Some(error.clone());
+                        run.status = Status::Failed;
+                        finish_step_attempt(&mut run.steps[index], step_clock);
+                        publish(repository, &mut run, Some(error))?;
+                        continue;
+                    }
+                };
+                run.handoff = Some(output.clone());
+                run.steps[index].output = Some(output.clone());
+                run.steps[index].outcome = Some(outcome.clone());
+                let repeated =
+                    outcome == Outcome::Blocked && repeated_blocker(&run, pipeline, index, &output);
                 let unresolved_count = repeated_unresolved_count(&run, pipeline, index);
                 route(&mut run, pipeline, index, outcome)?;
                 if run.status == Status::Running
@@ -1388,6 +1540,7 @@ mod tests {
         let first_input = with_step_prompt("Task".into(), &first);
         let second_input = with_step_prompt("Task".into(), &second);
         assert!(first_input.contains("Step instructions:\nDraft"));
+        assert!(first_input.contains("Required: call report_outcome"));
         assert!(second_input.contains("Step instructions:\nReview"));
         assert!(!first_input.contains("Review"));
         assert!(!second_input.contains("Draft"));
@@ -1519,6 +1672,73 @@ mod tests {
         );
         assert!(!input.contains("unverified agent summary"));
         assert_eq!(human_decisions(&recovered, pipeline).len(), 2);
+    }
+
+    #[test]
+    fn approval_is_routed_back_while_carried_findings_remain_open() {
+        let mut config: ProjectConfig =
+            serde_json::from_str(include_str!("../../tests/fixture_config.json")).unwrap();
+        let pipeline = &mut config.pipelines[0];
+        let review = &mut pipeline.steps[1];
+        review.transitions = vec![
+            crate::domain::project::Transition {
+                outcome: Outcome::Approved,
+                to: None,
+            },
+            crate::domain::project::Transition {
+                outcome: Outcome::ReviseBuild,
+                to: Some("write".into()),
+            },
+        ];
+        let mut run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":pipeline.id, "task":"task", "startedAt":"now",
+            "status":"running", "currentStep":"review", "steps":[
+                {"stepId":"write","agentId":"writer","status":"succeeded","attempt":1,
+                 "structuredHandoff":{"version":1,"summary":"Build","findings":[
+                    {"id":"F-1","status":"open","description":"Add regression test"}
+                 ]}},
+                {"stepId":"review","agentId":"reviewer","status":"succeeded","attempt":2,
+                 "output":"Looks good despite prior finding"}
+            ]
+        }))
+        .unwrap();
+
+        let (outcome, output) =
+            gate_approved_outcome(&run, review, Outcome::Approved, "Looks good".into()).unwrap();
+        assert_eq!(outcome, Outcome::ReviseBuild);
+        assert!(output.contains("F-1"));
+        let mut without_rework = review.clone();
+        without_rework
+            .transitions
+            .retain(|transition| transition.outcome != Outcome::ReviseBuild);
+        assert!(
+            gate_approved_outcome(
+                &run,
+                &without_rework,
+                Outcome::Approved,
+                "Looks good".into(),
+            )
+            .unwrap_err()
+            .contains("no revise_build transition")
+        );
+
+        run.steps[1].structured_handoff = Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,"summary":"Verified","findings":[
+                    {"id":"F-1","status":"resolved","description":"Added regression test"}
+                ]
+            }))
+            .unwrap(),
+        );
+        let (outcome, output) = gate_approved_outcome(
+            &run,
+            review,
+            Outcome::Approved,
+            "Approved with evidence".into(),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::Approved);
+        assert_eq!(output, "Approved with evidence");
     }
 
     #[test]
