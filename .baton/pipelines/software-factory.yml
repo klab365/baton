@@ -3,11 +3,14 @@ id: software-factory
 steps:
 - id: plan
   name: Analyze and plan
-  maxAttempts: 2
   agentId: factory-planner
   includeTask: true
   prompt: |
-    Produce an actionable plan that preserves the task's acceptance criteria.
+    Own understanding the task and any referenced issue. Return a self-contained
+    implementation handoff with verified acceptance criteria, concrete ordered
+    changes, relevant files/modules, tests, and constraints. If requirements are
+    unavailable or ambiguous, block here for human clarification; do not send an
+    incomplete plan to the builder.
   transitions:
   - outcome: completed
     to: build
@@ -17,22 +20,27 @@ steps:
 
 - id: build
   name: Implement and verify
-  maxAttempts: 2
   agentId: factory-builder
-  includeTask: true
+  includeTask: false
   prompt: |
-    Implement the plan, satisfy acceptance criteria, and address the latest
-    feedback. Do not publish changes.
+    Implement as much of the complete plan as possible in this invocation;
+    batch related code, tests, and documentation. Report completed only when
+    all acceptance criteria are verified. Report revise_build only after a
+    meaningful batch when another attempt is genuinely needed, with concrete
+    progress and the next substantial batch. Do not loop after a no-change pass:
+    continue working or report the specific blocker to a human. Do not reopen
+    linked issues or publish changes.
   transitions:
   - outcome: completed
     to: review
+  - outcome: revise_build
+    to: build
   - outcome: blocked
     to: build-help
   type: agent
 
 - id: review
   name: Independent review
-  maxAttempts: 2
   agentId: factory-reviewer
   includeTask: true
   prompt: |
@@ -49,7 +57,6 @@ steps:
 
 - id: commit
   name: Commit and publish pull request
-  maxAttempts: 2
   agentId: factory-committer
   includeTask: true
   prompt: |
