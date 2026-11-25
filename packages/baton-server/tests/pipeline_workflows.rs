@@ -2188,7 +2188,13 @@ fn configured_factory_recovers_partial_publish_for_existing_and_absent_remote_br
 #[test]
 fn configured_factory_allows_only_one_automatic_review_rework_round() {
     let fixture = Fixture::new();
-    let config = software_factory_config();
+    let mut config = software_factory_config();
+    // This test covers bounded behavior explicitly; omitted limits are unlimited.
+    for step in &mut config.pipelines[0].steps {
+        if matches!(step.kind, baton_core::domain::project::PipelineStepKind::Agent { .. }) {
+            step.max_attempts = Some(2);
+        }
+    }
     let outputs = [
         structured_decision("completed", "Plan".into()),
         structured_decision("completed", "Build".into()),
@@ -2235,7 +2241,7 @@ fn configured_factory_allows_only_one_automatic_review_rework_round() {
 }
 
 #[test]
-fn configured_factory_has_a_bounded_review_loop_without_extra_diagnostic_or_ci_steps() {
+fn configured_factory_omits_optional_attempt_limits_without_extra_diagnostic_or_ci_steps() {
     let config = software_factory_config();
     let pipeline = &config.pipelines[0];
     assert!(
@@ -2250,17 +2256,16 @@ fn configured_factory_has_a_bounded_review_loop_without_extra_diagnostic_or_ci_s
             .iter()
             .find(|step| step.id == step_id)
             .unwrap();
+        let expected_include_task = step_id != "build";
         assert!(
             matches!(
                 &step.kind,
-                baton_core::domain::project::PipelineStepKind::Agent {
-                    include_task: Some(true),
-                    ..
-                }
+                baton_core::domain::project::PipelineStepKind::Agent { include_task, .. }
+                    if *include_task == Some(expected_include_task)
             ),
-            "factory step {step_id} must pass the original task"
+            "factory step {step_id} includeTask configuration changed"
         );
-        assert_eq!(step.max_attempts, Some(2), "{step_id} permits one re-entry");
+        assert_eq!(step.max_attempts, None, "{step_id} is unlimited by default");
     }
     let review = pipeline
         .steps
