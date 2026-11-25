@@ -52,6 +52,9 @@ impl Fixture {
     fn work(&self, args: &[&str]) -> Output {
         self.command().arg("work").args(args).output().unwrap()
     }
+    fn run(&self, args: &[&str]) -> Output {
+        self.command().arg("run").args(args).output().unwrap()
+    }
     fn value(&self, args: &[&str]) -> Value {
         let output = self.work(args);
         assert!(
@@ -68,6 +71,190 @@ impl Drop for Server {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[test]
+fn automatic_run_executes_managed_pipeline_with_fake_runtime() {
+    let fixture = Fixture::new();
+    for entry in fs::read_dir(fixture.path.join(".baton/agents")).unwrap() {
+        let path = entry.unwrap().path();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, text.replacen("---\n", "---\nprovider: fake\n", 1)).unwrap();
+    }
+    fs::write(
+        fixture.path.join(".baton/pipelines/factory.yml"),
+        "---\nid: factory\nsteps:\n- id: execute\n  name: Execute\n  agentId: implementer\n  transitions:\n  - outcome: completed\n    to: human\n  type: agent\n- id: human\n  name: Human\n  type: human\n",
+    )
+    .unwrap();
+    let git = Command::new("git")
+        .current_dir(&fixture.path)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(git.status.success());
+    let output = fixture
+        .command()
+        .args([
+            "run",
+            fixture.path.to_str().unwrap(),
+            "factory",
+            "task prompt",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr={} stdout={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let run: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(run.get("id").is_some());
+    assert_eq!(run["status"], "waitingHuman");
+    assert_eq!(run["worktree"]["owner"], run["id"]);
+}
+
+#[test]
+fn automatic_run_pause_can_be_resolved_through_server_api() {
+    let fixture = Fixture::new();
+    for entry in fs::read_dir(fixture.path.join(".baton/agents")).unwrap() {
+        let path = entry.unwrap().path();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, text.replacen("---\n", "---\nprovider: fake\n", 1)).unwrap();
+    }
+    fs::write(
+        fixture.path.join(".baton/pipelines/factory.yml"),
+        "---\nid: factory\nsteps:\n- id: execute\n  name: Execute\n  agentId: implementer\n  transitions:\n  - outcome: completed\n    to: human\n  type: agent\n- id: human\n  name: Human\n  type: human\n",
+    )
+    .unwrap();
+    let git = Command::new("git")
+        .current_dir(&fixture.path)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ])
+        .output()
+        .unwrap();
+    assert!(git.status.success());
+    let output = fixture
+        .command()
+        .args([
+            "run",
+            fixture.path.to_str().unwrap(),
+            "factory",
+            "task prompt",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = run["id"].as_str().unwrap();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut server = Server(
+        fixture
+            .command()
+            .env("BATON_PORT", port.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(server.0.try_wait().unwrap().is_none(), "server exited");
+        assert!(Instant::now() < deadline, "server startup timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let response = Command::new("curl")
+        .args([
+            "-sS",
+            "-X",
+            "POST",
+            "-H",
+            "content-type: application/json",
+            "-d",
+            r#"{"outcome":"approved","response":"approved"}"#,
+            &format!("http://127.0.0.1:{port}/api/runs/{id}/actions"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        response.status.success(),
+        "status={} stderr={} body={}",
+        response.status,
+        String::from_utf8_lossy(&response.stderr),
+        String::from_utf8_lossy(&response.stdout)
+    );
+    let updated: Value = serde_json::from_slice(&response.stdout).unwrap();
+    assert_eq!(
+        updated["id"],
+        id,
+        "{}",
+        String::from_utf8_lossy(&response.stdout)
+    );
+    assert_eq!(updated["status"], "succeeded");
+}
+
+#[test]
+fn automatic_run_reports_invalid_pipeline_from_managed_start_command() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .args([
+            "run",
+            fixture.path.to_str().unwrap(),
+            "missing-pipeline",
+            "task prompt",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Selected pipeline does not exist"));
+}
+
+#[test]
+fn run_auto_escape_consumes_flag_and_uses_positional_form() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .args(["run", "--auto", "missing-project", "factory", "task"])
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(!error.contains("Usage: baton run"));
+}
+
+#[test]
+fn run_stepwise_alias_and_work_alias_produce_same_pipeline_listing() {
+    let fixture = Fixture::new();
+    let old = fixture.work(&["pipelines"]);
+    let new = fixture.run(&["pipelines"]);
+    assert_eq!(old.status.success(), new.status.success());
+    assert_eq!(old.stdout, new.stdout);
+    assert_eq!(old.stderr, new.stderr);
 }
 
 #[cfg(unix)]

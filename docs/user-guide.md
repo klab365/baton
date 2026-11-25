@@ -102,7 +102,7 @@ Use one backend per project directory. Restrict access to the local UI, project 
 
 ## Work in an existing coding-agent session
 
-Use `baton work` to run pipeline steps through an already-open Pi, Claude Code or Codex session in the current Git worktree. This mode preserves externally owned workspaces, persists step handoffs, and supports explicit checks and human decisions. See [session work](session-work.md) for CLI usage and skill installation.
+Use `baton run start` (and the other `baton run` stepwise subcommands; `baton work` remains an alias) to run pipeline steps through an already-open Pi, Claude Code or Codex session in the current Git worktree. This mode preserves externally owned workspaces, persists step handoffs, and supports explicit checks and human decisions. See [session work](session-work.md) for CLI usage and skill installation.
 
 ## CLI reference
 

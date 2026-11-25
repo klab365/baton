@@ -1,4 +1,15 @@
 use baton_cli::work;
+use baton_core::{features::runs::RunFeatureResources, runs_feature};
+use medi_rs::mediator;
+use std::sync::Arc;
+
+mediator! {
+    struct CliRunMediator {
+        event_queue_capacity: 1;
+        event_workers: 1;
+        modules: [runs_feature];
+    }
+}
 
 use std::{
     env,
@@ -7,6 +18,23 @@ use std::{
 };
 
 const BATON_GITIGNORE: &str = "runs/\ntasks/\n";
+
+fn is_stepwise_run_subcommand(value: &str) -> bool {
+    matches!(
+        value,
+        "start"
+            | "refine"
+            | "pipelines"
+            | "status"
+            | "progress"
+            | "next"
+            | "execute"
+            | "resume"
+            | "submit"
+            | "respond"
+            | "cancel"
+    )
+}
 
 fn pi_install_source(version: &str, release_tag: Option<&str>) -> anyhow::Result<String> {
     let tag = format!("v{version}");
@@ -191,8 +219,20 @@ async fn main() -> anyhow::Result<()> {
         }
         return install_pi(env!("CARGO_PKG_VERSION"), option_env!("BATON_RELEASE_TAG"));
     }
-    if env::args().nth(1).as_deref() == Some("work") {
-        return work::run(env::args().skip(2).collect()).await;
+    if matches!(env::args().nth(1).as_deref(), Some("work" | "run")) {
+        let mut args: Vec<String> = env::args().skip(2).collect();
+        if env::args().nth(1).as_deref() == Some("run") {
+            if args.first().is_some_and(|arg| arg == "--auto") {
+                args.remove(0);
+            } else if args
+                .first()
+                .is_some_and(|arg| is_stepwise_run_subcommand(arg))
+            {
+                return work::run(args).await;
+            }
+        } else {
+            return work::run(args).await;
+        }
     }
     if matches!(env::args().nth(1).as_deref(), Some("--version" | "-V")) {
         println!("baton {}", baton_server::VERSION);
@@ -279,7 +319,10 @@ async fn main() -> anyhow::Result<()> {
     }
     // Runtime selection belongs exclusively to the snapshotted agent profile.
     if env::args().nth(1).as_deref() == Some("run") {
-        let args: Vec<String> = env::args().skip(2).collect();
+        let mut args: Vec<String> = env::args().skip(2).collect();
+        if args.first().is_some_and(|arg| arg == "--auto") {
+            args.remove(0);
+        }
         if args.len() != 3 {
             anyhow::bail!("Usage: baton run <project-directory> <pipeline-id> <task-prompt>");
         }
@@ -293,27 +336,42 @@ async fn main() -> anyhow::Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_nanos()
         );
-        let skills = baton_core::ports::skills::SkillRepository::list(
-            &baton_adapters::skills::FilesystemSkillRepository::new(project.clone()),
-        )
-        .map_err(anyhow::Error::msg)?;
         let credential_store =
             baton_adapters::credentials::FilesystemCredentialRepository::for_project(&project)
                 .map_err(anyhow::Error::msg)?;
-        let repository =
-            baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project);
+        let repository: Arc<dyn baton_core::ports::runs::RunRepository> = Arc::new(
+            baton_adapters::repositories::filesystem_run::FilesystemRunRepository(project.clone()),
+        );
+        let tasks: Arc<dyn baton_core::ports::tasks::TaskRepository> = Arc::new(
+            baton_adapters::repositories::filesystem_task::FilesystemTaskRepository(
+                project.clone(),
+            ),
+        );
         let auth_root = credential_store.root_path().to_path_buf();
-        let credentials: std::sync::Arc<dyn baton_core::ports::credentials::CredentialRepository> =
-            std::sync::Arc::new(credential_store);
-        let run = baton_core::features::pipeline_engine::start_pipeline(
-            &config,
-            &args[1],
-            &args[2],
-            &id,
-            &mut baton_adapters::runtime::ConfiguredRuntime::new(credentials, auth_root, skills),
-            &repository,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository> =
+            Arc::new(credential_store);
+        let runtime_factory: Arc<dyn baton_core::ports::runtime::AgentRuntimeFactory> =
+            Arc::new(baton_adapters::runtime::ConfiguredRuntimeFactory {
+                project_dir: project,
+                credentials,
+                auth_root,
+            });
+        let mediator = CliRunMediator::builder()
+            .run_resources(RunFeatureResources {
+                runs: repository,
+                tasks,
+                runtime_factory,
+            })
+            .build();
+        let run = mediator
+            .send(baton_core::features::runs::StartManagedRun {
+                config,
+                pipeline_id: args[1].clone(),
+                task: args[2].clone(),
+                run_id: id,
+            })
+            .await
+            .map_err(anyhow::Error::msg)?;
         println!("{}", serde_json::to_string_pretty(&run)?);
         if run.status == baton_core::domain::pipeline::Status::Failed {
             anyhow::bail!("Pipeline run failed");
@@ -342,6 +400,26 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_reserved_names_route_to_stepwise_interface() {
+        for name in [
+            "start",
+            "refine",
+            "pipelines",
+            "status",
+            "progress",
+            "next",
+            "execute",
+            "resume",
+            "submit",
+            "respond",
+            "cancel",
+        ] {
+            assert!(is_stepwise_run_subcommand(name), "{name}");
+        }
+        assert!(!is_stepwise_run_subcommand("project"));
+    }
 
     struct TempDir(PathBuf);
 

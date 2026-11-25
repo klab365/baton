@@ -314,7 +314,7 @@ export default function baton(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			if (!ctx.hasUI) return;
 			const exec: Exec = async (workArgs) => {
-				const result = await pi.exec("baton", ["work", ...workArgs], {
+				const result = await pi.exec("baton", ["run", ...workArgs], {
 					cwd: ctx.cwd,
 					maxBuffer: 16 * 1024 * 1024,
 				});

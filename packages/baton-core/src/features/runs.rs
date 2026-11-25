@@ -5,7 +5,7 @@ use crate::{
     },
     features::{
         human_actions::prepare_human_resume,
-        pipeline_engine::{elapsed_ms, execute_graph, publish, utc_now},
+        pipeline_engine::{elapsed_ms, execute_graph, publish, start_pipeline, utc_now},
     },
     ports::{runs::RunRepository, runtime::AgentRuntimeFactory, tasks::TaskRepository},
 };
@@ -17,6 +17,15 @@ pub struct RunFeatureResources {
     pub runs: Arc<dyn RunRepository>,
     pub tasks: Arc<dyn TaskRepository>,
     pub runtime_factory: Arc<dyn AgentRuntimeFactory>,
+}
+
+#[derive(MediCommand)]
+#[medi_command(return_type = PipelineRun, error_type = String)]
+pub struct StartManagedRun {
+    pub config: crate::domain::project::ProjectConfig,
+    pub pipeline_id: String,
+    pub task: String,
+    pub run_id: String,
 }
 
 #[derive(MediCommand)]
@@ -47,6 +56,24 @@ pub struct RespondToRun {
     pub id: String,
     pub outcome: Outcome,
     pub response: String,
+}
+
+#[medi_handler]
+async fn start_managed_run_handler(
+    resources: RunFeatureResources,
+    command: StartManagedRun,
+) -> Result<PipelineRun, String> {
+    let mut runtime = resources
+        .runtime_factory
+        .create(&command.config, &command.pipeline_id)?;
+    start_pipeline(
+        &command.config,
+        &command.pipeline_id,
+        &command.task,
+        &command.run_id,
+        runtime.as_mut(),
+        resources.runs.as_ref(),
+    )
 }
 
 #[medi_handler]
@@ -246,6 +273,7 @@ medi_module! {
     pub manifest runs_feature;
     resources { run_resources: crate::features::runs::RunFeatureResources; }
     commands {
+        crate::features::runs::StartManagedRun => crate::features::runs::start_managed_run_handler;
         crate::features::runs::ListRuns => crate::features::runs::list_runs_handler;
         crate::features::runs::ListTaskRuns => crate::features::runs::list_task_runs_handler;
         crate::features::runs::GetRun => crate::features::runs::get_run_handler;

@@ -207,7 +207,7 @@ test("registered inspect command routes to work status", async () => {
 	await handler("inspect run-1", {
 		hasUI: true, cwd: "/tmp", ui: { setStatus() {}, notify() {} },
 	} as any);
-	expect(calls).toEqual([["work", "status", "--run", "run-1"]]);
+	expect(calls).toEqual([["run", "status", "--run", "run-1"]]);
 	expect(output.join(" ")).toContain("run-1");
 	expect(output.join(" ")).not.toContain("do not expose");
 	expect(output.join(" ")).not.toContain("hidden");
@@ -242,9 +242,9 @@ test("registered refine command starts the follow-up from the current Pi worktre
 		},
 	} as any);
 	expect(calls).toEqual([
-		["work", "status"],
-		["work", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
-		["work", "next", "--run", "new-run"],
+		["run", "status"],
+		["run", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
+		["run", "next", "--run", "new-run"],
 	]);
 });
 
