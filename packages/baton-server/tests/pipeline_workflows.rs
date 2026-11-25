@@ -2191,7 +2191,10 @@ fn configured_factory_allows_only_one_automatic_review_rework_round() {
     let mut config = software_factory_config();
     // This test covers bounded behavior explicitly; omitted limits are unlimited.
     for step in &mut config.pipelines[0].steps {
-        if matches!(step.kind, baton_core::domain::project::PipelineStepKind::Agent { .. }) {
+        if matches!(
+            step.kind,
+            baton_core::domain::project::PipelineStepKind::Agent { .. }
+        ) {
             step.max_attempts = Some(2);
         }
     }
