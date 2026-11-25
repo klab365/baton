@@ -108,6 +108,27 @@ pub struct WorkApplication {
     workspace: PathBuf,
     lock: Mutex<Option<WorkProcessLock>>,
 }
+fn append_observation_event(
+    events: &mut Vec<baton_core::domain::pipeline::RunEvent>,
+    event: baton_core::domain::pipeline::RunEvent,
+) -> Option<baton_core::domain::pipeline::RunEvent> {
+    if events.len() < 512 {
+        events.push(event.clone());
+        return Some(event);
+    }
+    mark_observation_event_limit(events)
+}
+
+fn mark_observation_event_limit(
+    events: &mut [baton_core::domain::pipeline::RunEvent],
+) -> Option<baton_core::domain::pipeline::RunEvent> {
+    let event = events
+        .iter_mut()
+        .find(|event| event.message.as_deref() == Some("Observed runtime activity"))?;
+    event.message = Some("Runtime activity limit reached; later observations omitted".into());
+    Some(event.clone())
+}
+
 impl WorkApplication {
     pub fn new(workspace: PathBuf) -> Result<Self, String> {
         let workspace = workspace.canonicalize().map_err(|e| e.to_string())?;
@@ -329,20 +350,24 @@ impl WorkApplication {
                             return Err("Work attempt changed while recording activity".into());
                         }
                         entry.attempt = Some(attempt);
-                        let kind = entry.kind.clone();
+                        let occurred_at = entry.occurred_at.clone();
                         baton_core::features::pipeline_engine::append_bounded_trace(
                             &mut run,
-                            [entry.clone()],
+                            [entry],
                         );
                         let event = baton_core::domain::pipeline::RunEvent {
                             run_id: run.id.clone(),
                             status: run.status.clone(),
-                            occurred_at: entry.occurred_at,
-                            message: Some(format!("Observed runtime activity: {kind}")),
+                            occurred_at,
+                            message: Some("Observed runtime activity".into()),
                         };
-                        run.events.push(event.clone());
+                        let published = append_observation_event(&mut run.events, event);
                         observation_repository.save(&run)?;
-                        observation_repository.publish(&event)
+                        if let Some(event) = published {
+                            observation_repository.publish(&event)
+                        } else {
+                            Ok(())
+                        }
                     };
                     runtime.set_structured_handoff_required(true);
                     let mut runtime_input = input.clone();
@@ -523,5 +548,59 @@ impl WorkApplication {
             )),
         };
         value.map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_observation_event;
+    use baton_core::domain::pipeline::{RunEvent, Status};
+
+    #[test]
+    fn observation_overflow_marks_only_observation_and_preserves_event_count() {
+        let mut events = (0..511)
+            .map(|index| RunEvent {
+                run_id: "r".into(),
+                status: Status::Running,
+                occurred_at: "now".into(),
+                message: Some(format!("Lifecycle event {index}")),
+            })
+            .collect::<Vec<_>>();
+        events.push(RunEvent {
+            run_id: "r".into(),
+            status: Status::Running,
+            occurred_at: "now".into(),
+            message: Some("Observed runtime activity".into()),
+        });
+        let count = events.len();
+        let marked = append_observation_event(
+            &mut events,
+            RunEvent {
+                run_id: "r".into(),
+                status: Status::Running,
+                occurred_at: "later".into(),
+                message: Some("Observed runtime activity".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(events.len(), count);
+        assert_eq!(events[0].message.as_deref(), Some("Lifecycle event 0"));
+        assert_eq!(events.len(), 512);
+        assert_eq!(
+            marked.message.as_deref(),
+            Some("Runtime activity limit reached; later observations omitted")
+        );
+        assert!(
+            append_observation_event(
+                &mut events,
+                RunEvent {
+                    run_id: "r".into(),
+                    status: Status::Running,
+                    occurred_at: "later".into(),
+                    message: Some("Observed runtime activity".into()),
+                },
+            )
+            .is_none()
+        );
     }
 }

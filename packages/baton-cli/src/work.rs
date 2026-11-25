@@ -19,6 +19,7 @@ const HELP: &str =
   resume --run ID  (previous attempt may have made changes; inspect before executing again)
   submit --run ID --result FILE
   status [--run ID]
+  progress --run ID  (read-only, bounded progress projection)
   respond --run ID --result FILE  (explicit human decision only)
   cancel --run ID
   pipelines
@@ -55,6 +56,7 @@ impl Options {
             .subcommand(common(Command::new("execute")).arg(option("run")))
             .subcommand(common(Command::new("resume")).arg(option("run")))
             .subcommand(common(Command::new("status")).arg(option("run")))
+            .subcommand(common(Command::new("progress")).arg(option("run")))
             .subcommand(common(Command::new("cancel")).arg(option("run")))
             .subcommand(
                 common(Command::new("submit"))
@@ -157,6 +159,50 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&application_pipelines(&directory).await?)?
+        );
+        return Ok(());
+    }
+    if options.action == "progress" {
+        use baton_core::ports::runs::RunRepository;
+        let id = options.required("--run")?;
+        let run = baton_adapters::repositories::filesystem_work::FilesystemWorkRepository(
+            directory.clone(),
+        )
+        .load(&id)
+        .map_err(anyhow::Error::msg)?;
+        let step = run
+            .current_step
+            .as_deref()
+            .map(|step| step.chars().take(128).collect::<String>());
+        let attempt = run.steps.last().map(|step| step.attempt);
+        let trace_exhausted = run.trace.iter().any(|entry| {
+            entry.kind == "traceTruncated"
+                || entry.content == "Runtime activity capture limits reached; later events omitted"
+        });
+        let activity = (!trace_exhausted)
+            .then(|| {
+                run.trace
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.attempt == attempt)
+                    .map(|entry| match entry.kind.as_str() {
+                        "tool_start" | "tool_end" | "toolCall" | "toolResult"
+                        | "toolCallRejected" | "toolResultRejected" => "Tool activity",
+                        "message" | "text" | "modelRequest" | "modelResponse" => "Agent activity",
+                        _ => "Runtime activity",
+                    })
+            })
+            .flatten();
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": run.status,
+                "step": step,
+                "attempt": attempt,
+                "activity": activity,
+                "available": !trace_exhausted && run.trace.iter().any(|entry| entry.attempt == attempt),
+                "truncated": trace_exhausted
+            })
         );
         return Ok(());
     }

@@ -270,7 +270,32 @@ export async function drive(
 				`Baton · RUNNING · ${item.step.name} · attempt ${item.attempt}`,
 			);
 			show(`Baton ${runId} — RUNNING\nStep: ${item.step.name}\nAttempt: ${item.attempt}`);
-			await exec(["execute", "--run", runId]);
+			let polling = false;
+			let active = true;
+			const timer = setInterval(() => {
+				if (polling) return;
+				polling = true;
+				void exec(["progress", "--run", runId])
+					.then((value) => {
+						if (!active) return;
+						const progress = value as { activity?: unknown; step?: unknown; attempt?: unknown };
+						const step = typeof progress.step === "string" ? progress.step.slice(0, 80) : item.step!.name;
+						const attempt = typeof progress.attempt === "number" ? progress.attempt : item.attempt;
+						const activity = ["Tool activity", "Agent activity", "Runtime activity"].includes(progress.activity)
+							? progress.activity : "Runtime activity";
+						const detail = typeof progress.activity === "string" ? activity : "Activity unavailable";
+						const truncated = progress.truncated === true ? " · earlier activity omitted" : "";
+						ui.setStatus("baton", `Baton · RUNNING · ${step} · attempt ${attempt} · ${detail}${truncated}`);
+					})
+					.catch(() => {})
+					.finally(() => { polling = false; });
+			}, 1000);
+			try {
+				await exec(["execute", "--run", runId]);
+			} finally {
+				active = false;
+				clearInterval(timer);
+			}
 			const next = (await exec(["next", "--run", runId])) as WorkItem;
 			const output =
 				next.lastResult?.attempt === item.attempt
