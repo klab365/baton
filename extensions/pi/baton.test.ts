@@ -323,6 +323,109 @@ test("runs steps through CLI and shows the result", async () => {
 	expect(messages.join("\n")).toContain("Done");
 });
 
+test("polls fixed progress while execute is pending and stops after completion", async () => {
+	const commands: string[] = [];
+	const statuses: (string | undefined)[] = [];
+	let done = false;
+	await drive("run", async (args) => {
+		commands.push(args[0]);
+		if (args[0] === "execute") {
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			done = true;
+			return {};
+		}
+		if (args[0] === "progress")
+			return { activity: "Tool activity", step: "build", attempt: 1 };
+		return done
+			? { status: "succeeded", lastResult: { stepId: "build", attempt: 1, output: "Done" } }
+			: { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
+	}, ui({ setStatus: (_key, value) => statuses.push(value) }), () => {});
+	expect(commands).toContain("progress");
+	expect(statuses).toContain("Baton · RUNNING · build · attempt 1 · Tool activity");
+});
+
+test("poll failures do not replace execute results", async () => {
+	const messages: string[] = [];
+	let done = false;
+	await drive("run", async (args) => {
+		if (args[0] === "execute") {
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			done = true;
+			return {};
+		}
+		if (args[0] === "progress") throw new Error("poll unavailable");
+		return done
+			? { status: "succeeded", lastResult: { stepId: "build", attempt: 1, output: "Done" } }
+			: { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
+	}, ui(), (message) => messages.push(message));
+	expect(messages.join("\\n")).toContain("Done");
+});
+
+test("does not overlap polls and stops polling after execute completes", async () => {
+	let done = false;
+	let inFlight = 0;
+	let maximumInFlight = 0;
+	let progressCalls = 0;
+	await drive("run", async (args) => {
+		if (args[0] === "execute") {
+			await new Promise((resolve) => setTimeout(resolve, 2500));
+			done = true;
+			return {};
+		}
+		if (args[0] === "progress") {
+			progressCalls++;
+			inFlight++;
+			maximumInFlight = Math.max(maximumInFlight, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 1300));
+			inFlight--;
+			return { activity: "Tool activity" };
+		}
+		return done
+			? { status: "succeeded", lastResult: { stepId: "build", attempt: 1, output: "Done" } }
+			: { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
+	}, ui(), () => {});
+	const completedPollCount = progressCalls;
+	await new Promise((resolve) => setTimeout(resolve, 1100));
+	expect(progressCalls).toBe(completedPollCount);
+	expect(maximumInFlight).toBe(1);
+});
+
+test("polling does not hide a human pause returned after execute", async () => {
+	const messages: string[] = [];
+	let executed = false;
+	await drive("run", async (args) => {
+		if (args[0] === "execute") {
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			executed = true;
+			return {};
+		}
+		if (args[0] === "progress") return { activity: "Runtime activity" };
+		if (executed) return human;
+		return { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
+	}, ui(), (message) => messages.push(message));
+	expect(messages.join("\\n")).toContain("Waiting for your decision");
+});
+
+test("clears polling when execute is interrupted", async () => {
+	const statuses: (string | undefined)[] = [];
+	let resolvePoll: (() => void) | undefined;
+	await expect(drive("run", async (args) => {
+		if (args[0] === "execute") {
+			await new Promise((resolve) => setTimeout(resolve, 1100));
+			throw new Error("execution interrupted");
+		}
+		if (args[0] === "progress")
+			return new Promise((resolve) => { resolvePoll = () => resolve({ activity: "Runtime activity" }); });
+		return { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
+	}, ui({ setStatus: (_key, value) => statuses.push(value) }), () => {})).rejects.toThrow("execution interrupted");
+	const callsAfterInterruption = statuses.length;
+	resolvePoll?.();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await new Promise((resolve) => setTimeout(resolve, 1100));
+	expect(statuses.length).toBe(callsAfterInterruption);
+	expect(statuses.at(-1)).toBeUndefined();
+});
+
 test("formats extension failures as Baton error feedback", async () => {
 	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
 	const notices: string[] = [];

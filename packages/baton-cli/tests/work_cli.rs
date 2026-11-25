@@ -370,6 +370,73 @@ fn pipelines_lists_configured_ids_and_reports_invalid_configuration() {
 }
 
 #[test]
+fn progress_is_read_only_and_never_returns_runtime_trace_strings() {
+    let f = Fixture::new();
+    let start = f.value(&["start", "--issue", "task"]);
+    let id = start["id"].as_str().unwrap();
+    let empty_progress = f.value(&["progress", "--run", id]);
+    assert_eq!(empty_progress["activity"], serde_json::Value::Null);
+    assert_eq!(empty_progress["available"], false);
+    assert_eq!(empty_progress["truncated"], false);
+    let path = f.path.join(".baton/work").join(format!("{id}.json"));
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["trace"] = json!([
+        {
+            "attempt": 999,
+            "occurredAt": "now",
+            "kind": "credential=secret",
+            "content": "DO NOT LEAK THIS"
+        },
+        {
+            "attempt": 999,
+            "occurredAt": "now",
+            "kind": "traceTruncated",
+            "content": "private marker content"
+        }
+    ]);
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+    let progress = f.value(&["progress", "--run", id]);
+    assert_eq!(progress["activity"], serde_json::Value::Null);
+    assert_eq!(progress["available"], false);
+    assert_eq!(progress["truncated"], true);
+    assert!(!progress.to_string().contains("private marker content"));
+    assert!(!progress.to_string().contains("DO NOT LEAK THIS"));
+    assert!(!progress.to_string().contains("credential=secret"));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    record["trace"].as_array_mut().unwrap().pop();
+    let current_attempt = record["steps"].as_array().unwrap().last().unwrap()["attempt"].clone();
+    record["trace"].as_array_mut().unwrap().push(json!({
+        "attempt": current_attempt,
+        "occurredAt": "now",
+        "kind": "toolCall",
+        "content": "sensitive tool details"
+    }));
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let current = f.value(&["progress", "--run", id]);
+    assert_eq!(current["activity"], "Tool activity");
+    assert_eq!(current["available"], true);
+    assert!(!current.to_string().contains("sensitive tool details"));
+    record["trace"].as_array_mut().unwrap().last_mut().unwrap()["kind"] = json!("modelRequest");
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let model = f.value(&["progress", "--run", id]);
+    assert_eq!(model["activity"], "Agent activity");
+    record["steps"].as_array_mut().unwrap().last_mut().unwrap()["attempt"] = json!(2);
+    record["trace"].as_array_mut().unwrap().push(json!({
+        "attempt": 1,
+        "occurredAt": "now",
+        "kind": "traceTruncated",
+        "content": "Run trace limits reached; later events omitted"
+    }));
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let exhausted = f.value(&["progress", "--run", id]);
+    assert_eq!(exhausted["attempt"], 2);
+    assert_eq!(exhausted["activity"], serde_json::Value::Null);
+    assert_eq!(exhausted["available"], false);
+    assert_eq!(exhausted["truncated"], true);
+}
+
+#[test]
 fn cli_persists_steps_across_processes_and_emits_parseable_errors() {
     let f = Fixture::new();
     let start = f.value(&[
