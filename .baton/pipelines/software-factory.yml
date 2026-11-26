@@ -32,12 +32,23 @@ steps:
     linked issues or publish changes.
   transitions:
   - outcome: completed
-    to: review
+    to: verify
   - outcome: revise_build
     to: build
   - outcome: blocked
     to: build-help
   type: agent
+
+- id: verify
+  name: Automated verification
+  type: shell
+  command: mise run check-format && mise run lint && mise run check && mise run test-extensions && mise run test && mise run build
+  timeoutSeconds: 7200
+  transitions:
+  - outcome: completed
+    to: review
+  - outcome: failed
+    to: build
 
 - id: review
   name: Independent review
