@@ -210,6 +210,7 @@ impl WorkApplication {
                             input: String::new(),
                             trace: vec![],
                             failure: WorkFailure::InvalidHandoff,
+                            failure_detail: None,
                         })
                         .await?;
                     return Err(WorkFailure::InvalidHandoff.message().into());
@@ -251,6 +252,7 @@ impl WorkApplication {
                                 input: recorded_input,
                                 trace: vec![],
                                 failure: WorkFailure::Runtime,
+                                failure_detail: None,
                             })
                             .await?;
                         return Err(WorkFailure::Runtime.message().into());
@@ -436,6 +438,7 @@ impl WorkApplication {
                                 input: recorded_input,
                                 trace,
                                 failure: WorkFailure::InvalidOutcome,
+                                failure_detail: None,
                             })
                             .await?;
                         return Err(message);
@@ -478,9 +481,15 @@ impl WorkApplication {
                                 input: recorded_input,
                                 trace: vec![],
                                 failure,
+                                failure_detail: step
+                                    .command()
+                                    .map(|_| format!("Shell step '{}' failed: {error}", step.id)),
                             })
                             .await?;
-                        return Err(failure.message().into());
+                        return Err(step.command().map_or_else(
+                            || failure.message().to_owned(),
+                            |_| format!("Shell step '{}' failed: {error}", step.id),
+                        ));
                     }
                 };
                 let result = serde_json::to_value(WorkProgress::from(

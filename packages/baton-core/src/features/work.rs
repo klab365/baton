@@ -69,6 +69,7 @@ pub struct FailWork {
     pub input: String,
     pub trace: Vec<crate::domain::pipeline::RunTraceEntry>,
     pub failure: WorkFailure,
+    pub failure_detail: Option<String>,
 }
 #[derive(Clone, Copy)]
 pub enum WorkFailure {
@@ -1043,7 +1044,10 @@ async fn fail_work_handler(
         entry.attempt = Some(command.attempt);
     }
     append_bounded_trace(&mut run, trace);
-    let message = command.failure.message();
+    let message = command
+        .failure_detail
+        .as_deref()
+        .unwrap_or_else(|| command.failure.message());
     run.steps[index].error = Some(message.into());
     run.status = Status::Failed;
     let ended_at = utc_now();
