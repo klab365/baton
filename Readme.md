@@ -88,7 +88,7 @@ mise run build
 - [Project configuration](docs/project-configuration.md)
 - [Pipelines](docs/pipelines.md) and [workflow transitions](docs/workflow-transitions.md)
 - [Tasks](docs/tasks.md) and [runtime orchestration](docs/orchestration.md)
-- [Work in an existing Pi, Claude Code or Codex session](docs/session-work.md)
+- [Work in an existing Pi, Claude Code or Codex session](docs/session-work.md) — stepwise `baton run` commands (`baton work` compatibility alias)
 - [Skills](docs/skills.md) and [provider credentials](docs/local-provider-storage.md)
 - [Release process](docs/releases.md)
 

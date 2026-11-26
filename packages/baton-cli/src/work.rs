@@ -10,7 +10,7 @@ use std::{
 };
 
 const HELP: &str =
-    "Usage: baton work <start|next|execute|resume|submit|status|respond|cancel|pipelines> [options]
+    "Usage: baton run <start|refine|next|execute|resume|submit|status|progress|respond|cancel|pipelines> [options] (baton work is an alias)
   start --issue <task text> [--pipeline ID]
         [--check STEP=COMMAND ...]
   refine --run ID --instruction <follow-up request>
