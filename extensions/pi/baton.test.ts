@@ -3,7 +3,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import baton from "./baton";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { choosePipeline, drive, manage } from "./baton";
+import net from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { choosePipeline, drive, manage, herdrRequest } from "./baton";
 
 function ui(
 	overrides: Partial<Parameters<typeof drive>[2]> = {},
@@ -17,6 +21,66 @@ function ui(
 		...overrides,
 	};
 }
+
+test("sends ordered working and idle Herdr JSON-RPC reports with pane routing", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-herdr-"));
+	const socketPath = join(dir, "herdr.sock");
+	const requests: Record<string, any>[] = [];
+	let received!: () => void;
+	const complete = new Promise<void>((resolve) => { received = resolve; });
+	const server = net.createServer((socket) => {
+		let data = "";
+		socket.on("data", (chunk) => { data += chunk.toString(); });
+		socket.on("end", () => {
+			const line = data.trimEnd();
+			requests.push(JSON.parse(line));
+			if (requests.length === 2) received();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	try {
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_SOCKET_PATH = socketPath;
+		process.env.HERDR_PANE_ID = "pane-test";
+		herdrRequest("pane.report_agent", { source: "baton:pi", agent: "pi", state: "working", seq: 10 });
+		herdrRequest("pane.report_agent", { source: "baton:pi", agent: "pi", state: "idle", seq: 11 });
+		await complete;
+		expect(requests.map((request) => request.params.state)).toEqual(["working", "idle"]);
+		expect(requests.map((request) => request.params.seq)).toEqual([10, 11]);
+		for (const request of requests) {
+			expect(request.method).toBe("pane.report_agent");
+			expect(request.params.pane_id).toBe("pane-test");
+			expect(request.params.source).toBe("baton:pi");
+		}
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("Herdr requests are disabled without the complete environment and tolerate unavailable sockets", () => {
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	try {
+		delete process.env.HERDR_ENV;
+		delete process.env.HERDR_SOCKET_PATH;
+		delete process.env.HERDR_PANE_ID;
+		expect(() => herdrRequest("notification.show", { title: "Baton" })).not.toThrow();
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_SOCKET_PATH = join(tmpdir(), `missing-herdr-${Date.now()}.sock`);
+		process.env.HERDR_PANE_ID = "pane-test";
+		expect(() => herdrRequest("notification.show", { title: "Baton" })).not.toThrow();
+		process.env.HERDR_SOCKET_PATH = "\\0invalid";
+		expect(() => herdrRequest("notification.show", { title: "Baton" })).not.toThrow();
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+	}
+});
 
 test("selects newest attempts by global attempt number, not stored placeholder order", async () => {
 	const messages: string[] = [];
@@ -191,11 +255,166 @@ test("refine rejects explicitly selected runs that are not completed", async () 
 	expect(calls).toEqual([["status"]]);
 });
 
+test("read-only Baton inspect reports activity without sending a notification", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-command-herdr-"));
+	const socketPath = join(dir, "herdr.sock");
+	const requests: any[] = [];
+	let gotAll!: () => void;
+	const all = new Promise<void>((resolve) => { gotAll = resolve; });
+	const server = net.createServer((socket) => {
+		let data = "";
+		socket.on("data", (chunk) => { data += chunk.toString(); });
+		socket.on("end", () => {
+			requests.push(JSON.parse(data.trimEnd()));
+			if (requests.length === 2) gotAll();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	let handler!: (args: string, ctx: any) => Promise<void>;
+	const pi = {
+		on: () => () => {},
+		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
+		exec: async () => ({ code: 0, killed: false, truncated: false, stderr: "", stdout: JSON.stringify({ id: "run-secret", status: "succeeded", task: "secret task", steps: [] }) }),
+		sendMessage: () => {},
+	} as unknown as ExtensionAPI;
+	try {
+		process.env.HERDR_ENV = "1";
+		process.env.HERDR_SOCKET_PATH = socketPath;
+		process.env.HERDR_PANE_ID = "pane-test";
+		baton(pi);
+		await handler("inspect run-secret", { hasUI: true, cwd: "/tmp", ui: { setStatus() {}, notify() {} } });
+		await all;
+		expect(requests.map((r) => r.method)).toEqual(["pane.report_agent", "pane.report_agent"]);
+		expect(requests.map((r) => r.params.state)).toEqual(["working", "idle"]);
+		expect(requests[0].params.seq).toBeLessThan(requests[1].params.seq);
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("registered Baton command reports idle after CLI failure", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-command-error-"));
+	const socketPath = join(dir, "herdr.sock");
+	const states: string[] = [];
+	let gotBoth!: () => void;
+	const both = new Promise<void>((resolve) => { gotBoth = resolve; });
+	const server = net.createServer((socket) => {
+		let data = "";
+		socket.on("data", (chunk) => { data += chunk.toString(); });
+		socket.on("end", () => {
+			states.push(JSON.parse(data.trimEnd()).params.state);
+			if (states.length === 2) gotBoth();
+		});
+	});
+	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	let handler!: (args: string, ctx: any) => Promise<void>;
+	const pi = {
+		on: () => () => {},
+		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
+		exec: async () => ({ code: 1, killed: false, truncated: false, stderr: "failed", stdout: "" }),
+		sendMessage: () => {},
+	} as unknown as ExtensionAPI;
+	try {
+		process.env.HERDR_ENV = "1"; process.env.HERDR_SOCKET_PATH = socketPath; process.env.HERDR_PANE_ID = "pane-test";
+		baton(pi);
+		await handler("inspect run-error", { hasUI: true, cwd: "/tmp", ui: { setStatus() {}, notify() {} } });
+		await both;
+		expect(states).toEqual(["working", "idle"]);
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("does not re-notify an unchanged human pause across repeated resumes", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-resume-herdr-"));
+	const socketPath = join(dir, "herdr.sock");
+	const requests: any[] = [];
+	let allReceived!: () => void;
+	const all = new Promise<void>((resolve) => { allReceived = resolve; });
+	const server = net.createServer((socket) => {
+		let data = "";
+		socket.on("data", (chunk) => { data += chunk.toString(); });
+		socket.on("end", () => { requests.push(JSON.parse(data.trimEnd())); if (requests.length === 5) allReceived(); });
+	});
+	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	let handler!: (args: string, ctx: any) => Promise<void>;
+	const pi = {
+		on: () => () => {},
+		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
+		exec: async (_command: string, args: string[]) => ({ code: 0, killed: false, truncated: false, stderr: "", stdout: JSON.stringify({ runId: "run-1", revision: 1, status: "waitingHuman", step: { id: "review", name: "Review", human: true }, attempt: 1, allowedOutcomes: ["accept"], lastResult: null }) }),
+		sendMessage: () => {},
+	} as unknown as ExtensionAPI;
+	try {
+		process.env.HERDR_ENV = "1"; process.env.HERDR_SOCKET_PATH = socketPath; process.env.HERDR_PANE_ID = "pane-test";
+		baton(pi);
+		const ctx = { hasUI: true, cwd: "/tmp", ui: { setStatus() {}, notify() {}, select: async () => undefined } };
+		await handler("resume run-1", ctx);
+		await handler("resume run-1", ctx);
+		await all;
+		expect(requests.filter((r) => r.method === "notification.show")).toHaveLength(1);
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("notifies once for completed ordinary assistant responses, not tool events", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "baton-message-herdr-"));
+	const socketPath = join(dir, "herdr.sock");
+	const requests: any[] = [];
+	let received!: () => void;
+	const done = new Promise<void>((resolve) => { received = resolve; });
+	const server = net.createServer((socket) => {
+		let data = "";
+		socket.on("data", (chunk) => { data += chunk.toString(); });
+		socket.on("end", () => { requests.push(JSON.parse(data.trimEnd())); if (requests.length === 3) received(); });
+	});
+	await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+	const old = { env: process.env.HERDR_ENV, path: process.env.HERDR_SOCKET_PATH, pane: process.env.HERDR_PANE_ID };
+	const handlers = new Map<string, (event: any) => Promise<void>>();
+	const pi = { on: (name: string, handler: (event: any) => Promise<void>) => { handlers.set(name, handler); }, registerCommand() {} } as unknown as ExtensionAPI;
+	try {
+		process.env.HERDR_ENV = "1"; process.env.HERDR_SOCKET_PATH = socketPath; process.env.HERDR_PANE_ID = "pane-test";
+		baton(pi);
+		const ctx = { ui: { setStatus() {} } };
+		await handlers.get("agent_start")!({}, ctx);
+		const onMessageEnd = handlers.get("message_end")!;
+		await onMessageEnd({ message: { role: "assistant", stopReason: "toolUse", content: "tool" } });
+		await onMessageEnd({ message: { role: "assistant", stopReason: "stop", content: "private answer" } });
+		await handlers.get("agent_end")!({}, ctx);
+		await done;
+		expect(requests.map((request) => request.params.state).filter(Boolean)).toEqual(["working", "idle"]);
+		expect(requests.filter((request) => request.method === "notification.show")).toHaveLength(1);
+		expect(requests.find((request) => request.method === "notification.show").params.body).not.toContain("private answer");
+	} finally {
+		if (old.env === undefined) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = old.env;
+		if (old.path === undefined) delete process.env.HERDR_SOCKET_PATH; else process.env.HERDR_SOCKET_PATH = old.path;
+		if (old.pane === undefined) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = old.pane;
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
 test("registered inspect command routes to work status", async () => {
 	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
 	const calls: string[][] = [];
 	const output: string[] = [];
 	const pi = {
+		on: () => () => {},
 		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
 		exec: async (_command: string, args: string[]) => {
 			calls.push(args);
@@ -218,6 +437,7 @@ test("registered refine command starts the follow-up from the current Pi worktre
 	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
 	const calls: string[][] = [];
 	const pi = {
+		on: () => () => {},
 		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
 		exec: async (_command: string, args: string[]) => {
 			calls.push(args);
@@ -246,6 +466,23 @@ test("registered refine command starts the follow-up from the current Pi worktre
 		["run", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
 		["run", "next", "--run", "new-run"],
 	]);
+});
+
+test("animates ordinary Pi agent turns and clears status when the turn ends", async () => {
+	const handlers = new Map<string, (event: any, ctx: any) => Promise<void>>();
+	const statuses: (string | undefined)[] = [];
+	const pi = {
+		on: (name: string, handler: (event: any, ctx: any) => Promise<void>) => { handlers.set(name, handler); },
+		registerCommand: () => {},
+	} as unknown as ExtensionAPI;
+	baton(pi);
+	const ctx = { ui: { setStatus: (_key: string, value?: string) => statuses.push(value) } };
+	await handlers.get("agent_start")!({ type: "agent_start" }, ctx);
+	await new Promise((resolve) => setTimeout(resolve, 220));
+	await handlers.get("agent_end")!({ type: "agent_end", messages: [] }, ctx);
+	expect(statuses[0]).toContain("Pi · working");
+	expect(new Set(statuses.filter((status) => status?.includes("Pi · working"))).size).toBeGreaterThan(1);
+	expect(statuses.at(-1)).toBeUndefined();
 });
 
 test("chooses a pipeline from the keyboard-selectable list", async () => {
@@ -341,7 +578,10 @@ test("polls fixed progress while execute is pending and stops after completion",
 			: { status: "running", step: { id: "build", name: "Build" }, attempt: 1 };
 	}, ui({ setStatus: (_key, value) => statuses.push(value) }), () => {});
 	expect(commands).toContain("progress");
-	expect(statuses).toContain("Baton · RUNNING · build · attempt 1 · Tool activity");
+	expect(statuses.some((status) => status?.endsWith("Baton · RUNNING · build · attempt 1 · Tool activity"))).toBe(true);
+	const frames = statuses.filter((status) => status?.startsWith("⠋ ") || status?.startsWith("⠙ ") || status?.startsWith("⠹ ") || status?.startsWith("⠸ ") || status?.startsWith("⠼ ") || status?.startsWith("⠴ ") || status?.startsWith("⠦ ") || status?.startsWith("⠧ ") || status?.startsWith("⠇ ") || status?.startsWith("⠏ "));
+	expect(new Set(frames.map((status) => status?.slice(0, 1))).size).toBeGreaterThan(1);
+	expect(statuses.at(-1)).toBeUndefined();
 });
 
 test("poll failures do not replace execute results", async () => {
@@ -430,6 +670,7 @@ test("formats extension failures as Baton error feedback", async () => {
 	let handler: (args: string, ctx: any) => Promise<void> = async () => {};
 	const notices: string[] = [];
 	const pi = {
+		on: () => () => {},
 		registerCommand: (_name: string, options: { handler: typeof handler }) => { handler = options.handler; },
 		exec: async () => ({ code: 1, killed: false, truncated: false, stderr: "offline", stdout: "" }),
 	} as unknown as ExtensionAPI;
