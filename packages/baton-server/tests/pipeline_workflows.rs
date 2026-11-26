@@ -292,7 +292,11 @@ fn software_factory_config() -> ProjectConfig {
         "../../../.baton/pipelines/software-factory.yml"
     ))
     .unwrap();
-    let steps = factory["steps"].as_array().unwrap().clone();
+    let mut steps = factory["steps"].as_array().unwrap().clone();
+    // Keep graph tests isolated from the full repository verification command.
+    if let Some(verify) = steps.iter_mut().find(|step| step["id"] == "verify") {
+        verify["command"] = "true".into();
+    }
     let template = value["agents"][0].clone();
     let mut agents = Vec::new();
     for step in &steps {
@@ -1828,7 +1832,7 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
             .filter(|s| s.attempt > 0)
             .map(|s| s.step_id.as_str())
             .collect::<Vec<_>>(),
-        ["plan", "build", "review", "commit"]
+        ["plan", "build", "verify", "review", "commit"]
     );
     let first_commit = first.steps.iter().find(|s| s.step_id == "commit").unwrap();
     assert!(
