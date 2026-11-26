@@ -1,15 +1,21 @@
 //! Process gates for external workers. Commands originate in explicit run configuration.
 use baton_core::{domain::work::CheckResult, ports::work::WorkCheckRunner};
 use std::{
-    io::Read,
+    fs::{OpenOptions, create_dir_all},
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const OUTPUT_LIMIT: usize = 16384;
 
-fn capture(mut input: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
+fn capture(
+    mut input: impl Read,
+    stream: &'static str,
+    log: Arc<Mutex<std::fs::File>>,
+) -> std::io::Result<(Vec<u8>, bool)> {
     let mut output = Vec::new();
     let mut truncated = false;
     let mut buffer = [0; 4096];
@@ -18,6 +24,11 @@ fn capture(mut input: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
         if count == 0 {
             return Ok((output, truncated));
         }
+        let mut log = log
+            .lock()
+            .map_err(|_| std::io::Error::other("Shell log lock poisoned"))?;
+        log.write_all(format!("[{stream}] ").as_bytes())?;
+        log.write_all(&buffer[..count])?;
         let remaining = (OUTPUT_LIMIT / 2).saturating_sub(output.len());
         truncated |= count > remaining;
         output.extend_from_slice(&buffer[..count.min(remaining)]);
@@ -37,7 +48,7 @@ pub fn run_shell(
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckResult, String> {
-    run_shell_inner(workspace, command, timeout_seconds, cancelled, false)
+    run_shell_inner(workspace, command, timeout_seconds, cancelled)
 }
 
 pub fn run_pipeline_shell(
@@ -46,7 +57,7 @@ pub fn run_pipeline_shell(
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckResult, String> {
-    run_shell_inner(workspace, command, timeout_seconds, cancelled, true)
+    run_shell_inner(workspace, command, timeout_seconds, cancelled)
 }
 
 fn run_shell_inner(
@@ -54,7 +65,6 @@ fn run_shell_inner(
     command: &str,
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
-    reject_truncated: bool,
 ) -> Result<CheckResult, String> {
     if cancelled() {
         return Err("Run cancelled".into());
@@ -72,10 +82,25 @@ fn run_shell_inner(
         process.process_group(0);
     }
     let mut child = process.spawn().map_err(|e| e.to_string())?;
+    let log_dir = workspace.join(".baton/work");
+    create_dir_all(&log_dir).map_err(|error| format!("Create shell log directory: {error}"))?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let log_path = log_dir.join(format!("shell-{}-{timestamp}.log", child.id()));
+    let log = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&log_path)
+        .map_err(|error| format!("Create shell log: {error}"))?;
+    let log = Arc::new(Mutex::new(log));
     let stdout = child.stdout.take().ok_or("Missing check stdout")?;
     let stderr = child.stderr.take().ok_or("Missing check stderr")?;
-    let stdout = std::thread::spawn(move || capture(stdout));
-    let stderr = std::thread::spawn(move || capture(stderr));
+    let stdout_log = Arc::clone(&log);
+    let stderr_log = Arc::clone(&log);
+    let stdout = std::thread::spawn(move || capture(stdout, "stdout", stdout_log));
+    let stderr = std::thread::spawn(move || capture(stderr, "stderr", stderr_log));
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_seconds));
     let (status, timed_out) = loop {
         match child.try_wait() {
@@ -110,9 +135,6 @@ fn run_shell_inner(
         .join()
         .map_err(|_| "Check stderr reader panicked")?
         .map_err(|e| e.to_string())?;
-    if reject_truncated && (stdout_truncated || stderr_truncated) {
-        return Err("Shell output exceeds capture limit (8192 bytes per stream)".into());
-    }
     bytes.extend_from_slice(&errors[..errors.len().min(OUTPUT_LIMIT.saturating_sub(bytes.len()))]);
     let mut output = String::from_utf8_lossy(&bytes).into_owned();
     if timed_out {
@@ -120,6 +142,13 @@ fn run_shell_inner(
             "\nCheck timed out after {timeout_seconds} seconds"
         ));
     }
+    if stdout_truncated || stderr_truncated {
+        output.push_str(&format!(
+            "\nOutput truncated; full log: {}",
+            log_path.display()
+        ));
+    }
+    drop(log);
     Ok(CheckResult {
         command: command.into(),
         exit_code: if timed_out { None } else { status.code() },
@@ -132,29 +161,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pipeline_shell_rejects_truncated_output() {
-        let error =
-            run_pipeline_shell(Path::new("."), "yes x | head -c 9000", 10, &|| false).unwrap_err();
-        assert!(error.contains("capture limit"));
+    fn pipeline_shell_logs_full_output_when_capture_is_truncated() {
+        let workspace = tempfile::tempdir().unwrap();
+        let result =
+            run_pipeline_shell(workspace.path(), "yes x | head -c 9000", 10, &|| false).unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert!(result.output.contains("Output truncated; full log:"));
+        let path = result.output.split("full log: ").nth(1).unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().len(),
+            9000 + "[stdout] ".len() as u64 * 3
+        );
     }
 
     #[test]
-    fn discards_output_beyond_the_limit_without_blocking_the_check() {
+    fn logs_output_beyond_the_limit_without_blocking_the_check() {
+        let workspace = tempfile::tempdir().unwrap();
         let result = ShellWorkChecks
             .run(
-                Path::new("."),
+                workspace.path(),
                 "yes x | head -c 1000000; yes y | head -c 1000000 >&2",
             )
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
-        assert_eq!(result.output.len(), OUTPUT_LIMIT);
+        assert!(result.output.len() > OUTPUT_LIMIT);
         assert!(result.output.contains('y'));
+        assert!(result.output.contains("Output truncated; full log:"));
     }
 
     #[test]
     fn reports_exit_status_and_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
         let result = run_shell(
-            Path::new("."),
+            workspace.path(),
             "pwd; echo failure >&2; exit 7",
             300,
             &|| false,
@@ -166,15 +205,17 @@ mod tests {
 
     #[test]
     fn respects_configured_timeout() {
-        let result = run_shell(Path::new("."), "sleep 30", 1, &|| false).unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let result = run_shell(workspace.path(), "sleep 30", 1, &|| false).unwrap();
         assert_eq!(result.exit_code, None);
         assert!(result.output.contains("timed out after 1 seconds"));
     }
 
     #[test]
     fn cancels_running_process() {
+        let workspace = tempfile::tempdir().unwrap();
         let start = Instant::now();
-        let result = run_shell(Path::new("."), "sleep 30", 300, &|| {
+        let result = run_shell(workspace.path(), "sleep 30", 300, &|| {
             start.elapsed() > Duration::from_millis(50)
         })
         .unwrap();
