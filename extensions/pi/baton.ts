@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import net from "node:net";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -17,6 +18,22 @@ type WorkItem = {
 };
 type Progress = { id: string; status: string };
 type Exec = (args: string[]) => Promise<unknown>;
+let herdrSeq = Date.now() * 1000;
+export function herdrRequest(method: string, params: Record<string, unknown>): void {
+	const socketPath = process.env.HERDR_SOCKET_PATH;
+	const paneId = process.env.HERDR_PANE_ID;
+	if (process.env.HERDR_ENV !== "1" || !socketPath || !paneId) return;
+	const endpoint = process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
+	try {
+		const socket = net.createConnection(endpoint);
+		socket.setTimeout(500, () => socket.destroy());
+		socket.on("error", () => {});
+		socket.on("connect", () => socket.end(`${JSON.stringify({ id: `baton:${Date.now()}`, method, params: { pane_id: paneId, ...params } })}\n`));
+	} catch {
+		// Herdr is optional; malformed local IPC configuration must not break Baton.
+	}
+}
+
 type UI = Pick<
 	ExtensionCommandContext["ui"],
 	"select" | "editor" | "confirm" | "notify" | "setStatus"
@@ -152,7 +169,7 @@ export async function manage(
 	args: string,
 	exec: Exec,
 	ui: UI,
-	show: (text: string) => void,
+	show: (text: string, notificationKey?: string) => void,
 ): Promise<boolean> {
 	const [command, id, ...extra] = args.trim().split(/\s+/);
 	if (!command) return false;
@@ -175,7 +192,7 @@ export async function manage(
 			id?: string;
 		};
 		if (typeof started.id !== "string" || !started.id) throw new Error("Invalid refined work session");
-		show(`Baton refinement started: ${started.id} (from ${runId})`);
+		show(`Baton refinement started: ${started.id} (from ${runId})`, `start:${started.id}`);
 		await drive(started.id, exec, ui, show);
 		return true;
 	}
@@ -192,7 +209,7 @@ export async function drive(
 	runId: string,
 	exec: Exec,
 	ui: UI,
-	show: (text: string) => void,
+	show: (text: string, notificationKey?: string) => void,
 ): Promise<void> {
 	try {
 		for (;;) {
@@ -207,6 +224,7 @@ export async function drive(
 				const context = item.lastResult?.output;
 				show(
 					`Baton ${runId} — Waiting for your decision\nStep: ${item.step.name}\nBlocked on: ${item.allowedOutcomes.join(", ")}\n\nChoose a decision above, enter a response, and confirm to continue. To leave it waiting, cancel; resume later with /baton resume ${runId}.\n\nPrior handoff:`,
+					`human:${runId}:${item.step.id}:${item.attempt}`,
 				);
 				const handoff = context ?? "No prior handoff.";
 				for (let offset = 0; offset < handoff.length; offset += 7000) {
@@ -259,7 +277,7 @@ export async function drive(
 			}
 			if (item.status !== "running") {
 				const message = `Baton ${runId} — ${item.status.toUpperCase()}`;
-				show(message);
+				show(message, `terminal:${runId}:${item.status}`);
 				ui.notify(message, item.status === "succeeded" ? "info" : "warning");
 				return;
 			}
@@ -272,8 +290,14 @@ export async function drive(
 			show(`Baton ${runId} — RUNNING\nStep: ${item.step.name}\nAttempt: ${item.attempt}`);
 			let polling = false;
 			let active = true;
+			let frame = 0;
+			let progressStatus = `Baton · RUNNING · ${item.step.name} · attempt ${item.attempt}`;
+			const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+			const animationTimer = setInterval(() => {
+				if (active) ui.setStatus("baton", `${frames[frame++ % frames.length]} ${progressStatus}`);
+			}, 100);
 			const timer = setInterval(() => {
-				if (polling) return;
+				if (!active || polling) return;
 				polling = true;
 				void exec(["progress", "--run", runId])
 					.then((value) => {
@@ -285,7 +309,8 @@ export async function drive(
 							? progress.activity : "Runtime activity";
 						const detail = typeof progress.activity === "string" ? activity : "Activity unavailable";
 						const truncated = progress.truncated === true ? " · earlier activity omitted" : "";
-						ui.setStatus("baton", `Baton · RUNNING · ${step} · attempt ${attempt} · ${detail}${truncated}`);
+						progressStatus = `Baton · RUNNING · ${step} · attempt ${attempt} · ${detail}${truncated}`;
+						ui.setStatus("baton", `${frames[frame++ % frames.length]} ${progressStatus}`);
 					})
 					.catch(() => {})
 					.finally(() => { polling = false; });
@@ -295,13 +320,14 @@ export async function drive(
 			} finally {
 				active = false;
 				clearInterval(timer);
+				clearInterval(animationTimer);
 			}
 			const next = (await exec(["next", "--run", runId])) as WorkItem;
 			const output =
 				next.lastResult?.attempt === item.attempt
 					? next.lastResult.output
 					: undefined;
-			if (output) show(`Baton ${runId} — RESULT · ${item.step.name}\n\n${output}`);
+			if (output) show(`Baton ${runId} — RESULT · ${item.step.name}\n\n${output}`, `result:${runId}:${item.step.id}:${item.attempt}`);
 		}
 	} finally {
 		ui.setStatus("baton", undefined);
@@ -309,6 +335,31 @@ export async function drive(
 }
 
 export default function baton(pi: ExtensionAPI) {
+	let activityTimer: ReturnType<typeof setInterval> | undefined;
+	let activityFrame = 0;
+	pi.on("agent_start", async (event, ctx) => {
+		if (activityTimer) clearInterval(activityTimer);
+		activityFrame = 0;
+		const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+		ctx.ui.setStatus("baton", "⠋ Pi · working");
+		herdrRequest("pane.report_agent", { source: "baton:pi-turn", agent: "pi", state: "working", seq: ++herdrSeq });
+		activityTimer = setInterval(() => {
+			ctx.ui.setStatus("baton", `${frames[++activityFrame % frames.length]} Pi · working`);
+		}, 100);
+	});
+	pi.on("agent_end", async (_event, ctx) => {
+		if (activityTimer) clearInterval(activityTimer);
+		activityTimer = undefined;
+		ctx.ui.setStatus("baton", undefined);
+		herdrRequest("pane.report_agent", { source: "baton:pi-turn", agent: "pi", state: "idle", seq: ++herdrSeq });
+	});
+	pi.on("message_end", async (event) => {
+		const message = event.message as { role?: string; stopReason?: string } | undefined;
+		if (message?.role === "assistant" && message.stopReason === "stop") {
+			herdrRequest("notification.show", { title: "Pi", body: "New assistant response" });
+		}
+	});
+	const notified = new Set<string>();
 	pi.registerCommand("baton", {
 		description: "Start, resume or refine a Baton run in this worktree",
 		handler: async (args, ctx) => {
@@ -328,9 +379,15 @@ export default function baton(pi: ExtensionAPI) {
 					throw new Error("Baton returned invalid JSON");
 				}
 			};
-			const show = (text: string) =>
+			const show = (text: string, notificationKey?: string) => {
 				pi.sendMessage({ customType: "baton", content: text, display: true });
+				if (notificationKey && !notified.has(notificationKey)) {
+					notified.add(notificationKey);
+					herdrRequest("notification.show", { title: "Baton", body: "New Baton conversation update" });
+				}
+			};
 			let runId = args.trim();
+			herdrRequest("pane.report_agent", { source: "baton:pi", agent: "pi", state: "working", seq: ++herdrSeq });
 			try {
 				if (/^(help|list|inspect|resume|refine)(?:\s|$)/.test(runId)) {
 					await manage(runId, exec, ctx.ui, show);
@@ -347,7 +404,7 @@ export default function baton(pi: ExtensionAPI) {
 					const startArgs = ["start", "--issue", task, "--pipeline", pipeline];
 					const started = (await exec(startArgs)) as Progress;
 					runId = started.id;
-					show(`Baton run started: ${runId}`);
+					show(`Baton run started: ${runId}`, `start:${runId}`);
 				}
 				await drive(runId, exec, ctx.ui, show);
 			} catch (error) {
@@ -355,6 +412,8 @@ export default function baton(pi: ExtensionAPI) {
 					`Baton${runId ? ` ${runId}` : ""} — ERROR\n${error instanceof Error ? error.message : String(error)}`,
 					"error",
 				);
+			} finally {
+				herdrRequest("pane.report_agent", { source: "baton:pi", agent: "pi", state: "idle", seq: ++herdrSeq });
 			}
 		},
 	});
