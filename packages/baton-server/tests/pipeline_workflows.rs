@@ -1903,7 +1903,14 @@ fn configured_factory_reinspection_runs_full_graph_without_duplicate_commit() {
         .output()
         .unwrap();
     assert!(status.status.success());
-    assert!(status.stdout.is_empty());
+    let status = String::from_utf8(status.stdout).unwrap();
+    // Shell execution persists diagnostic logs under .baton/work in the task
+    // worktree. Those files are expected and must not make this reinspection
+    // test look like it changed the task's source tree.
+    assert!(
+        status.lines().all(|line| line == "?? .baton/"),
+        "unexpected worktree changes after reinspection: {status}"
+    );
 }
 
 fn run_configured_factory_partial_publication(remote_branch_exists: bool) {
