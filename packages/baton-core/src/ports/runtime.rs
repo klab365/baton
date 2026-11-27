@@ -10,6 +10,7 @@ pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 /// A branching pipeline decision reported separately from an agent's prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDecision {
+    pub loop_complete: bool,
     pub outcome: Outcome,
     pub summary: String,
     pub structured_handoff: Option<crate::domain::pipeline::StructuredHandoff>,

@@ -1,0 +1,14 @@
+---
+id: ralph-test
+steps:
+- id: work
+  name: Ralph loop test
+  agentId: factory-builder
+  includeTask: true
+  prompt: |
+    Complete the requested task, making a small useful change.
+    Inspect and verify the result.
+  transitions:
+  - outcome: completed
+    to: null
+  type: agent

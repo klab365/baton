@@ -171,6 +171,7 @@ impl AgentRuntime for Script {
                 }
             }
             self.decision = Some(AgentDecision {
+                loop_complete: true,
                 outcome: decision.outcome,
                 summary,
                 structured_handoff: decision.structured_handoff,
@@ -207,6 +208,7 @@ impl AgentRuntime for Script {
                 }
             } else if allowed_outcomes.is_empty() {
                 self.decision = Some(AgentDecision {
+                    loop_complete: true,
                     outcome: Outcome::Completed,
                     summary: output.clone(),
                     structured_handoff: Some(

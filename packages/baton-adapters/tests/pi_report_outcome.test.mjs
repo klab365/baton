@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 const sourcePath = new URL('../src/runtime/pi_report_outcome.js', import.meta.url);
 const source = (await readFile(sourcePath, 'utf8')).replace(
   'import { Type } from "typebox";',
-  'const Type = { String: () => ({}), Number: () => ({}), Any: () => ({}), Optional: value => value, Object: value => value };',
+  'const Type = { String: () => ({}), Number: () => ({}), Boolean: () => ({}), Any: () => ({}), Optional: value => value, Object: value => value };',
 );
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
 const { default: registerExtension } = await import(moduleUrl);
@@ -24,7 +24,7 @@ async function fixture(t) {
   registerExtension({ registerTool: value => { tools[value.name] = value; } });
   return { tool: tools.report_outcome, historyTool: tools.get_structured_handoff, output: process.env.BATON_PI_OUTCOME_FILE };
 }
-const call = (tool, params) => tool.execute('call', params);
+const call = (tool, params) => tool.execute('call', { loop_complete: true, ...params });
 
 test('blocked outcome needs a reason and preserves optional human action in the handoff', async t => {
   const { tool, output } = await fixture(t);
@@ -32,7 +32,7 @@ test('blocked outcome needs a reason and preserves optional human action in the 
   await assert.rejects(call(tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: '  ' }), /blocker reason/);
   await call(tool, { outcome: 'blocked', summary: 'waiting', blocker_reason: ' missing access ', human_action: ' grant access ' });
   assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), {
-    outcome: 'blocked', summary: 'waiting\n\nBlocker: missing access\nHuman action needed: grant access',
+    loop_complete: true, outcome: 'blocked', summary: 'waiting\n\nBlocker: missing access\nHuman action needed: grant access',
     blocker_reason: ' missing access ', human_action: ' grant access ',
   });
   const omitted = await fixture(t);

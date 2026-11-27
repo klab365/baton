@@ -167,6 +167,7 @@ fn branching_handoff_is_the_complete_response_not_the_outcome_summary() {
         }
         fn take_decision(&mut self) -> Option<AgentDecision> {
             Some(AgentDecision {
+                loop_complete: true,
                 outcome: Outcome::Completed,
                 summary: "short summary".into(),
                 structured_handoff: Some(
@@ -354,6 +355,7 @@ fn assigned_skill_ids_are_forwarded_to_runtime_without_inline_context() {
         }
         fn take_decision(&mut self) -> Option<AgentDecision> {
             Some(AgentDecision {
+                loop_complete: true,
                 outcome: Outcome::Completed,
                 summary: "done".into(),
                 structured_handoff: Some(
@@ -475,6 +477,7 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
         }
         fn take_decision(&mut self) -> Option<AgentDecision> {
             Some(AgentDecision {
+                loop_complete: true,
                 outcome: Outcome::Completed,
                 summary: "done".into(),
                 structured_handoff: Some(
@@ -517,6 +520,12 @@ fn same_agent_steps_receive_distinct_prompts_and_persist_exact_runtime_input() {
     assert_eq!(runtime.agents, ["Write clearly", "Write clearly"]);
     assert!(runtime.inputs[0].contains("Step instructions:\nDraft the change"));
     assert!(runtime.inputs[1].contains("Step instructions:\nReview the change"));
+    assert!(
+        runtime
+            .inputs
+            .iter()
+            .all(|input| input.contains("loop_complete=true only when finished"))
+    );
     assert_eq!(
         run.steps[0].input.as_deref(),
         Some(runtime.inputs[0].as_str())
@@ -547,9 +556,10 @@ fn ordered_handoff_and_restart_safe_records() {
     .unwrap();
     let input_prefix =
         "Required: call report_outcome with a valid structured_handoff.\n\nStep context:\n";
+    let loop_suffix = "\n\nContinue iterating on this task until it is complete. Verify your work and call report_outcome with loop_complete=true only when finished; use false to continue.";
     assert_eq!(
         runtime.calls[0],
-        ("writer".into(), format!("{input_prefix}task"))
+        ("writer".into(), format!("{input_prefix}task{loop_suffix}"))
     );
     assert_eq!(runtime.calls[1].0, "reviewer");
     assert!(runtime.calls[1].1.contains("Original task:\ntask"));
@@ -729,6 +739,7 @@ fn human_feedback_reaches_builder_after_planner_and_repository_reload() {
                 _ => panic!("unexpected call"),
             };
             self.decision = Some(AgentDecision {
+                loop_complete: true,
                 outcome,
                 summary: summary.into(),
                 structured_handoff: Some(

@@ -88,6 +88,7 @@ impl AgentRuntime for FakeRuntime {
         let output = format!("{}: {input}", agent.id);
         self.decision = if self.structured_handoff_required {
             Some(baton_core::ports::runtime::AgentDecision {
+                loop_complete: true,
                 outcome: baton_core::domain::project::Outcome::Completed,
                 summary: output.clone(),
                 structured_handoff: Some(

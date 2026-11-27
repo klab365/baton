@@ -752,18 +752,22 @@ fn execute_once(
                     return Err("Pi outcome exceeded the 16 MiB limit".into());
                 }
                 if let Ok(result) = serde_json::from_slice::<serde_json::Value>(&data)
-                    && let (Some(outcome), Some(summary)) = (
+                    && let (Some(outcome), Some(summary), Some(loop_complete)) = (
                         result
                             .get("outcome")
                             .cloned()
                             .and_then(|value| serde_json::from_value::<Outcome>(value).ok()),
                         result.get("summary").and_then(serde_json::Value::as_str),
+                        result
+                            .get("loop_complete")
+                            .and_then(serde_json::Value::as_bool),
                     )
                     && (allowed_outcomes.contains(&outcome)
                         || (allowed_outcomes.is_empty() && outcome == Outcome::Completed))
                 {
                     let structured_handoff = parse_structured_handoff(&result)?;
                     runtime.decision = Some(AgentDecision {
+                        loop_complete,
                         outcome,
                         summary: summary.to_owned(),
                         structured_handoff,
