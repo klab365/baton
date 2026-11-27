@@ -608,6 +608,12 @@ fn progress_is_read_only_and_never_returns_runtime_trace_strings() {
     fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let model = f.value(&["progress", "--run", id]);
     assert_eq!(model["activity"], "Agent activity");
+    record["trace"].as_array_mut().unwrap().last_mut().unwrap()["kind"] = json!("ralphIteration");
+    record["trace"].as_array_mut().unwrap().last_mut().unwrap()["content"] =
+        json!("Ralph loop 2/100");
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let loop_progress = f.value(&["progress", "--run", id]);
+    assert_eq!(loop_progress["activity"], "Ralph loop 2/100");
     record["steps"].as_array_mut().unwrap().last_mut().unwrap()["attempt"] = json!(2);
     record["trace"].as_array_mut().unwrap().push(json!({
         "attempt": 1,

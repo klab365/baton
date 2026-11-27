@@ -305,7 +305,8 @@ export async function drive(
 						const progress = value as { activity?: unknown; step?: unknown; attempt?: unknown };
 						const step = typeof progress.step === "string" ? progress.step.slice(0, 80) : item.step!.name;
 						const attempt = typeof progress.attempt === "number" ? progress.attempt : item.attempt;
-						const activity = ["Tool activity", "Agent activity", "Runtime activity"].includes(progress.activity)
+						const loopActivity = typeof progress.activity === "string" && /^Ralph loop \d+\/\d+$/.test(progress.activity);
+						const activity = loopActivity ? progress.activity : ["Tool activity", "Agent activity", "Runtime activity"].includes(progress.activity)
 							? progress.activity : "Runtime activity";
 						const detail = typeof progress.activity === "string" ? activity : "Activity unavailable";
 						const truncated = progress.truncated === true ? " · earlier activity omitted" : "";

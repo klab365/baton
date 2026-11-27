@@ -189,6 +189,7 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
                         "tool_start" | "tool_end" | "toolCall" | "toolResult"
                         | "toolCallRejected" | "toolResultRejected" => "Tool activity",
                         "message" | "text" | "modelRequest" | "modelResponse" => "Agent activity",
+                        "ralphIteration" => entry.content.as_str(),
                         _ => "Runtime activity",
                     })
             })

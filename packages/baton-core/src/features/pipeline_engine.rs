@@ -1297,17 +1297,19 @@ pub fn execute_graph(
                 if cancelled() {
                     break Err("Run cancelled".into());
                 }
-                let loop_result = run_ralph_loop(
-                    &runtime_input,
-                    step.max_attempts.unwrap_or(MAX_RALPH_ITERATIONS as u32) as usize,
-                    |iteration_input| {
+                let max_iterations = step.max_attempts.unwrap_or(MAX_RALPH_ITERATIONS as u32);
+                let mut iteration = 0;
+                let loop_result =
+                    run_ralph_loop(&runtime_input, max_iterations as usize, |iteration_input| {
+                        iteration += 1;
                         if cancelled() {
                             return Err("Run cancelled".into());
                         }
+                        let attempt_number = run.steps[index].attempt;
                         let mut observer = |mut entry: RunTraceEntry| {
                             let _lease =
                                 acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
-                            entry.attempt = Some(run.steps[index].attempt);
+                            entry.attempt = Some(attempt_number);
                             let kind = entry.kind.clone();
                             append_bounded_trace(&mut run, [entry]);
                             publish(
@@ -1316,6 +1318,12 @@ pub fn execute_graph(
                                 Some(format!("Observed runtime activity: {kind}")),
                             )
                         };
+                        observer(RunTraceEntry {
+                            attempt: Some(attempt_number),
+                            occurred_at: utc_now(),
+                            kind: "ralphIteration".into(),
+                            content: format!("Ralph loop {iteration}/{max_iterations}"),
+                        })?;
                         let output = guarded.execute_pipeline_step_observed(
                             &worktree_path,
                             &assigned,
@@ -1325,8 +1333,7 @@ pub fn execute_graph(
                             &mut observer,
                         )?;
                         Ok((output, guarded.take_decision()))
-                    },
-                );
+                    });
                 let (output, decision) = match loop_result {
                     Ok(result) => result,
                     Err(error) => break Err(error),

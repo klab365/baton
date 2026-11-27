@@ -382,6 +382,12 @@ impl WorkApplication {
                             return Err(StepFailure::Runtime(format!("Agent did not complete within {} iterations", loop_iterations)));
                         }
                         loop_iterations += 1;
+                        observer(baton_core::domain::pipeline::RunTraceEntry {
+                            attempt: Some(attempt),
+                            occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                            kind: "ralphIteration".into(),
+                            content: format!("Ralph loop {loop_iterations}/{}", execution_step.max_attempts.unwrap_or(100)),
+                        })?;
                         let output = runtime.execute_pipeline_step_observed(
                             &workspace,
                             &agent,
