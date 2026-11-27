@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/klab365/baton/compare/v0.10.0...v0.11.0) - 2026-11-27
+
+### Added
+
+- update shell-type to respond with stdout/stderr
+- unify automatic and stepwise runs
+- show bounded work progress
+- enforce structured handoffs in factory pipelines
+- refine Pi work sessions and streamline factory
+- preserve structured pipeline handoffs
+- preserve human decisions across pipeline steps
+- route blocker responses to configured help steps
+- enforce global pipeline attempt limits
+- limit pipeline step attempts
+- persist authoritative pipeline handoffs
+- reuse agent sessions across pipeline steps
+- pass handoffs along pipeline transitions
+- add pipeline listing and selection
+- simplify agent provider and model configuration
+- add reusable agent instructions and step prompts
+- add bounded run observability
+- store agents and pipelines in yaml
+- support configured Rig thinking levels
+- harden software factory reinspection flow
+- pause runs on repeated unresolved handoffs
+- add Pi agent runtime
+- support thinking levels across runtimes
+- improve pipeline handoff replay visibility
+- expose persisted run insights
+- add prompts to factory pipeline steps
+
+### Fixed
+
+- enforce handoffs in CLI work execution
+- preserve structured handoffs in external work sessions
+- report repeated blockers in external work runs
+- recover failed external work executions
+- install Pi extension from release tag
+- stop implicit progress retries
+- tighten CI verification workflow
+- satisfy Rig runtime clippy checks
+- align blocked outcomes with pipeline routing
+- restrict pi runtime skills
+- constrain multiline Pi API key diagnostics
+- redact Pi runtime failure diagnostics
+- serialize agent instructions as YAML literal blocks
+- remove fixed rig agent timeout
+- tests
+- update orchestration test fixture
+- handle missing replay attempt links
+
+### Other
+
+- stabilize Pi installer process tests
+- stabilize local Ollama observability assertion
+- update factory agent configuration
+- stabilize human action and run insight checks
+- wip
+- provide structured history in Rig test contexts
+- group Pi runtime IO results
+- move factory prompt policy into configuration
+- allow expected Baton worktree logs
+- isolate factory pipeline verification in workflow tests
+- fix format
+- fix pipeline workflow CI compatibility
+- assert stopped run details
+- satisfy clippy in workflow test
+- format orchestration assertion
+- allow time for failure replay to load
+- allow time for run page to load in CI
+- preserve browser failure artifacts
+
 ## [0.10.0](https://github.com/klab365/baton/compare/v0.9.0...v0.10.0) - 2026-11-11
 
 ### Added
