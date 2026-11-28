@@ -9,6 +9,7 @@ use self::{
     plugins::{Activities, Completed, RegisteredTools, StepPlugin},
     tools::{GetHandoff, ReportOutcome, outcome_name},
 };
+use super::usage::UsageAccumulator;
 use baton_core::{
     domain::pipeline::{RunTraceEntry, StructuredHandoffAttempt},
     domain::project::{Agent as BatonAgent, Outcome, Skill},
@@ -406,6 +407,16 @@ pub struct RigAgentContext<'a> {
     pub observer: &'a mut dyn FnMut(RunTraceEntry) -> Result<(), String>,
     pub handler_override: Option<ErasedHandler>,
 }
+type RigExecutionResult = Result<
+    (
+        String,
+        Option<AgentDecision>,
+        Vec<RunTraceEntry>,
+        Option<baton_core::domain::pipeline::ModelUsage>,
+    ),
+    String,
+>;
+
 impl RigRuntime {
     pub fn execute(
         directory: &Path,
@@ -415,7 +426,7 @@ impl RigRuntime {
         agent_context: RigAgentContext<'_>,
         allowed_outcomes: &[Outcome],
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<(String, Option<AgentDecision>, Vec<RunTraceEntry>), String> {
+    ) -> RigExecutionResult {
         let runtime_credential = agent_context.credential;
         let model_config = agent_context
             .agent
@@ -885,7 +896,9 @@ impl RigRuntime {
                     .take();
                 std::fs::remove_file(&inflight)
                     .map_err(|e| format!("Clear Rig execution marker: {e}"))?;
-                return Ok((answer, decision, trace));
+                let usage = app.world_mut().resource_mut::<UsageAccumulator>().finish();
+                let usage = price_usage(usage, &model_config.provider, &model_config.model);
+                return Ok((answer, decision, trace, usage));
             }
             if cancelled() {
                 app.world_mut()
@@ -896,6 +909,36 @@ impl RigRuntime {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+fn price_usage(
+    mut usage: Option<baton_core::domain::pipeline::ModelUsage>,
+    provider: &str,
+    model: &str,
+) -> Option<baton_core::domain::pipeline::ModelUsage> {
+    let observed = usage.take()?;
+    let prices = std::thread::spawn({
+        let provider = provider.to_owned();
+        let model = model.to_owned();
+        move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()?
+                .block_on(super::model_pricing::lookup(&provider, &model))
+        }
+    })
+    .join()
+    .ok()
+    .flatten();
+    let Some(prices) = prices else {
+        return Some(observed);
+    };
+    Some(super::model_pricing::apply_prices(
+        observed,
+        &prices,
+        baton_core::features::pipeline_engine::utc_now(),
+    ))
 }
 
 #[cfg(test)]

@@ -132,6 +132,9 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
     fn take_events(&mut self) -> Vec<String> {
         self.runtime.take_events()
     }
+    fn take_usage(&mut self) -> Option<crate::domain::pipeline::ModelUsage> {
+        self.runtime.take_usage()
+    }
     fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         self.runtime.take_trace()
     }
@@ -1371,6 +1374,7 @@ pub fn execute_graph(
                 }
             }
         };
+        let usage = runtime.take_usage();
         let mut trace = runtime.take_trace();
         for entry in &mut trace {
             entry.attempt = Some(run.steps[index].attempt);
@@ -1399,6 +1403,7 @@ pub fn execute_graph(
         let mut loop_message = None;
         match result {
             Ok((outcome, output, structured_handoff)) => {
+                run.steps[index].usage = usage;
                 run.steps[index].structured_handoff = structured_handoff;
                 run.steps[index].status = Status::Succeeded;
                 let (outcome, output) = match gate_approved_outcome(&run, step, outcome, output) {
@@ -1439,6 +1444,7 @@ pub fn execute_graph(
                 }
             }
             Err(error) => {
+                run.steps[index].usage = usage;
                 run.steps[index].status = Status::Failed;
                 run.steps[index].error = Some(error.chars().take(4096).collect());
                 run.status = Status::Failed;

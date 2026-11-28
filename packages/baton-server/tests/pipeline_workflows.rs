@@ -1566,13 +1566,25 @@ fn routed_agent_rework_continues_with_handoff_before_completion() {
     assert_eq!(run.steps.len(), 5);
     assert_eq!(run.steps[0].output.as_deref(), Some("Tool handoff"));
     assert_eq!(run.handoff.as_deref(), Some("Verified"));
-    assert_eq!(run.trace.len(), 5);
-    assert!(
-        run.trace
+    assert_eq!(run.trace.len(), 10);
+    for attempt in 1..=5 {
+        let attempt_trace: Vec<_> = run
+            .trace
             .iter()
-            .enumerate()
-            .all(|(index, trace)| trace.attempt == Some(index as u32 + 1))
-    );
+            .filter(|trace| trace.attempt == Some(attempt))
+            .collect();
+        assert_eq!(attempt_trace.len(), 2);
+        assert!(
+            attempt_trace
+                .iter()
+                .any(|trace| trace.kind == "ralphIteration")
+        );
+        assert!(
+            attempt_trace
+                .iter()
+                .any(|trace| trace.kind == "runtimeRequest")
+        );
+    }
     assert!(
         run.events
             .iter()

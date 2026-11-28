@@ -1,7 +1,7 @@
-use bevy_ecs::prelude::{Added, Query, Res, ResMut, Resource, With};
+use bevy_ecs::prelude::{Added, Changed, Query, Res, ResMut, Resource, With};
 use rig_harness::prelude::{
-    AgentLoop, App, AppCliExt, Front, IntoScheduleConfigs, Outcome, Settled, ToolRequest, Turn,
-    TurnOutcome, Update,
+    AgentLoop, App, AppCliExt, Front, IntoScheduleConfigs, LastUsage, Outcome, Settled,
+    ToolRequest, Turn, TurnOutcome, Update,
 };
 
 #[derive(Default)]
@@ -20,11 +20,24 @@ impl rig_harness::prelude::Plugin for StepPlugin {
     fn build(&self, app: &mut App) {
         app.add_front(Front::new("baton").on_terminal().headless())
             .init_resource::<Completed>()
+            .init_resource::<super::super::super::usage::UsageAccumulator>()
             .init_resource::<Activities>()
             .init_resource::<RegisteredTools>()
             .add_systems(Update, complete.after(AgentLoop))
+            .add_systems(Update, record_usage.after(AgentLoop))
             .add_systems(Update, record_tool_calls.after(AgentLoop))
             .add_systems(Update, record_tool_results.after(AgentLoop));
+    }
+}
+
+fn record_usage(
+    usages: Query<&LastUsage, Changed<LastUsage>>,
+    mut aggregate: ResMut<super::super::super::usage::UsageAccumulator>,
+) {
+    for last in &usages {
+        if let Some(usage) = last.usage() {
+            aggregate.record(usage);
+        }
     }
 }
 

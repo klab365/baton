@@ -109,10 +109,28 @@ test("bounds large cost summaries and preserves run identity and attempt details
 	expect(messages[0]).toContain("omittedEarlierSteps");
 });
 
+test("Pi inspection totals only complete comparable cost observations", async () => {
+	const messages: string[] = [];
+	await manage("inspect run-cost", async () => ({ id: "run-cost", steps: [
+		{ stepId: "a", attempt: 1, status: "succeeded", usage: { estimatedCost: "0.10", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+		{ stepId: "b", attempt: 2, status: "succeeded", usage: { estimatedCost: "0.20", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+	] }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Run cost: 0.3 USD");
+});
+
+test("Pi inspection rejects totals with mixed price units", async () => {
+	const messages: string[] = [];
+	await manage("inspect run-mixed", async () => ({ id: "run-mixed", steps: [
+		{ stepId: "a", attempt: 1, status: "succeeded", usage: { estimatedCost: "1", currency: "USD", priceUnit: "perToken", coverage: "complete" } },
+		{ stepId: "b", attempt: 2, status: "succeeded", usage: { estimatedCost: "1", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+	] }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Run cost: unavailable");
+});
+
 test("Pi inspection summarizes persisted metrics without treating missing values as zero", async () => {
 	const messages: string[] = [];
 	await manage("inspect run-1", async () => ({ id: "run-1", steps: [
-		{ stepId: "build", attempt: 1, status: "succeeded", durationMs: 0, usage: { inputTokens: 0, outputTokens: 4, cacheReadTokens: 2, estimatedCost: "0.01", priceSource: "catalog", priceCheckedAt: "now" } },
+		{ stepId: "build", attempt: 1, status: "succeeded", durationMs: 0, usage: { inputTokens: 0, outputTokens: 4, cacheReadTokens: 2, estimatedCost: "0.01", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete", priceSnapshot: { input: 1 }, priceSource: "catalog", priceCheckedAt: "now" } },
 		{ stepId: "build", attempt: 2, status: "failed", durationMs: null, selectedTransition: { to: "build" }, usage: { inputTokens: 1 } },
 		{ stepId: "finish", attempt: 0, status: "pending" },
 	] }), ui(), (text) => messages.push(text));
@@ -120,6 +138,9 @@ test("Pi inspection summarizes persisted metrics without treating missing values
 	expect(messages[0]).toContain("1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
 	expect(messages[0]).toContain("Run cost: unavailable (currency/unit not recorded)");
 	expect(messages[0]).toContain("Attempt costs: 0.01 · catalog · checked now");
+	expect(messages[0]).toContain('"currency": "USD"');
+	expect(messages[0]).toContain('"priceUnit": "perMillionTokens"');
+	expect(messages[0]).toContain('"coverage": "complete"');
 	expect(messages[0]).toContain("Tokens input/output/cache read/cache write: 1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
 	expect(messages[0]).toContain("Duration: 0 ms (partial)");
 });

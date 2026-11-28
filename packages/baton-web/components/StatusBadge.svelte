@@ -1,5 +1,6 @@
 <script lang="ts">
-let { status }: { status: string } = $props();
+let { status }: { status?: string | null } = $props();
+const value = $derived(status ?? "unknown");
 
 const labels: Record<string, string> = {
 	waitingHuman: "Review pending",
@@ -23,4 +24,4 @@ function label(value: string) {
 }
 </script>
 
-<span class="status-badge status-badge-{tone(status)}">{label(status)}</span>
+<span class="status-badge status-badge-{tone(value)}">{label(value)}</span>

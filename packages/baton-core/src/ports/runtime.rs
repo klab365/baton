@@ -86,6 +86,12 @@ pub trait AgentRuntime: Send {
     /// Sanitized metadata only; never raw runtime diagnostics or authentication data.
     fn take_events(&mut self) -> Vec<String>;
 
+    /// Provider-reported usage from the most recent pipeline attempt, when available.
+    /// Implementations must return `None` rather than fabricated zeroes when unsupported.
+    fn take_usage(&mut self) -> Option<crate::domain::pipeline::ModelUsage> {
+        None
+    }
+
     /// Complete sanitized transcript captured by the runtime, including messages
     /// and tool activity where the runtime exposes it.
     fn take_trace(&mut self) -> Vec<RunTraceEntry>;

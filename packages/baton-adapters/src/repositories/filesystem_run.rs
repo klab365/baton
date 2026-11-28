@@ -266,6 +266,29 @@ mod tests {
     }
 
     #[test]
+    fn run_usage_and_pricing_provenance_survive_repository_reload() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = FilesystemRunRepository(directory.path().to_path_buf());
+        let value = serde_json::json!({
+            "id":"run-usage", "pipelineId":"p", "task":"task",
+            "startedAt":"2026-01-01T00:00:00Z", "endedAt":null, "durationMs":null,
+            "events":[], "status":"succeeded", "configSnapshot":null,
+            "steps":[{"stepId":"build","agentId":"agent","status":"succeeded",
+                "input":null,"output":null,"error":null,"usage":{
+                    "inputTokens":100,"outputTokens":20,"cacheReadTokens":10,"cacheWriteTokens":5,
+                    "estimatedCost":"0.0003","currency":"USD","priceUnit":"perMillionTokens",
+                    "coverage":"complete","priceSource":"models.dev","priceCheckedAt":"2026-01-01T00:00:00Z",
+                    "inputPrice":"2","outputPrice":"8","cacheReadPrice":"0.2","cacheWritePrice":"1",
+                    "priceSnapshot":{"input":"2","output":"8","cacheRead":"0.2","cacheWrite":"1"}
+                }}]
+        });
+        let run = deserialize_run(&serde_json::to_vec(&value).unwrap()).unwrap();
+        repository.create(&run).unwrap();
+        let reloaded = repository.load("run-usage").unwrap();
+        assert_eq!(reloaded.steps[0].usage, run.steps[0].usage);
+    }
+
+    #[test]
     fn orphaned_temporary_file_does_not_block_writes_or_recovery() {
         let directory = tempfile::tempdir().unwrap();
         let repository = FilesystemRunRepository(directory.path().to_path_buf());

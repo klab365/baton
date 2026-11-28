@@ -4,8 +4,9 @@ use axum::{
     extract::{Path, State},
     routing::{get, post},
 };
-use baton_core::domain::pipeline::PipelineRun;
+use baton_core::domain::pipeline::{PipelineRun, StepRun};
 use baton_core::features::runs::{CancelRun, GetRun, ListRuns, RespondToRun};
+use serde_json::Value;
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -16,24 +17,38 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/runs/{id}/actions", post(human_action))
 }
 
-async fn list(State(state): State<AppState>) -> Result<Json<Vec<PipelineRun>>, ApiError> {
-    state
+fn summary(steps: &[StepRun]) -> Value {
+    baton_core::domain::pipeline::usage_summary(steps)
+}
+
+fn run_response(run: PipelineRun) -> Result<Value, ApiError> {
+    let summary = summary(&run.steps);
+    let mut value =
+        serde_json::to_value(run).map_err(|error| ApiError::internal(error.to_string()))?;
+    value["usageSummary"] = summary;
+    Ok(value)
+}
+
+async fn list(State(state): State<AppState>) -> Result<Json<Vec<Value>>, ApiError> {
+    let runs = state
         .mediator
         .send(ListRuns)
         .await
+        .map_err(ApiError::internal)?;
+    runs.into_iter()
+        .map(run_response)
+        .collect::<Result<Vec<_>, _>>()
         .map(Json)
-        .map_err(ApiError::internal)
 }
 
 async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<PipelineRun>, ApiError> {
-    state
+) -> Result<Json<Value>, ApiError> {
+    let run = state
         .mediator
         .send(GetRun { id })
         .await
-        .map(Json)
         .map_err(|error| ApiError {
             status: if error.contains("No such file") {
                 StatusCode::NOT_FOUND
@@ -41,7 +56,8 @@ async fn detail(
                 StatusCode::INTERNAL_SERVER_ERROR
             },
             message: error,
-        })
+        })?;
+    run_response(run).map(Json)
 }
 
 async fn updates(
@@ -124,4 +140,47 @@ async fn human_action(
                 }
             }
         })
+}
+
+#[cfg(test)]
+mod usage_summary_tests {
+    use super::*;
+
+    fn step(usage: Value) -> StepRun {
+        serde_json::from_value(serde_json::json!({
+            "stepId":"build", "agentId":"worker", "status":"succeeded",
+            "input":null, "output":null, "error":null, "usage":usage
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn summary_only_totals_complete_comparable_usage() {
+        let priced = |cost: &str, currency: &str| {
+            serde_json::json!({
+                "estimatedCost":cost, "currency":currency, "priceUnit":"perMillionTokens", "coverage":"complete"
+            })
+        };
+        let total = summary(&[step(priced("0.1", "USD")), step(priced("0.02", "USD"))]);
+        assert_eq!(total["cost"], "0.12");
+        let mixed = summary(&[step(priced("0.1", "USD")), step(priced("0.02", "EUR"))]);
+        assert_eq!(mixed["coverage"], "unavailable");
+        let missing = summary(&[step(Value::Null)]);
+        assert_eq!(missing["cost"], Value::Null);
+    }
+
+    #[test]
+    fn run_response_includes_additive_usage_summary() {
+        let run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "id":"r", "pipelineId":"p", "task":"t", "startedAt":"now",
+            "status":"succeeded", "steps":[{
+                "stepId":"build", "agentId":"worker", "status":"succeeded",
+                "input":null, "output":null, "error":null,
+                "usage":{"estimatedCost":"0.03", "currency":"USD", "priceUnit":"perMillionTokens", "coverage":"complete"}
+            }]
+        })).unwrap();
+        let response = run_response(run).unwrap_or_else(|_| panic!("valid run serializes"));
+        assert_eq!(response["usageSummary"]["cost"], "0.03");
+        assert_eq!(response["steps"][0]["usage"]["currency"], "USD");
+    }
 }

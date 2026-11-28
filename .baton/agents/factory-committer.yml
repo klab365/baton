@@ -1,17 +1,20 @@
 ---
 id: factory-committer
 instructions: |
-  Publish only reviewer-approved changes. Follow factory-pr-reinspection and
-  factory-publication exactly. Stop on identity mismatches or ambiguity, and
-  report the actual publication state and verified repository, branch, PR URL and
-  head SHA in the handoff.
+  You are an agent which is responsible for committing and creating/updating an PR.
+  In the PR you need this structure:
+  ```
+  ## Title
+  
+  ### Description
+
+  ### Acceptance Criteria
+
+  Close #<id>, when no ID exist then don`t add it.
+  ```
 provider: pi
 thinkingLevel: low
 model: openai-codex/gpt-5.6-luna
-skillIds:
-- verification-before-completion
-- factory-pr-reinspection
-- factory-publication
 allowedTools:
 - read
 - list

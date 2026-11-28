@@ -88,10 +88,16 @@ function formatInsights(steps: Record<string, unknown>[]) {
 	const prices = executed.flatMap((step) => {
 		const usage = step.usage as Record<string, unknown> | undefined;
 		const value = usage?.estimatedCost;
-		return typeof value === "string" && value.trim() && Number.isFinite(Number(value)) ? [{ value, source: usage?.priceSource, checked: usage?.priceCheckedAt }] : [];
+		return typeof value === "string" && value.trim() && Number.isFinite(Number(value)) ? [{ value, source: usage?.priceSource, checked: usage?.priceCheckedAt, currency: usage?.currency, unit: usage?.priceUnit, coverage: usage?.coverage }] : [];
 	});
+	const comparable = prices.length === executed.length && executed.length > 0 && prices.every((price) => price.coverage === "complete" && typeof price.currency === "string" && price.currency === prices[0]?.currency && typeof price.unit === "string" && price.unit === prices[0]?.unit);
+	const decimalParts = prices.map((price) => /^(\d+)(?:\.(\d+))?$/.exec(price.value));
+	const scale = decimalParts.length && decimalParts.every(Boolean) ? Math.max(...decimalParts.map((part) => part![2]?.length ?? 0)) : -1;
+	const digits = scale < 0 ? "" : decimalParts.reduce((sum, part) => sum + BigInt(part![1] + (part![2] ?? "").padEnd(scale, "0")), 0n).toString().padStart(scale + 1, "0");
+	const amount = scale < 0 ? null : scale ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}`.replace(/\.?0+$/, "") || "0" : digits;
+	const costLabel = comparable && amount !== null ? `${amount} ${prices[0]?.currency}` : "unavailable (currency/unit not recorded)";
 	const costSummary = prices.slice(0, 3).map((price) => `${price.value}${typeof price.source === "string" ? ` · ${price.source.slice(0, 80)}` : ""}${typeof price.checked === "string" ? ` · checked ${price.checked.slice(0, 80)}` : ""}`).join("; ");
-	return `Attempts: ${executed.length} · retries: ${retries}\nDuration: ${durations.length ? durations.reduce((sum, value) => sum + value, 0) : "unavailable"} ms (${durations.length === 0 ? "unavailable" : durations.length === executed.length ? "complete" : "partial"})\nTokens input/output/cache read/cache write: ${total("inputTokens")} / ${total("outputTokens")} / ${total("cacheReadTokens")} / ${total("cacheWriteTokens")}\nRun cost: unavailable (currency/unit not recorded)\nAttempt costs: ${costSummary || "unavailable"}${prices.length > 3 ? `; ${prices.length - 3} further observations in attempt details` : ""}`;
+	return `Attempts: ${executed.length} · retries: ${retries}\nDuration: ${durations.length ? durations.reduce((sum, value) => sum + value, 0) : "unavailable"} ms (${durations.length === 0 ? "unavailable" : durations.length === executed.length ? "complete" : "partial"})\nTokens input/output/cache read/cache write: ${total("inputTokens")} / ${total("outputTokens")} / ${total("cacheReadTokens")} / ${total("cacheWriteTokens")}\nRun cost: ${costLabel}\nAttempt costs: ${costSummary || "unavailable"}${prices.length > 3 ? `; ${prices.length - 3} further observations in attempt details` : ""}`;
 }
 
 function inspectRecord(value: unknown): string {
@@ -114,7 +120,7 @@ function inspectRecord(value: unknown): string {
 			.filter((key) => step[key] !== undefined)
 			.map((key) => [key, typeof step[key] === "string" && step[key].length > 1000 ? `${step[key].slice(0, 1000)}… output truncated` : step[key]]));
 		if (step.usage && typeof step.usage === "object") {
-			record.usage = Object.fromEntries(["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "estimatedCost", "priceSource", "priceCheckedAt"]
+			record.usage = Object.fromEntries(["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "estimatedCost", "currency", "priceUnit", "coverage", "priceSnapshot", "inputPrice", "outputPrice", "cacheReadPrice", "cacheWritePrice", "priceSource", "priceCheckedAt"]
 				.filter((key) => (step.usage as Record<string, unknown>)[key] !== undefined)
 				.map((key) => {
 					const value = (step.usage as Record<string, unknown>)[key];

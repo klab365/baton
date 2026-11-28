@@ -275,7 +275,7 @@ mkdir -p "$session"
 prompt=$(cat)
 printf '%s\\n' "$prompt" >> "$session/inputs"
 printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"prior-conversation"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" > "$session/test_$id.jsonl"
-printf '{"outcome":"completed","summary":"TOOL HANDOFF","structured_handoff":{"version":1,"summary":"TOOL HANDOFF"}}' > "$BATON_PI_OUTCOME_FILE"
+printf '{"loop_complete":true,"outcome":"completed","summary":"TOOL HANDOFF","structured_handoff":{"version":1,"summary":"TOOL HANDOFF","nextAction":"done"}}' > "$BATON_PI_OUTCOME_FILE"
 printf 'FINAL ANSWER'
 "##).unwrap();
     fs::set_permissions(&pi, fs::Permissions::from_mode(0o755)).unwrap();
@@ -344,7 +344,7 @@ mkdir -p "$session_dir"
 if [ -z "$existing" ]; then
   printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$session_id" "$PWD" > "$session_dir/session_$session_id.jsonl"
 fi
-printf '{"outcome":"completed","summary":"agent summary","structured_handoff":{"version":1,"summary":"agent summary"}}' > "$BATON_PI_OUTCOME_FILE"
+printf '{"loop_complete":true,"outcome":"completed","summary":"agent summary","structured_handoff":{"version":1,"summary":"agent summary","nextAction":"done"}}' > "$BATON_PI_OUTCOME_FILE"
 printf 'completed'
 "##,
     )
@@ -567,6 +567,17 @@ fn progress_is_read_only_and_never_returns_runtime_trace_strings() {
     assert_eq!(empty_progress["truncated"], false);
     let path = f.path.join(".baton/work").join(format!("{id}.json"));
     let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let last_step = record["steps"].as_array().unwrap().len() - 1;
+    record["steps"][last_step]["usage"] = json!({
+        "inputTokens": 12,
+        "outputTokens": 4,
+        "estimatedCost": "0.03",
+        "currency": "USD",
+        "priceUnit": "perMillionTokens",
+        "coverage": "complete",
+        "priceSource": "models.dev",
+        "priceCheckedAt": "2026-01-01T00:00:00Z"
+    });
     record["trace"] = json!([
         {
             "attempt": 999,
@@ -587,6 +598,14 @@ fn progress_is_read_only_and_never_returns_runtime_trace_strings() {
     assert_eq!(progress["activity"], serde_json::Value::Null);
     assert_eq!(progress["available"], false);
     assert_eq!(progress["truncated"], true);
+    assert_eq!(progress["usage"]["estimatedCost"], "0.03");
+    assert_eq!(progress["usage"]["currency"], "USD");
+    assert_eq!(
+        progress["usageObservations"][0]["usage"]["estimatedCost"],
+        "0.03"
+    );
+    assert_eq!(progress["usageSummary"]["cost"], "0.03");
+    assert_eq!(progress["usageSummary"]["currency"], "USD");
     assert!(!progress.to_string().contains("private marker content"));
     assert!(!progress.to_string().contains("DO NOT LEAK THIS"));
     assert!(!progress.to_string().contains("credential=secret"));
@@ -775,7 +794,7 @@ async fn cli_executes_rig_against_local_ollama_provider() {
             let body = if request.contains("Missing outcome") || last_role == Some("tool") {
                 "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Rig finished\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
             } else {
-                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_report\",\"type\":\"function\",\"function\":{\"name\":\"report_outcome\",\"arguments\":\"{\\\"outcome\\\":\\\"completed\\\",\\\"summary\\\":\\\"done\\\",\\\"structured_handoff\\\":{\\\"version\\\":1,\\\"summary\\\":\\\"done\\\"}}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+                "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_report\",\"type\":\"function\",\"function\":{\"name\":\"report_outcome\",\"arguments\":\"{\\\"loop_complete\\\":true,\\\"outcome\\\":\\\"completed\\\",\\\"summary\\\":\\\"done\\\",\\\"structured_handoff\\\":{\\\"version\\\":1,\\\"summary\\\":\\\"done\\\",\\\"nextAction\\\":\\\"done\\\"}}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
             };
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
             requests.push(request);

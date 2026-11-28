@@ -175,6 +175,18 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
             .as_deref()
             .map(|step| step.chars().take(128).collect::<String>());
         let attempt = run.steps.last().map(|step| step.attempt);
+        let usage = run.steps.last().and_then(|step| step.usage.as_ref());
+        let usage_observations: Vec<_> = run
+            .steps
+            .iter()
+            .map(|step| {
+                serde_json::json!({
+                    "stepId": step.step_id,
+                    "attempt": step.attempt,
+                    "usage": step.usage
+                })
+            })
+            .collect();
         let trace_exhausted = run.trace.iter().any(|entry| {
             entry.kind == "traceTruncated"
                 || entry.content == "Runtime activity capture limits reached; later events omitted"
@@ -200,6 +212,9 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
                 "status": run.status,
                 "step": step,
                 "attempt": attempt,
+                "usage": usage,
+                "usageObservations": usage_observations,
+                "usageSummary": baton_core::domain::pipeline::usage_summary(&run.steps),
                 "activity": activity,
                 "available": !trace_exhausted && run.trace.iter().any(|entry| entry.attempt == attempt),
                 "truncated": trace_exhausted
@@ -277,6 +292,57 @@ async fn execute(args: Vec<String>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn step(usage: serde_json::Value) -> baton_core::domain::pipeline::StepRun {
+        serde_json::from_value(serde_json::json!({
+            "stepId": "build", "agentId": "builder", "status": "succeeded",
+            "input": null, "output": null, "error": null, "usage": usage
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn progress_usage_summary_requires_complete_comparable_estimates() {
+        let priced = |cost: &str, currency: &str, unit: &str| {
+            serde_json::json!({
+                "estimatedCost": cost, "currency": currency, "priceUnit": unit, "coverage": "complete"
+            })
+        };
+        let total = baton_core::domain::pipeline::usage_summary(&[
+            step(priced("0.1", "USD", "perMillionTokens")),
+            step(priced("0.02", "USD", "perMillionTokens")),
+        ]);
+        assert_eq!(total["cost"], "0.12");
+        let mixed = baton_core::domain::pipeline::usage_summary(&[
+            step(priced("0.1", "USD", "perMillionTokens")),
+            step(priced("0.02", "EUR", "perMillionTokens")),
+        ]);
+        assert_eq!(mixed["coverage"], "unavailable");
+        let mixed_units = baton_core::domain::pipeline::usage_summary(&[
+            step(priced("0.1", "USD", "perMillionTokens")),
+            step(priced("0.02", "USD", "perToken")),
+        ]);
+        assert_eq!(mixed_units["coverage"], "unavailable");
+        let partial = baton_core::domain::pipeline::usage_summary(&[
+            step(priced("0.1", "USD", "perMillionTokens")),
+            step(
+                serde_json::json!({"estimatedCost":"0.02", "currency":"USD", "priceUnit":"perMillionTokens", "coverage":"partial"}),
+            ),
+        ]);
+        assert_eq!(partial["coverage"], "unavailable");
+        let overflow = baton_core::domain::pipeline::usage_summary(&[
+            step(priced(
+                "340282366920938463463374607431768211455",
+                "USD",
+                "perMillionTokens",
+            )),
+            step(priced("1", "USD", "perMillionTokens")),
+        ]);
+        assert_eq!(overflow["cost"], serde_json::Value::Null);
+        let legacy = baton_core::domain::pipeline::usage_summary(&[step(serde_json::Value::Null)]);
+        assert_eq!(legacy["cost"], serde_json::Value::Null);
+    }
+
     #[test]
     fn refine_requires_run_and_follow_up_instruction() {
         let parsed = Options::parse(
