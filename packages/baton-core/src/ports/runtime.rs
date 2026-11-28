@@ -10,6 +10,7 @@ pub const MAX_HANDOFF_BYTES: usize = 16 * 1024;
 /// A branching pipeline decision reported separately from an agent's prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDecision {
+    pub loop_complete: bool,
     pub outcome: Outcome,
     pub summary: String,
     pub structured_handoff: Option<crate::domain::pipeline::StructuredHandoff>,
@@ -84,6 +85,12 @@ pub trait AgentRuntime: Send {
 
     /// Sanitized metadata only; never raw runtime diagnostics or authentication data.
     fn take_events(&mut self) -> Vec<String>;
+
+    /// Provider-reported usage from the most recent pipeline attempt, when available.
+    /// Implementations must return `None` rather than fabricated zeroes when unsupported.
+    fn take_usage(&mut self) -> Option<crate::domain::pipeline::ModelUsage> {
+        None
+    }
 
     /// Complete sanitized transcript captured by the runtime, including messages
     /// and tool activity where the runtime exposes it.

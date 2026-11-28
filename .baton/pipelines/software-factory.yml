@@ -27,16 +27,15 @@ steps:
     batch related code, tests, and documentation. Report completed only when
     all acceptance criteria are verified. Report revise_build only after a
     meaningful batch when another attempt is genuinely needed, with concrete
-    progress and the next substantial batch. Do not loop after a no-change pass:
-    continue working or report the specific blocker to a human. Do not reopen
-    linked issues or publish changes.
+    progress and the next substantial batch. If work remains, keep iterating and
+    make a meaningful next change. Do not stop after a partial result or report
+    a blocker merely because the next step is unclear. Do not reopen linked
+    issues or publish changes.
   transitions:
   - outcome: completed
     to: verify
   - outcome: revise_build
     to: build
-  - outcome: blocked
-    to: build-help
   type: agent
 
 - id: verify
@@ -85,15 +84,6 @@ steps:
   transitions:
   - outcome: responded
     to: plan
-  - outcome: rejected
-    to: null
-  type: human
-
-- id: build-help
-  name: Resolve implementation blocker
-  transitions:
-  - outcome: responded
-    to: build
   - outcome: rejected
     to: null
   type: human

@@ -7,6 +7,7 @@ pub struct FakeRuntime {
     pub fail_agent: Option<String>,
     pub decision: Option<baton_core::ports::runtime::AgentDecision>,
     pub structured_handoff_required: bool,
+    pub usage: Option<baton_core::domain::pipeline::ModelUsage>,
 }
 impl AgentRuntime for FakeRuntime {
     fn set_run_id(&mut self, _: &str) -> Result<(), String> {
@@ -67,6 +68,9 @@ impl AgentRuntime for FakeRuntime {
     fn take_events(&mut self) -> Vec<String> {
         Vec::new()
     }
+    fn take_usage(&mut self) -> Option<baton_core::domain::pipeline::ModelUsage> {
+        self.usage.take()
+    }
     fn take_trace(&mut self) -> Vec<baton_core::domain::pipeline::RunTraceEntry> {
         Vec::new()
     }
@@ -88,6 +92,7 @@ impl AgentRuntime for FakeRuntime {
         let output = format!("{}: {input}", agent.id);
         self.decision = if self.structured_handoff_required {
             Some(baton_core::ports::runtime::AgentDecision {
+                loop_complete: true,
                 outcome: baton_core::domain::project::Outcome::Completed,
                 summary: output.clone(),
                 structured_handoff: Some(
@@ -102,5 +107,35 @@ impl AgentRuntime for FakeRuntime {
             None
         };
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn take_usage_returns_only_explicitly_supplied_usage_once() {
+        let mut runtime = FakeRuntime::default();
+        assert_eq!(runtime.take_usage(), None);
+        runtime.usage = Some(baton_core::domain::pipeline::ModelUsage {
+            input_tokens: Some(7),
+            output_tokens: Some(2),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            estimated_cost: None,
+            price_source: None,
+            price_checked_at: None,
+            currency: None,
+            price_unit: None,
+            coverage: Some("partial".into()),
+            price_snapshot: None,
+            input_price: None,
+            output_price: None,
+            cache_read_price: None,
+            cache_write_price: None,
+        });
+        assert_eq!(runtime.take_usage().unwrap().input_tokens, Some(7));
+        assert_eq!(runtime.take_usage(), None);
     }
 }

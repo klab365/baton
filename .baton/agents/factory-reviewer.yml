@@ -15,7 +15,6 @@ skillIds:
 - rust
 - browser-testing
 - verification-before-completion
-- factory-pr-reinspection
 allowedTools:
 - read
 - list

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Deserialize, JsonSchema)]
 pub(crate) struct ReportOutcomeArgs {
+    loop_complete: bool,
     outcome: String,
     summary: String,
     /// For blocked outcomes, explain why work cannot continue; otherwise omit it or use an empty string.
@@ -57,10 +58,10 @@ impl Tool for ReportOutcome {
             .collect::<Vec<_>>()
             .join(", ");
         if self.allowed.is_empty() {
-            "Sequential pipeline agent steps must use this tool to attach the required structured_handoff; non-pipeline agent runs may omit it. Keep the final response as the legacy text handoff. Use outcome `completed`. Structured schema: {version: 1, summary: nonblank string, findings?: [{id: stable unique string, status: open|resolved|accepted, description: nonblank string}], verification?: [{description: nonblank string, result: nonblank string}], nextAction?: nonblank string}. Example: {\"version\":1,\"summary\":\"Ready\",\"findings\":[{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}]}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification.".into()
+            "Sequential pipeline agent steps must use this tool on every iteration. Set loop_complete=false to continue the same step and true only when finished. Non-pipeline agent runs may omit it. Keep the final response as the legacy text handoff. Use outcome `completed`. Structured schema: {version: 1, summary: nonblank string, findings?: [{id: stable unique string, status: open|resolved|accepted, description: nonblank string}], verification?: [{description: nonblank string, result: nonblank string}], nextAction?: nonblank string}. Example: {\"version\":1,\"summary\":\"Ready\",\"findings\":[{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}]}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification.".into()
         } else {
             format!(
-                "Required control tool for this branching pipeline step. Call once after finishing your work. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in summary. Structured_handoff schema (required for every pipeline agent step): {{version: 1, summary: nonblank string, findings?: [{{id: stable unique string, status: open|resolved|accepted, description: nonblank string}}], verification?: [{{description: nonblank string, result: nonblank string}}], nextAction?: nonblank string}}. Example: {{\"version\":1,\"summary\":\"Ready\",\"findings\":[{{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}}]}}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification."
+                "Required control tool for this branching pipeline step. Set loop_complete=false to continue this agent step, true only when finished. Allowed outcomes: {allowed}. For blocked outcomes, include a blocker_reason; human_action is optional. Include the complete authoritative handoff for the next step in summary. Structured_handoff schema (required for every pipeline agent step): {{version: 1, summary: nonblank string, findings?: [{{id: stable unique string, status: open|resolved|accepted, description: nonblank string}}], verification?: [{{description: nonblank string, result: nonblank string}}], nextAction?: nonblank string}}. Example: {{\"version\":1,\"summary\":\"Ready\",\"findings\":[{{\"id\":\"F-1\",\"status\":\"open\",\"description\":\"Add coverage\"}}]}}. Maximum 128 findings and 16384 JSON bytes. Agent verification is an assertion, not independent verification."
             )
         }
     }
@@ -141,6 +142,7 @@ impl Tool for ReportOutcome {
             ));
         }
         *decision = Some(AgentDecision {
+            loop_complete: args.loop_complete,
             outcome,
             summary,
             structured_handoff,
@@ -181,6 +183,7 @@ mod tests {
             tool.call(
                 &mut context,
                 super::ReportOutcomeArgs {
+                    loop_complete: true,
                     outcome: "blocked".into(),
                     summary: "Cannot continue".into(),
                     blocker_reason: "  ".into(),
@@ -194,6 +197,7 @@ mod tests {
         tool.call(
             &mut context,
             super::ReportOutcomeArgs {
+                loop_complete: true,
                 outcome: "blocked".into(),
                 summary: "Cannot continue".into(),
                 blocker_reason: "Missing credentials".into(),
@@ -213,6 +217,7 @@ mod tests {
         tool.call(
             &mut context,
             super::ReportOutcomeArgs {
+                loop_complete: true,
                 outcome: "blocked".into(),
                 summary: "Cannot continue".into(),
                 blocker_reason: "Missing credentials".into(),
@@ -231,6 +236,7 @@ mod tests {
     #[test]
     fn blocker_reason_can_be_omitted_from_non_blocked_calls() {
         let args: super::ReportOutcomeArgs = serde_json::from_value(serde_json::json!({
+            "loop_complete": true,
             "outcome": "approved",
             "summary": "Looks good"
         }))
@@ -253,6 +259,7 @@ mod tests {
             tool.call(
                 &mut ToolContext::default(),
                 super::ReportOutcomeArgs {
+                    loop_complete: true,
                     outcome: "progress".into(),
                     summary: "Partial work".into(),
                     blocker_reason: String::new(),
@@ -279,6 +286,7 @@ mod tests {
         tool.call(
             &mut ToolContext::default(),
             super::ReportOutcomeArgs {
+                loop_complete: true,
                 outcome: "completed".into(),
                 summary: "Ready".into(),
                 blocker_reason: String::new(),
@@ -313,6 +321,7 @@ mod tests {
         tool.call(
             &mut ToolContext::default(),
             super::ReportOutcomeArgs {
+                loop_complete: true,
                 outcome: "approved".into(),
                 summary: "Ready".into(),
                 blocker_reason: String::new(),
@@ -342,6 +351,7 @@ mod tests {
             tool.call(
                 &mut ToolContext::default(),
                 super::ReportOutcomeArgs {
+                    loop_complete: true,
                     outcome: "approved".into(),
                     summary: "Ready".into(),
                     blocker_reason: String::new(),
@@ -368,6 +378,7 @@ mod tests {
         tool.call(
             &mut context,
             super::ReportOutcomeArgs {
+                loop_complete: true,
                 outcome: "approved".into(),
                 summary: "  Review passed.  ".into(),
                 blocker_reason: String::new(),
@@ -380,6 +391,7 @@ mod tests {
         assert_eq!(
             *decision.lock().unwrap(),
             Some(AgentDecision {
+                loop_complete: true,
                 outcome: Outcome::Approved,
                 summary: "Review passed.".into(),
                 structured_handoff: None,
@@ -389,6 +401,7 @@ mod tests {
             tool.call(
                 &mut context,
                 super::ReportOutcomeArgs {
+                    loop_complete: true,
                     outcome: "blocked".into(),
                     summary: "Not configured".into(),
                     blocker_reason: String::new(),

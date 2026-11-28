@@ -109,10 +109,28 @@ test("bounds large cost summaries and preserves run identity and attempt details
 	expect(messages[0]).toContain("omittedEarlierSteps");
 });
 
+test("Pi inspection totals only complete comparable cost observations", async () => {
+	const messages: string[] = [];
+	await manage("inspect run-cost", async () => ({ id: "run-cost", steps: [
+		{ stepId: "a", attempt: 1, status: "succeeded", usage: { estimatedCost: "0.10", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+		{ stepId: "b", attempt: 2, status: "succeeded", usage: { estimatedCost: "0.20", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+	] }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Run cost: 0.3 USD");
+});
+
+test("Pi inspection rejects totals with mixed price units", async () => {
+	const messages: string[] = [];
+	await manage("inspect run-mixed", async () => ({ id: "run-mixed", steps: [
+		{ stepId: "a", attempt: 1, status: "succeeded", usage: { estimatedCost: "1", currency: "USD", priceUnit: "perToken", coverage: "complete" } },
+		{ stepId: "b", attempt: 2, status: "succeeded", usage: { estimatedCost: "1", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" } },
+	] }), ui(), (text) => messages.push(text));
+	expect(messages[0]).toContain("Run cost: unavailable");
+});
+
 test("Pi inspection summarizes persisted metrics without treating missing values as zero", async () => {
 	const messages: string[] = [];
 	await manage("inspect run-1", async () => ({ id: "run-1", steps: [
-		{ stepId: "build", attempt: 1, status: "succeeded", durationMs: 0, usage: { inputTokens: 0, outputTokens: 4, cacheReadTokens: 2, estimatedCost: "0.01", priceSource: "catalog", priceCheckedAt: "now" } },
+		{ stepId: "build", attempt: 1, status: "succeeded", durationMs: 0, usage: { inputTokens: 0, outputTokens: 4, cacheReadTokens: 2, estimatedCost: "0.01", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete", priceSnapshot: { input: 1 }, priceSource: "catalog", priceCheckedAt: "now" } },
 		{ stepId: "build", attempt: 2, status: "failed", durationMs: null, selectedTransition: { to: "build" }, usage: { inputTokens: 1 } },
 		{ stepId: "finish", attempt: 0, status: "pending" },
 	] }), ui(), (text) => messages.push(text));
@@ -120,6 +138,9 @@ test("Pi inspection summarizes persisted metrics without treating missing values
 	expect(messages[0]).toContain("1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
 	expect(messages[0]).toContain("Run cost: unavailable (currency/unit not recorded)");
 	expect(messages[0]).toContain("Attempt costs: 0.01 · catalog · checked now");
+	expect(messages[0]).toContain('"currency": "USD"');
+	expect(messages[0]).toContain('"priceUnit": "perMillionTokens"');
+	expect(messages[0]).toContain('"coverage": "complete"');
 	expect(messages[0]).toContain("Tokens input/output/cache read/cache write: 1 (complete) / 4 (partial) / 2 (partial) / unavailable (unavailable)");
 	expect(messages[0]).toContain("Duration: 0 ms (partial)");
 });
@@ -186,7 +207,7 @@ test("resumes a selected work session through the existing driver", async () => 
 		calls.push(args);
 		return { status: "succeeded" };
 	}, ui(), () => {});
-	expect(calls).toEqual([["next", "--run", "run-1"]]);
+	expect(calls).toEqual([["next", "--run", "run-1"], ["status", "--run", "run-1"]]);
 });
 
 test("refines a completed session through a new run in the same worktree", async () => {
@@ -218,6 +239,7 @@ test("refines a completed session through a new run in the same worktree", async
 		["status"],
 		["refine", "--run", "latest-run", "--instruction", "Fix the remaining edge case"],
 		["next", "--run", "new-run"],
+		["status", "--run", "new-run"],
 	]);
 	expect(messages.join("\n")).toContain("Baton refinement started: new-run (from latest-run)");
 });
@@ -465,6 +487,7 @@ test("registered refine command starts the follow-up from the current Pi worktre
 		["run", "status"],
 		["run", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
 		["run", "next", "--run", "new-run"],
+		["run", "status", "--run", "new-run"],
 	]);
 });
 
@@ -553,11 +576,36 @@ test("runs steps through CLI and shows the result", async () => {
 		ui({ setStatus: (_key, value) => statuses.push(value) }),
 		(text) => messages.push(text),
 	);
-	expect(commands).toEqual(["next", "execute", "next", "next"]);
+	expect(commands).toEqual(["next", "execute", "next", "next", "status"]);
 	expect(messages.join("\n")).toContain("Baton run — RUNNING");
 	expect(statuses).toContain("Baton · RUNNING · Build · attempt 1");
 	expect(messages.join("\n")).toContain("Attempt: 1");
 	expect(messages.join("\n")).toContain("Done");
+});
+
+test("shows token usage when a Baton run reaches its terminal state", async () => {
+	const messages: string[] = [];
+	let nextCalls = 0;
+	await drive("run", async (args) => {
+		if (args[0] === "next") {
+			nextCalls++;
+			return nextCalls === 1
+				? { status: "running", step: { id: "build", name: "Build" }, attempt: 1 }
+				: { status: "succeeded" };
+		}
+		if (args[0] === "execute") return {};
+		if (args[0] === "status") {
+			return {
+				steps: [{
+					stepId: "build", attempt: 1, status: "succeeded",
+					usage: { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 10, cacheWriteTokens: 0, estimatedCost: "0.02", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" },
+				}],
+			};
+		}
+		return {};
+	}, ui(), (message) => messages.push(message));
+	expect(messages.at(-1)).toContain("Tokens input/output/cache read/cache write: 1200 (complete) / 300 (complete) / 10 (complete) / 0 (complete)");
+	expect(messages.at(-1)).toContain("Run cost: 0.02 USD");
 });
 
 test("polls fixed progress while execute is pending and stops after completion", async () => {

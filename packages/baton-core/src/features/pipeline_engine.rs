@@ -12,6 +12,35 @@ use crate::{
 use std::time::Instant;
 
 const MAX_REPORT_RETRIES: usize = 2;
+const MAX_RALPH_ITERATIONS: usize = 100;
+
+fn run_ralph_loop(
+    input: &str,
+    max_iterations: usize,
+    mut execute: impl FnMut(&str) -> Result<(String, Option<AgentDecision>), String>,
+) -> Result<(String, Option<AgentDecision>), String> {
+    let mut previous_output: Option<String> = None;
+    for _ in 0..max_iterations {
+        let iteration_input = if let Some(previous) = &previous_output {
+            format!(
+                "{input}\n\nPrevious iteration result:\n{previous}\n\nContinue the work; do not repeat completed work. Call report_outcome with loop_complete=false while work remains and true only when finished."
+            )
+        } else {
+            input.to_owned()
+        };
+        let (output, decision) = execute(&iteration_input)?;
+        if decision
+            .as_ref()
+            .is_none_or(|decision| decision.loop_complete)
+        {
+            return Ok((output, decision));
+        }
+        previous_output = Some(output);
+    }
+    Err(format!(
+        "Agent did not complete the Ralph loop within {max_iterations} iterations"
+    ))
+}
 
 struct CancellableRuntime<'a, R: ?Sized> {
     runtime: &'a mut R,
@@ -102,6 +131,9 @@ impl<R: AgentRuntime + ?Sized> AgentRuntime for CancellableRuntime<'_, R> {
     }
     fn take_events(&mut self) -> Vec<String> {
         self.runtime.take_events()
+    }
+    fn take_usage(&mut self) -> Option<crate::domain::pipeline::ModelUsage> {
+        self.runtime.take_usage()
     }
     fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         self.runtime.take_trace()
@@ -559,12 +591,15 @@ pub fn with_step_prompt(input: String, step: &PipelineStep) -> String {
     } else {
         ""
     };
+    let loop_guidance = "Continue iterating on this task until it is complete. Verify your work and call report_outcome with loop_complete=true only when finished; use false to continue.";
     match &step.kind {
         crate::domain::project::PipelineStepKind::Agent { prompt, .. } if !prompt.is_empty() => {
-            format!("{contract}Step instructions:\n{prompt}\n\nStep context:\n{input}")
+            format!(
+                "{contract}Step instructions:\n{prompt}\n\nStep context:\n{input}\n\n{loop_guidance}"
+            )
         }
         crate::domain::project::PipelineStepKind::Agent { .. } if !contract.is_empty() => {
-            format!("{contract}Step context:\n{input}")
+            format!("{contract}Step context:\n{input}\n\n{loop_guidance}")
         }
         _ => input,
     }
@@ -1265,37 +1300,48 @@ pub fn execute_graph(
                 if cancelled() {
                     break Err("Run cancelled".into());
                 }
-                let output = {
-                    let mut observer = |mut entry: RunTraceEntry| {
-                        let _lease =
-                            acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
-                        entry.attempt = Some(run.steps[index].attempt);
-                        let kind = entry.kind.clone();
-                        append_bounded_trace(&mut run, [entry]);
-                        publish(
-                            repository,
-                            &mut run,
-                            Some(format!("Observed runtime activity: {kind}")),
-                        )
-                    };
-                    match guarded.execute_pipeline_step_observed(
-                        &worktree_path,
-                        &assigned,
-                        &runtime_input,
-                        &allowed_outcomes,
-                        &cancelled,
-                        &mut observer,
-                    ) {
-                        Ok(output) => output,
-                        Err(error) => break Err(error),
-                    }
+                let max_iterations = step.max_attempts.unwrap_or(MAX_RALPH_ITERATIONS as u32);
+                let mut iteration = 0;
+                let loop_result =
+                    run_ralph_loop(&runtime_input, max_iterations as usize, |iteration_input| {
+                        iteration += 1;
+                        if cancelled() {
+                            return Err("Run cancelled".into());
+                        }
+                        let attempt_number = run.steps[index].attempt;
+                        let mut observer = |mut entry: RunTraceEntry| {
+                            let _lease =
+                                acquire_current_attempt_lease(repository, &run, index, &cancelled)?;
+                            entry.attempt = Some(attempt_number);
+                            let kind = entry.kind.clone();
+                            append_bounded_trace(&mut run, [entry]);
+                            publish(
+                                repository,
+                                &mut run,
+                                Some(format!("Observed runtime activity: {kind}")),
+                            )
+                        };
+                        observer(RunTraceEntry {
+                            attempt: Some(attempt_number),
+                            occurred_at: utc_now(),
+                            kind: "ralphIteration".into(),
+                            content: format!("Ralph loop {iteration}/{max_iterations}"),
+                        })?;
+                        let output = guarded.execute_pipeline_step_observed(
+                            &worktree_path,
+                            &assigned,
+                            iteration_input,
+                            &allowed_outcomes,
+                            &cancelled,
+                            &mut observer,
+                        )?;
+                        Ok((output, guarded.take_decision()))
+                    });
+                let (output, decision) = match loop_result {
+                    Ok(result) => result,
+                    Err(error) => break Err(error),
                 };
-                match validate_agent_response(
-                    step,
-                    &allowed_outcomes,
-                    output,
-                    guarded.take_decision(),
-                ) {
+                match validate_agent_response(step, &allowed_outcomes, output, decision) {
                     Ok(response) => break Ok(response),
                     Err(error) if retries < MAX_REPORT_RETRIES => {
                         retries += 1;
@@ -1328,6 +1374,7 @@ pub fn execute_graph(
                 }
             }
         };
+        let usage = runtime.take_usage();
         let mut trace = runtime.take_trace();
         for entry in &mut trace {
             entry.attempt = Some(run.steps[index].attempt);
@@ -1356,6 +1403,7 @@ pub fn execute_graph(
         let mut loop_message = None;
         match result {
             Ok((outcome, output, structured_handoff)) => {
+                run.steps[index].usage = usage;
                 run.steps[index].structured_handoff = structured_handoff;
                 run.steps[index].status = Status::Succeeded;
                 let (outcome, output) = match gate_approved_outcome(&run, step, outcome, output) {
@@ -1396,6 +1444,7 @@ pub fn execute_graph(
                 }
             }
             Err(error) => {
+                run.steps[index].usage = usage;
                 run.steps[index].status = Status::Failed;
                 run.steps[index].error = Some(error.chars().take(4096).collect());
                 run.status = Status::Failed;
@@ -1419,6 +1468,59 @@ pub fn execute_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ralph_loop_repeats_with_previous_output_until_completion_marker() {
+        let mut calls = Vec::new();
+        let result = run_ralph_loop("task\n\nContinue iterating on this task until it is complete. Verify your work and call report_outcome with loop_complete=true only when finished; use false to continue.", MAX_RALPH_ITERATIONS, |input| {
+            calls.push(input.to_owned());
+            match calls.len() {
+                1 => Ok((
+                    "partial result".into(),
+                    Some(AgentDecision {
+                        loop_complete: false,
+                        outcome: Outcome::Completed,
+                        summary: "partial".into(),
+                        structured_handoff: None,
+                    }),
+                )),
+                _ => Ok((
+                    "finished".into(),
+                    Some(AgentDecision {
+                        loop_complete: true,
+                        outcome: Outcome::Completed,
+                        summary: "finished".into(),
+                        structured_handoff: None,
+                    }),
+                )),
+            }
+        })
+        .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("loop_complete=true only when finished"));
+        assert!(calls[1].contains("Previous iteration result:\npartial result"));
+        assert_eq!(result.0, "finished");
+    }
+
+    #[test]
+    fn ralph_loop_fails_after_iteration_limit() {
+        let mut calls = 0;
+        let error = run_ralph_loop("task", MAX_RALPH_ITERATIONS, |_| {
+            calls += 1;
+            Ok((
+                "still working".into(),
+                Some(AgentDecision {
+                    loop_complete: false,
+                    outcome: Outcome::Completed,
+                    summary: "still working".into(),
+                    structured_handoff: None,
+                }),
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(calls, MAX_RALPH_ITERATIONS);
+        assert!(error.contains("within 100 iterations"));
+    }
 
     #[test]
     fn global_attempt_count_ignores_pending_placeholders_and_counts_started_visits() {

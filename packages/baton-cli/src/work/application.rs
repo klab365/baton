@@ -297,6 +297,7 @@ impl WorkApplication {
                 let observation_repository = FilesystemWorkRepository(self.workspace.clone());
                 let observation_step = step.id.clone();
                 let execution_step = step.clone();
+                let loop_input = recorded_input.clone();
                 let execution = tokio::task::spawn_blocking(move || -> Result<_, StepFailure> {
                     let cancelled = || {
                         repository
@@ -374,8 +375,19 @@ impl WorkApplication {
                     runtime.set_structured_handoff_required(true);
                     let mut runtime_input = input.clone();
                     let mut report_retries = 0;
+                    let mut loop_iterations = 0;
                     let mut trace = Vec::new();
                     loop {
+                        if loop_iterations >= execution_step.max_attempts.unwrap_or(100) as usize {
+                            return Err(StepFailure::Runtime(format!("Agent did not complete within {} iterations", loop_iterations)));
+                        }
+                        loop_iterations += 1;
+                        observer(baton_core::domain::pipeline::RunTraceEntry {
+                            attempt: Some(attempt),
+                            occurred_at: baton_core::features::pipeline_engine::utc_now(),
+                            kind: "ralphIteration".into(),
+                            content: format!("Ralph loop {loop_iterations}/{}", execution_step.max_attempts.unwrap_or(100)),
+                        })?;
                         let output = runtime.execute_pipeline_step_observed(
                             &workspace,
                             &agent,
@@ -385,11 +397,16 @@ impl WorkApplication {
                             &mut observer,
                         )?;
                         trace.extend(runtime.take_trace());
+                        let decision = runtime.take_decision();
+                        if decision.as_ref().is_some_and(|decision| !decision.loop_complete) {
+                            runtime_input = format!("{loop_input}\n\nPrevious iteration result:\n{output}\n\nContinue working and call report_outcome with loop_complete=true only when complete.");
+                            continue;
+                        }
                         match baton_core::features::pipeline_engine::validate_agent_response(
                             &execution_step,
                             &allowed,
                             output,
-                            runtime.take_decision(),
+                            decision,
                         ) {
                             Ok((outcome, summary, structured_handoff)) => {
                                 break Ok((outcome, summary, structured_handoff, trace));

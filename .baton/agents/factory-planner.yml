@@ -14,7 +14,6 @@ thinkingLevel: high
 model: openai-codex/gpt-6.1-terra
 skillIds:
 - concise-planning
-- factory-pr-reinspection
 allowedTools:
 - read
 - list

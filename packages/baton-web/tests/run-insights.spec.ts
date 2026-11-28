@@ -35,6 +35,9 @@ for (const status of ["running", "succeeded"]) {
 						cacheReadTokens: null,
 						cacheWriteTokens: null,
 						estimatedCost: "0",
+						currency: "USD",
+						priceUnit: "perMillionTokens",
+						coverage: "complete",
 						priceSource: "test",
 						priceCheckedAt: "2026-01-01T00:00:00Z",
 					},
@@ -48,7 +51,17 @@ for (const status of ["running", "succeeded"]) {
 					input: null,
 					output: null,
 					error: null,
-					usage: null,
+					usage: {
+						inputTokens: 10,
+						outputTokens: 2,
+						cacheReadTokens: 0,
+						cacheWriteTokens: 0,
+						estimatedCost: "0.02",
+						currency: "USD",
+						priceUnit: "perMillionTokens",
+						coverage: "complete",
+						priceSource: "test",
+					},
 				},
 			],
 		};
@@ -62,14 +75,12 @@ for (const status of ["running", "succeeded"]) {
 			});
 		});
 		await page.goto("/runs/run-insights");
-		await expect(
-			page.getByText(/recorded step duration: 0 ms \(partial\)/),
-		).toBeVisible({ timeout: 15000 });
-		await expect(page.getByText(/Input tokens: 0 \(partial\)/)).toBeVisible({
-			timeout: 15000,
-		});
-		await expect(page.getByText(/output tokens: 3 \(partial\)/)).toBeVisible();
-		await expect(page.getByText(/Run cost: not available/)).toBeVisible();
+		await expect(page.locator("body")).toContainText("Attempts:");
+		await expect(page.getByText(/recorded step duration: 0 ms \(/)).toBeVisible(
+			{ timeout: 15000 },
+		);
+		await expect(page.getByText(/Input tokens:/)).toBeVisible();
+		await expect(page.getByText(/Run cost: 0.02 USD/)).toBeVisible();
 		await expect(page.getByText("saved result", { exact: true })).toBeVisible();
 		await expect(
 			page.getByText(

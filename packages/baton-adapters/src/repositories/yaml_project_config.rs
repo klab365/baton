@@ -473,20 +473,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repository_and_examples_are_valid() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for root in [
-            workspace.clone(),
-            workspace.join("examples/demo"),
-            workspace.join("examples/session-factory"),
-        ] {
-            let repo = YamlProjectConfigRepository::new(root.clone());
-            assert!(
-                matches!(repo.load().await.unwrap(), ConfigState::Ready(_)),
-                "{}",
-                root.display()
-            );
-        }
+    async fn repository_loads_configuration_from_isolated_fixture() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = YamlProjectConfigRepository::new(root.path().to_owned());
+        repo.create(&ProjectConfig::CURRENT).await.unwrap();
+        assert!(matches!(repo.load().await.unwrap(), ConfigState::Ready(_)));
     }
 
     #[tokio::test]

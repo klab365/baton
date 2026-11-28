@@ -360,8 +360,13 @@ impl ProjectConfig {
             }
             for step in &pipeline.steps {
                 let step_path = format!("{path}.steps[{}]", step.id);
-                if step.max_attempts == Some(0) {
-                    return Err(format!("{step_path}: maxAttempts must be positive"));
+                if step
+                    .max_attempts
+                    .is_some_and(|limit| !(1..=100).contains(&limit))
+                {
+                    return Err(format!(
+                        "{step_path}: maxAttempts must be between 1 and 100"
+                    ));
                 }
                 nonempty(&format!("{step_path}.name"), &step.name)?;
                 match &step.kind {
@@ -731,7 +736,7 @@ mod project_identity_tests {
     }
 
     #[test]
-    fn max_attempts_is_optional_and_must_be_positive() {
+    fn step_max_attempts_is_optional_and_limited_to_ten() {
         use super::PipelineStep;
         let valid: PipelineStep =
             serde_json::from_str(r#"{"id":"h","name":"Human","type":"human","maxAttempts":2}"#)
@@ -750,10 +755,17 @@ mod project_identity_tests {
             config
                 .validate()
                 .unwrap_err()
-                .contains("maxAttempts must be positive")
+                .contains("maxAttempts must be between 1 and 100")
         );
         config.pipelines[0].steps[0].max_attempts = Some(1);
         assert!(config.validate().is_ok());
+        config.pipelines[0].steps[0].max_attempts = Some(101);
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("maxAttempts must be between 1 and 100")
+        );
         assert!(
             serde_json::from_str::<PipelineStep>(
                 r#"{"id":"h","name":"Human","type":"human","maxAttempts":-1}"#

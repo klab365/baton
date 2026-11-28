@@ -27,6 +27,7 @@ pub struct ConfiguredRuntime {
     fake: super::FakeRuntime,
     pub(super) decision: Option<AgentDecision>,
     pub(super) trace: Vec<RunTraceEntry>,
+    usage: Option<baton_core::domain::pipeline::ModelUsage>,
     credentials: Arc<dyn baton_core::ports::credentials::CredentialRepository>,
     pub(super) auth_root: std::path::PathBuf,
     _credential_leases: Option<Box<dyn baton_core::ports::credentials::CredentialLease>>,
@@ -47,6 +48,7 @@ impl ConfiguredRuntime {
             fake: super::FakeRuntime::default(),
             decision: None,
             trace: Vec::new(),
+            usage: None,
             credentials,
             auth_root,
             _credential_leases: None,
@@ -200,7 +202,7 @@ impl AgentRuntime for ConfiguredRuntime {
                 } else {
                     None
                 };
-                let (output, decision, trace) = super::rig::RigRuntime::execute(
+                let (output, decision, trace, usage) = super::rig::RigRuntime::execute(
                     directory,
                     agent,
                     &self.skills,
@@ -224,6 +226,7 @@ impl AgentRuntime for ConfiguredRuntime {
                 )?;
                 self.decision = decision;
                 self.trace = trace;
+                self.usage = usage;
                 Ok(output)
             }
             RuntimeKind::Fake => {
@@ -233,6 +236,7 @@ impl AgentRuntime for ConfiguredRuntime {
                     .fake
                     .execute_cancellable(directory, agent, input, cancelled)?;
                 self.decision = self.fake.take_decision();
+                self.usage = self.fake.take_usage();
                 Ok(output)
             }
             RuntimeKind::Pi => super::pi::execute(
@@ -252,6 +256,9 @@ impl AgentRuntime for ConfiguredRuntime {
     fn take_trace(&mut self) -> Vec<RunTraceEntry> {
         std::mem::take(&mut self.trace)
     }
+    fn take_usage(&mut self) -> Option<baton_core::domain::pipeline::ModelUsage> {
+        self.usage.take()
+    }
 }
 
 #[cfg(test)]
@@ -264,6 +271,41 @@ mod tests {
         ports::{credentials::CredentialRepository, runs::RunRepository},
     };
     use std::time::Duration;
+
+    #[test]
+    fn configured_fake_runtime_forwards_explicit_usage_once() {
+        let root = tempfile::tempdir().unwrap();
+        let repository = Arc::new(FilesystemCredentialRepository::new(
+            root.path().join("vault"),
+        ));
+        let mut runtime = ConfiguredRuntime::new(repository, root.path().into(), vec![]);
+        runtime.fake.usage = Some(baton_core::domain::pipeline::ModelUsage {
+            input_tokens: Some(5),
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            estimated_cost: None,
+            price_source: None,
+            price_checked_at: None,
+            currency: None,
+            price_unit: None,
+            coverage: Some("partial".into()),
+            price_snapshot: None,
+            input_price: None,
+            output_price: None,
+            cache_read_price: None,
+            cache_write_price: None,
+        });
+        let agent: Agent = serde_json::from_value(serde_json::json!({
+            "id":"fake", "instructions":"role", "provider":"fake", "skillIds":[]
+        }))
+        .unwrap();
+        runtime
+            .execute_pipeline_step(root.path(), &agent, "input", &[], &|| false)
+            .unwrap();
+        assert_eq!(runtime.take_usage().unwrap().input_tokens, Some(5));
+        assert_eq!(runtime.take_usage(), None);
+    }
 
     #[test]
     fn rig_thinking_levels_are_deferred_to_model_catalog_validation() {
@@ -516,7 +558,7 @@ printf 'done'
             &pi,
             r#"#!/bin/sh
 cat > /dev/null
-printf '{"outcome":"completed","summary":"handoff"}' > "$BATON_PI_OUTCOME_FILE"
+printf '{"outcome":"completed","summary":"handoff","loop_complete":true}' > "$BATON_PI_OUTCOME_FILE"
 printf 'done'
 "#,
         )
@@ -711,7 +753,7 @@ else
   printf '{"type":"session","id":"%s","cwd":"%s"}\n{"type":"message","message":{"role":"user","content":"%s"}}\n{"type":"message","message":{"role":"assistant"}}\n' "$id" "$PWD" "$prompt" > "$file"
 fi
 case "$prompt" in
-  *structured-request*) printf '{"outcome":"completed","summary":"report summary","structured_handoff":{"version":1,"summary":"Structured","findings":[]}}' > "$BATON_PI_OUTCOME_FILE" ;;
+  *structured-request*) printf '{"outcome":"completed","summary":"report summary","loop_complete":true,"structured_handoff":{"version":1,"summary":"Structured","findings":[]}}' > "$BATON_PI_OUTCOME_FILE" ;;
 esac
 printf 'legacy final answer'
 "##).unwrap();
@@ -808,7 +850,7 @@ else
 fi
 case "$prompt" in
   *'Baton rejected your previous report'*)
-    printf '{"outcome":"completed","summary":"handoff","structured_handoff":{"version":1,"summary":"handoff"}}' > "$BATON_PI_OUTCOME_FILE" ;;
+    printf '{"outcome":"completed","summary":"handoff","loop_complete":true,"structured_handoff":{"version":1,"summary":"handoff"}}' > "$BATON_PI_OUTCOME_FILE" ;;
 esac
 printf '%s\n' "$prompt" >> "$session/prompts"
 printf 'handoff'

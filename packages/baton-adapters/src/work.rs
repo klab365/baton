@@ -48,7 +48,7 @@ pub fn run_shell(
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckResult, String> {
-    run_shell_inner(workspace, command, timeout_seconds, cancelled)
+    run_shell_inner(workspace, command, timeout_seconds, cancelled, false)
 }
 
 pub fn run_pipeline_shell(
@@ -57,7 +57,7 @@ pub fn run_pipeline_shell(
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckResult, String> {
-    run_shell_inner(workspace, command, timeout_seconds, cancelled)
+    run_shell_inner(workspace, command, timeout_seconds, cancelled, true)
 }
 
 fn run_shell_inner(
@@ -65,6 +65,7 @@ fn run_shell_inner(
     command: &str,
     timeout_seconds: u32,
     cancelled: &dyn Fn() -> bool,
+    file_handoff: bool,
 ) -> Result<CheckResult, String> {
     if cancelled() {
         return Err("Run cancelled".into());
@@ -136,13 +137,17 @@ fn run_shell_inner(
         .map_err(|_| "Check stderr reader panicked")?
         .map_err(|e| e.to_string())?;
     bytes.extend_from_slice(&errors[..errors.len().min(OUTPUT_LIMIT.saturating_sub(bytes.len()))]);
-    let mut output = String::from_utf8_lossy(&bytes).into_owned();
+    let mut output = if file_handoff {
+        format!("Full shell output saved to: {}", log_path.display())
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
     if timed_out {
         output.push_str(&format!(
             "\nCheck timed out after {timeout_seconds} seconds"
         ));
     }
-    if stdout_truncated || stderr_truncated {
+    if !file_handoff && (stdout_truncated || stderr_truncated) {
         output.push_str(&format!(
             "\nOutput truncated; full log: {}",
             log_path.display()
@@ -161,16 +166,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pipeline_shell_logs_full_output_when_capture_is_truncated() {
+    fn pipeline_shell_always_hands_off_the_full_output_log_path() {
         let workspace = tempfile::tempdir().unwrap();
-        let result =
-            run_pipeline_shell(workspace.path(), "yes x | head -c 9000", 10, &|| false).unwrap();
-        assert_eq!(result.exit_code, Some(0));
-        assert!(result.output.contains("Output truncated; full log:"));
-        let path = result.output.split("full log: ").nth(1).unwrap();
+        let result = run_pipeline_shell(
+            workspace.path(),
+            "printf 'verify output\\n'; exit 7",
+            10,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, Some(7));
+        assert!(result.output.len() < OUTPUT_LIMIT);
+        let path = result
+            .output
+            .strip_prefix("Full shell output saved to: ")
+            .unwrap();
         assert_eq!(
-            std::fs::metadata(path).unwrap().len(),
-            9000 + "[stdout] ".len() as u64 * 3
+            std::fs::read_to_string(path).unwrap(),
+            "[stdout] verify output\n"
         );
     }
 
