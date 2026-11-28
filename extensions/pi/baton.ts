@@ -282,7 +282,16 @@ export async function drive(
 				continue;
 			}
 			if (item.status !== "running") {
-				const message = `Baton ${runId} — ${item.status.toUpperCase()}`;
+				let usageSummary = "";
+				try {
+					const record = (await exec(["status", "--run", runId])) as { steps?: unknown };
+					if (Array.isArray(record.steps)) {
+						usageSummary = `\n\n${formatInsights(record.steps as Record<string, unknown>[])}`;
+					}
+				} catch {
+					// Preserve the terminal result if usage inspection is unavailable.
+				}
+				const message = `Baton ${runId} — ${item.status.toUpperCase()}${usageSummary}`;
 				show(message, `terminal:${runId}:${item.status}`);
 				ui.notify(message, item.status === "succeeded" ? "info" : "warning");
 				return;

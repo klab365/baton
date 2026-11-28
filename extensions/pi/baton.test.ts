@@ -207,7 +207,7 @@ test("resumes a selected work session through the existing driver", async () => 
 		calls.push(args);
 		return { status: "succeeded" };
 	}, ui(), () => {});
-	expect(calls).toEqual([["next", "--run", "run-1"]]);
+	expect(calls).toEqual([["next", "--run", "run-1"], ["status", "--run", "run-1"]]);
 });
 
 test("refines a completed session through a new run in the same worktree", async () => {
@@ -239,6 +239,7 @@ test("refines a completed session through a new run in the same worktree", async
 		["status"],
 		["refine", "--run", "latest-run", "--instruction", "Fix the remaining edge case"],
 		["next", "--run", "new-run"],
+		["status", "--run", "new-run"],
 	]);
 	expect(messages.join("\n")).toContain("Baton refinement started: new-run (from latest-run)");
 });
@@ -486,6 +487,7 @@ test("registered refine command starts the follow-up from the current Pi worktre
 		["run", "status"],
 		["run", "refine", "--run", "old-run", "--instruction", "Check the CI failure and fix it"],
 		["run", "next", "--run", "new-run"],
+		["run", "status", "--run", "new-run"],
 	]);
 });
 
@@ -574,11 +576,36 @@ test("runs steps through CLI and shows the result", async () => {
 		ui({ setStatus: (_key, value) => statuses.push(value) }),
 		(text) => messages.push(text),
 	);
-	expect(commands).toEqual(["next", "execute", "next", "next"]);
+	expect(commands).toEqual(["next", "execute", "next", "next", "status"]);
 	expect(messages.join("\n")).toContain("Baton run — RUNNING");
 	expect(statuses).toContain("Baton · RUNNING · Build · attempt 1");
 	expect(messages.join("\n")).toContain("Attempt: 1");
 	expect(messages.join("\n")).toContain("Done");
+});
+
+test("shows token usage when a Baton run reaches its terminal state", async () => {
+	const messages: string[] = [];
+	let nextCalls = 0;
+	await drive("run", async (args) => {
+		if (args[0] === "next") {
+			nextCalls++;
+			return nextCalls === 1
+				? { status: "running", step: { id: "build", name: "Build" }, attempt: 1 }
+				: { status: "succeeded" };
+		}
+		if (args[0] === "execute") return {};
+		if (args[0] === "status") {
+			return {
+				steps: [{
+					stepId: "build", attempt: 1, status: "succeeded",
+					usage: { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 10, cacheWriteTokens: 0, estimatedCost: "0.02", currency: "USD", priceUnit: "perMillionTokens", coverage: "complete" },
+				}],
+			};
+		}
+		return {};
+	}, ui(), (message) => messages.push(message));
+	expect(messages.at(-1)).toContain("Tokens input/output/cache read/cache write: 1200 (complete) / 300 (complete) / 10 (complete) / 0 (complete)");
+	expect(messages.at(-1)).toContain("Run cost: 0.02 USD");
 });
 
 test("polls fixed progress while execute is pending and stops after completion", async () => {
