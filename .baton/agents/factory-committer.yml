@@ -15,6 +15,7 @@ instructions: |
 provider: pi
 thinkingLevel: low
 model: openai-codex/gpt-5.6-luna
+skillIds:
 allowedTools:
 - read
 - list
